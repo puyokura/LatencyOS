@@ -682,12 +682,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
         EDITOR.set_status("Ready. (Ctrl+S: Save, Ctrl+R: Run, Ctrl+Q: Quit, Ctrl+C: Clear)");
         EDITOR.redraw();
 
-        // Enable bracketed paste mode in terminal
-        serial_print!("\x1b[?2004h");
-
-        let mut is_pasting = false;
         let mut last_was_cr = false;
-        let mut paste_idle_spins: u32 = 0;
         let mut cursor_only = false;
 
         while EDITOR.is_running {
@@ -697,64 +692,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
             while let Some(b) = SERIAL.read_byte_nonblocking() {
                 got_input = true;
-
-                if is_pasting {
-                    if b == 0x1B {
-                        EDITOR.esc_state = EditorEscState::Esc;
-                    } else if EDITOR.esc_state != EditorEscState::Normal {
-                        match EDITOR.esc_state {
-                            EditorEscState::Esc => {
-                                if b == b'[' {
-                                    EDITOR.esc_state = EditorEscState::Csi { params: [0; 4], param_count: 0 };
-                                } else {
-                                    EDITOR.esc_state = EditorEscState::Normal;
-                                    if (0x20..=0x7E).contains(&b) {
-                                        EDITOR.insert_char(b);
-                                        line_changed = true;
-                                    }
-                                }
-                            }
-                            EditorEscState::Csi { ref mut params, ref mut param_count } => {
-                                if b.is_ascii_digit() && *param_count < 4 {
-                                    params[*param_count] = params[*param_count].saturating_mul(10).saturating_add((b - b'0') as u16);
-                                } else if b == b';' && *param_count < 3 {
-                                    *param_count += 1;
-                                } else if b == b'~' && params[0] == 201 {
-                                    is_pasting = false;
-                                    EDITOR.esc_state = EditorEscState::Normal;
-                                    structure_changed = true;
-                                } else if b == b'm' || b == b'h' || b == b'l' || b == b'~' {
-                                    EDITOR.esc_state = EditorEscState::Normal;
-                                } else {
-                                    EDITOR.esc_state = EditorEscState::Normal;
-                                }
-                            }
-                            EditorEscState::Ss3 => {
-                                EDITOR.esc_state = EditorEscState::Normal;
-                            }
-                            EditorEscState::Normal => {}
-                        }
-                    } else if b == b'\r' {
-                        EDITOR.insert_char(b'\n');
-                        structure_changed = true;
-                        last_was_cr = true;
-                    } else if b == b'\n' {
-                        if !last_was_cr {
-                            EDITOR.insert_char(b'\n');
-                            structure_changed = true;
-                        }
-                        last_was_cr = false;
-                    } else if b == b'\t' {
-                        EDITOR.insert_str(b"    ");
-                        line_changed = true;
-                        last_was_cr = false;
-                    } else if (0x20..=0x7E).contains(&b) {
-                        EDITOR.insert_char(b);
-                        line_changed = true;
-                        last_was_cr = false;
-                    }
-                    continue;
-                }
 
                 match EDITOR.esc_state {
                     EditorEscState::Normal => {
@@ -767,7 +704,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Ctrl+Q: Quit editor
                             0x11 => {
                                 EDITOR.is_running = false;
-                                serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
+                                serial_print!("\x1b[2J\x1b[H");
                                 break;
                             }
 
@@ -783,6 +720,14 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 structure_changed = true;
                             }
 
+                            // Ctrl+X: Save & Exit
+                            0x18 => {
+                                EDITOR.save_file();
+                                EDITOR.is_running = false;
+                                serial_print!("\x1b[2J\x1b[H");
+                                break;
+                            }
+
                             // Ctrl+C: Clear buffer
                             0x03 => {
                                 EDITOR.buf_len = 0;
@@ -791,15 +736,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 structure_changed = true;
                             }
 
-                            // Ctrl+X: Save and Quit
-                            0x18 => {
-                                EDITOR.save_file();
-                                EDITOR.is_running = false;
-                                serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
-                                break;
-                            }
-
-                            // Ctrl+A: Jump to start of line (Home)
+                            // Ctrl+A: Beginning of line
                             0x01 => {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 EDITOR.cursor = start;
@@ -840,12 +777,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                             // Ctrl+L: Full Redraw
                             0x0C => {
-                                structure_changed = true;
-                            }
-
-                            // Ctrl+V: Paste notice if raw 0x16 received
-                            0x16 => {
-                                EDITOR.set_status("Tip: Right-click or Shift+Insert to paste.");
                                 structure_changed = true;
                             }
 
@@ -916,7 +847,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Alt+Q / Esc Q: Quit
                             b'q' | b'Q' => {
                                 EDITOR.is_running = false;
-                                serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
+                                serial_print!("\x1b[2J\x1b[H");
                                 break;
                             }
                             // Alt+C / Esc C: Clear
@@ -1040,14 +971,9 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
-                            // Tilde sequences: 200~ (Paste Start), 201~ (Paste End), 3~ (Delete), 1~/7~ (Home), 4~/8~ (End), 12~ (F2), 15~ (F5), 21~ (F10)
+                            // Tilde sequences: 3~ (Delete), 1~/7~ (Home), 4~/8~ (End), 12~ (F2), 15~ (F5), 21~ (F10), 200~/201~ (Paste wrapper)
                             b'~' => {
-                                if params[0] == 200 {
-                                    is_pasting = true;
-                                } else if params[0] == 201 {
-                                    is_pasting = false;
-                                    structure_changed = true;
-                                } else if params[0] == 12 { // F2: Save
+                                if params[0] == 12 { // F2: Save
                                     EDITOR.save_file();
                                     structure_changed = true;
                                 } else if params[0] == 15 { // F5: Run
@@ -1055,7 +981,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     structure_changed = true;
                                 } else if params[0] == 21 { // F10: Quit
                                     EDITOR.is_running = false;
-                                    serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
+                                    serial_print!("\x1b[2J\x1b[H");
                                     break;
                                 } else if params[0] == 3 {
                                     EDITOR.delete_char_under_cursor();
@@ -1075,6 +1001,8 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     }
                                     EDITOR.cursor = end;
                                     cursor_only = true;
+                                } else if params[0] == 200 || params[0] == 201 {
+                                    structure_changed = true;
                                 }
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -1092,19 +1020,8 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 }
             }
 
-            if got_input {
-                paste_idle_spins = 0;
-            } else {
-                paste_idle_spins = paste_idle_spins.saturating_add(1);
-                if is_pasting && paste_idle_spins > 50_000 {
-                    is_pasting = false;
-                    EDITOR.esc_state = EditorEscState::Normal;
-                    structure_changed = true;
-                }
-            }
-
             // Redraw only after the incoming UART RX queue is fully drained
-            if !SERIAL.is_data_ready() && !is_pasting && EDITOR.is_running {
+            if got_input && !SERIAL.is_data_ready() && EDITOR.is_running {
                 if structure_changed {
                     EDITOR.redraw();
                 } else if line_changed {
@@ -1117,7 +1034,5 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
             core::hint::spin_loop();
         }
-
-        serial_print!("\x1b[?2004l");
     }
 }

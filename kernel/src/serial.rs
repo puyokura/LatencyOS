@@ -67,8 +67,8 @@ impl SerialPort {
             outb(self.base + 1, 0x00);
             // 8 bits, no parity, 1 stop bit (8N1)
             outb(self.base + 3, 0x03);
-            // Enable FIFO, clear TX/RX queues, 14-byte threshold (0xC7)
-            outb(self.base + 2, 0xC7);
+            // Enable FIFO, clear TX/RX queues, 1-byte threshold (0x07) for instant single-byte polling
+            outb(self.base + 2, 0x07);
             // Set RTS/DSR, Auxiliary Output 2 (0x0B)
             outb(self.base + 4, 0x0B);
         }
