@@ -188,6 +188,8 @@ pub fn poll_shell(tsc_freq_hz: u64) {
             print_prompt();
         }
 
+        let mut needs_redraw = false;
+
         while let Some(b) = SERIAL.read_byte_nonblocking() {
             match ESC_STATE {
                 EscapeState::Normal => {
@@ -197,6 +199,10 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                         }
 
                         b'\r' | b'\n' => {
+                            if needs_redraw {
+                                redraw_line();
+                                needs_redraw = false;
+                            }
                             serial_print!("\r\n");
                             if LINE_LEN > 0 {
                                 save_to_history(&LINE_BUF[..LINE_LEN]);
@@ -220,12 +226,16 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 }
                                 LINE_LEN -= 1;
                                 CURSOR_POS -= 1;
-                                redraw_line();
+                                needs_redraw = true;
                             }
                         }
 
                         // Ctrl+C (Interrupt/Clear line)
                         0x03 => {
+                            if needs_redraw {
+                                redraw_line();
+                                needs_redraw = false;
+                            }
                             serial_print!("^C\r\n");
                             LINE_LEN = 0;
                             CURSOR_POS = 0;
@@ -235,7 +245,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                         // Ctrl+L (Clear screen)
                         0x0C => {
                             serial_print!("\x1b[2J\x1b[H");
-                            redraw_line();
+                            needs_redraw = true;
                         }
 
                         // Tab
@@ -250,7 +260,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 LINE_BUF[CURSOR_POS] = b;
                                 LINE_LEN += 1;
                                 CURSOR_POS += 1;
-                                redraw_line();
+                                needs_redraw = true;
                             }
                         }
 
@@ -292,7 +302,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 LINE_BUF[..len].copy_from_slice(&HISTORY[slot][..len]);
                                 LINE_LEN = len;
                                 CURSOR_POS = len;
-                                redraw_line();
+                                needs_redraw = true;
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
@@ -306,12 +316,12 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 LINE_BUF[..len].copy_from_slice(&HISTORY[slot][..len]);
                                 LINE_LEN = len;
                                 CURSOR_POS = len;
-                                redraw_line();
+                                needs_redraw = true;
                             } else {
                                 HISTORY_IDX = HISTORY_COUNT;
                                 LINE_LEN = 0;
                                 CURSOR_POS = 0;
-                                redraw_line();
+                                needs_redraw = true;
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
@@ -323,7 +333,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 move_word_right();
                             } else if CURSOR_POS < LINE_LEN {
                                 CURSOR_POS += 1;
-                                serial_print!("\x1b[1C");
+                                needs_redraw = true;
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
@@ -335,7 +345,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                 move_word_left();
                             } else if CURSOR_POS > 0 {
                                 CURSOR_POS -= 1;
-                                serial_print!("\x1b[1D");
+                                needs_redraw = true;
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
@@ -343,14 +353,14 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                         // Home
                         b'H' => {
                             CURSOR_POS = 0;
-                            redraw_line();
+                            needs_redraw = true;
                             ESC_STATE = EscapeState::Normal;
                         }
 
                         // End
                         b'F' => {
                             CURSOR_POS = LINE_LEN;
-                            redraw_line();
+                            needs_redraw = true;
                             ESC_STATE = EscapeState::Normal;
                         }
 
@@ -362,14 +372,14 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                                         LINE_BUF[i] = LINE_BUF[i + 1];
                                     }
                                     LINE_LEN -= 1;
-                                    redraw_line();
+                                    needs_redraw = true;
                                 }
                             } else if params[0] == 1 || params[0] == 7 {
                                 CURSOR_POS = 0;
-                                redraw_line();
+                                needs_redraw = true;
                             } else if params[0] == 4 || params[0] == 8 {
                                 CURSOR_POS = LINE_LEN;
-                                redraw_line();
+                                needs_redraw = true;
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
@@ -381,6 +391,10 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                     }
                 }
             }
+        }
+
+        if needs_redraw {
+            redraw_line();
         }
     }
 }

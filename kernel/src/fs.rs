@@ -89,7 +89,6 @@ pub fn fs_init() {
     } !drop;
 };
 "#;
-        let _ = fs_create_internal("stream.pl", stream_src, false);
 
         // 2. bench.pl - Micro-benchmark script
         let bench_src = br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
@@ -108,7 +107,6 @@ $dt := @tsc() - $t0;
 @println("[LATENCY] Cycles:");
 @println($dt);
 "#;
-        let _ = fs_create_internal("bench.pl", bench_src, false);
 
         // 3. filter.pl - Packet filter and congestion controller
         let filter_src = br#"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
@@ -124,7 +122,6 @@ $rtt > 300us ? {
     @rate(100);
 };
 "#;
-        let _ = fs_create_internal("filter.pl", filter_src, false);
 
         // 4. jitter.pl - Jitter analysis measuring cycle delta
         let jitter_src = br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
@@ -140,7 +137,6 @@ $delta < 100 ? {
     @println("[STATUS] Determinism: Jitter detected");
 };
 "#;
-        let _ = fs_create_internal("jitter.pl", jitter_src, false);
 
         // 5. telemetry.pl - Real-Time Telemetry and Hardware Inspector
         let telemetry_src = br#"// telemetry.pl - Real-Time Hardware Telemetry
@@ -154,7 +150,6 @@ $tsc := @tsc();
 @println($rtt);
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 "#;
-        let _ = fs_create_internal("telemetry.pl", telemetry_src, false);
 
         // 6. readme.txt - Plain text guide
         let readme_txt = br#"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)
