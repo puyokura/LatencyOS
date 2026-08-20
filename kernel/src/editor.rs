@@ -347,6 +347,134 @@ impl PulseEditor {
         serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
     }
 
+    // Function: redraw_current_line
+    // Description: Redraw only the current line and update header (Micro-Update for instant typing/pasting with zero character drops).
+    // Worst-case execution time: ~1500 ns
+    pub fn redraw_current_line(&mut self) {
+        let (row, col) = self.get_row_col();
+        let (line_start, _) = self.get_current_line_start_and_col();
+
+        // Update top line
+        serial_print!(
+            "\x1b[H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
+            self.filename_str(),
+            self.buf_len,
+            row,
+            col
+        );
+
+        // Position at start of current row (row + 1 because top header is row 1)
+        serial_print!("\x1b[{};1H\x1b[90m{:3} |\x1b[0m ", row + 1, row);
+
+        let mut line_end = self.buf_len;
+        for idx in line_start..self.buf_len {
+            if self.buffer[idx] == b'\n' {
+                line_end = idx;
+                break;
+            }
+        }
+
+        let mut in_comment = false;
+        let mut in_string = false;
+        let mut i = line_start;
+        while i < line_end {
+            let b = self.buffer[i];
+
+            if b == b'\t' {
+                serial_print!("    ");
+                i += 1;
+                continue;
+            }
+
+            if !in_string && b == b'/' && i + 1 < line_end && self.buffer[i + 1] == b'/' {
+                in_comment = true;
+                serial_print!("\x1b[90m");
+            }
+
+            if !in_comment && b == b'"' {
+                if in_string {
+                    serial_print!("\"\x1b[0m");
+                    in_string = false;
+                    i += 1;
+                    continue;
+                } else {
+                    in_string = true;
+                    serial_print!("\x1b[32m\"");
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_comment || in_string {
+                SERIAL.send_byte(b);
+                i += 1;
+                continue;
+            }
+
+            if b == b'@' {
+                let len = self.get_word_len(i);
+                serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                i += len;
+                continue;
+            }
+
+            if b == b'$' {
+                let len = self.get_word_len(i);
+                serial_print!("\x1b[1;32m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                i += len;
+                continue;
+            }
+
+            if b == b'#' {
+                let len = self.get_word_len(i);
+                serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                i += len;
+                continue;
+            }
+
+            if (b == b':' || b == b'+' || b == b'-') && i + 1 < line_end && self.buffer[i + 1] == b'=' {
+                serial_print!("\x1b[1;33m{}{}\x1b[0m", b as char, '=' as char);
+                i += 2;
+                continue;
+            }
+
+            if b == b'|' && i + 1 < line_end && self.buffer[i + 1] == b'>' {
+                serial_print!("\x1b[1;33m|>\x1b[0m");
+                i += 2;
+                continue;
+            }
+
+            if b.is_ascii_digit() {
+                let len = self.get_time_literal_len(i);
+                let actual_len = core::cmp::min(len, line_end - i);
+                let is_time = actual_len > 2
+                    && (self.buffer[i + actual_len - 2..i + actual_len] == *b"us"
+                        || self.buffer[i + actual_len - 2..i + actual_len] == *b"ns"
+                        || self.buffer[i + actual_len - 2..i + actual_len] == *b"ms");
+                if is_time {
+                    serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
+                } else {
+                    serial_print!("\x1b[33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
+                }
+                i += actual_len;
+                continue;
+            }
+
+            if b == b'{' || b == b'}' || b == b'(' || b == b')' || b == b'[' || b == b']' {
+                serial_print!("\x1b[1;37m{}\x1b[0m", b as char);
+                i += 1;
+                continue;
+            }
+
+            SERIAL.send_byte(b);
+            i += 1;
+        }
+
+        // Clear rest of current line and reposition cursor
+        serial_print!("\x1b[0m\x1b[K\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
+        self.needs_redraw = false;
+    }
+
     // Function: redraw
     // Description: Render full editor screen smoothly using line-by-line clear (No \x1b[2J full-screen flash).
     // Worst-case execution time: ~40_000 ns
@@ -564,6 +692,8 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
         while EDITOR.is_running {
             let mut got_input = false;
+            let mut line_changed = false;
+            let mut structure_changed = false;
 
             while let Some(b) = SERIAL.read_byte_nonblocking() {
                 got_input = true;
@@ -580,7 +710,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     EDITOR.esc_state = EditorEscState::Normal;
                                     if (0x20..=0x7E).contains(&b) {
                                         EDITOR.insert_char(b);
-                                        EDITOR.needs_redraw = true;
+                                        line_changed = true;
                                     }
                                 }
                             }
@@ -592,7 +722,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else if b == b'~' && params[0] == 201 {
                                     is_pasting = false;
                                     EDITOR.esc_state = EditorEscState::Normal;
-                                    EDITOR.needs_redraw = true;
+                                    structure_changed = true;
                                 } else if b == b'm' || b == b'h' || b == b'l' || b == b'~' {
                                     EDITOR.esc_state = EditorEscState::Normal;
                                 } else {
@@ -606,21 +736,21 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                         }
                     } else if b == b'\r' {
                         EDITOR.insert_char(b'\n');
-                        EDITOR.needs_redraw = true;
+                        structure_changed = true;
                         last_was_cr = true;
                     } else if b == b'\n' {
                         if !last_was_cr {
                             EDITOR.insert_char(b'\n');
-                            EDITOR.needs_redraw = true;
+                            structure_changed = true;
                         }
                         last_was_cr = false;
                     } else if b == b'\t' {
                         EDITOR.insert_str(b"    ");
-                        EDITOR.needs_redraw = true;
+                        line_changed = true;
                         last_was_cr = false;
                     } else if (0x20..=0x7E).contains(&b) {
                         EDITOR.insert_char(b);
-                        EDITOR.needs_redraw = true;
+                        line_changed = true;
                         last_was_cr = false;
                     }
                     continue;
@@ -644,12 +774,13 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Ctrl+S: Save file
                             0x13 => {
                                 EDITOR.save_file();
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
 
                             // Ctrl+R: Run/Compile code
                             0x12 => {
                                 EDITOR.run_code(tsc_freq_hz);
+                                structure_changed = true;
                             }
 
                             // Ctrl+C: Clear buffer
@@ -657,7 +788,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.buf_len = 0;
                                 EDITOR.cursor = 0;
                                 EDITOR.set_status("Buffer cleared.");
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
 
                             // Ctrl+X: Save and Quit
@@ -672,7 +803,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             0x01 => {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 EDITOR.cursor = start;
-                                EDITOR.needs_redraw = true;
+                                cursor_only = true;
                             }
 
                             // Ctrl+E: Jump to end of line (End)
@@ -686,62 +817,62 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     }
                                 }
                                 EDITOR.cursor = end;
-                                EDITOR.needs_redraw = true;
+                                cursor_only = true;
                             }
 
                             // Ctrl+K: Kill line forward
                             0x0B => {
                                 EDITOR.kill_line_forward();
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                             }
 
                             // Ctrl+U: Kill line backward
                             0x15 => {
                                 EDITOR.kill_line_backward();
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                             }
 
                             // Ctrl+D: Delete char under cursor
                             0x04 => {
                                 EDITOR.delete_char_under_cursor();
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                             }
 
                             // Ctrl+L: Full Redraw
                             0x0C => {
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
 
                             // Ctrl+V: Paste notice if raw 0x16 received
                             0x16 => {
                                 EDITOR.set_status("Tip: Right-click or Shift+Insert to paste.");
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
 
                             // Tab: Insert 4 spaces
                             b'\t' => {
                                 EDITOR.insert_str(b"    ");
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                                 last_was_cr = false;
                             }
 
                             // Backspace
                             0x08 | 0x7F => {
                                 EDITOR.delete_char_backspace();
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                                 last_was_cr = false;
                             }
 
                             // Enter / Newline
                             b'\r' => {
                                 EDITOR.insert_char(b'\n');
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                                 last_was_cr = true;
                             }
                             b'\n' => {
                                 if !last_was_cr {
                                     EDITOR.insert_char(b'\n');
-                                    EDITOR.needs_redraw = true;
+                                    structure_changed = true;
                                 }
                                 last_was_cr = false;
                             }
@@ -749,7 +880,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Printable ASCII
                             0x20..=0x7E => {
                                 EDITOR.insert_char(b);
-                                EDITOR.needs_redraw = true;
+                                line_changed = true;
                                 last_was_cr = false;
                             }
 
@@ -773,12 +904,13 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Alt+S / Esc S: Save
                             b's' | b'S' => {
                                 EDITOR.save_file();
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
                             // Alt+R / Esc R: Run
                             b'r' | b'R' => {
                                 EDITOR.run_code(tsc_freq_hz);
+                                structure_changed = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
                             // Alt+Q / Esc Q: Quit
@@ -792,13 +924,13 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.buf_len = 0;
                                 EDITOR.cursor = 0;
                                 EDITOR.set_status("Buffer cleared.");
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
                             _ => {
                                 if (0x20..=0x7E).contains(&b) {
                                     EDITOR.insert_char(b);
-                                    EDITOR.needs_redraw = true;
+                                    line_changed = true;
                                 }
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -809,10 +941,10 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                         match b {
                             b'Q' => { // F2: Save
                                 EDITOR.save_file();
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
                             b'R' => { // F3
-                                EDITOR.needs_redraw = true;
+                                structure_changed = true;
                             }
                             _ => {}
                         }
@@ -844,7 +976,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     EDITOR.move_cursor_up();
                                 }
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -859,7 +990,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     EDITOR.move_cursor_down();
                                 }
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -872,7 +1002,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     EDITOR.cursor += 1;
                                 }
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -885,7 +1014,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     EDITOR.cursor -= 1;
                                 }
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -894,7 +1022,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 EDITOR.cursor = start;
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -910,7 +1037,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 }
                                 EDITOR.cursor = end;
                                 cursor_only = true;
-                                EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
@@ -920,24 +1046,24 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     is_pasting = true;
                                 } else if params[0] == 201 {
                                     is_pasting = false;
-                                    EDITOR.needs_redraw = true;
+                                    structure_changed = true;
                                 } else if params[0] == 12 { // F2: Save
                                     EDITOR.save_file();
-                                    EDITOR.needs_redraw = true;
+                                    structure_changed = true;
                                 } else if params[0] == 15 { // F5: Run
                                     EDITOR.run_code(tsc_freq_hz);
+                                    structure_changed = true;
                                 } else if params[0] == 21 { // F10: Quit
                                     EDITOR.is_running = false;
                                     serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
                                     break;
                                 } else if params[0] == 3 {
                                     EDITOR.delete_char_under_cursor();
-                                    EDITOR.needs_redraw = true;
+                                    line_changed = true;
                                 } else if params[0] == 1 || params[0] == 7 {
                                     let (start, _) = EDITOR.get_current_line_start_and_col();
                                     EDITOR.cursor = start;
                                     cursor_only = true;
-                                    EDITOR.needs_redraw = true;
                                 } else if params[0] == 4 || params[0] == 8 {
                                     let (start, _) = EDITOR.get_current_line_start_and_col();
                                     let mut end = EDITOR.buf_len;
@@ -949,7 +1075,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     }
                                     EDITOR.cursor = end;
                                     cursor_only = true;
-                                    EDITOR.needs_redraw = true;
                                 }
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -974,18 +1099,19 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 if is_pasting && paste_idle_spins > 50_000 {
                     is_pasting = false;
                     EDITOR.esc_state = EditorEscState::Normal;
-                    EDITOR.needs_redraw = true;
+                    structure_changed = true;
                 }
             }
 
-            // Redraw only when UART RX queue is fully drained and not in the middle of a bracketed paste
-            if !SERIAL.is_data_ready() && !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
-                if cursor_only {
-                    EDITOR.update_cursor_only();
-                } else {
+            // Redraw only after the incoming UART RX queue is fully drained
+            if !SERIAL.is_data_ready() && !is_pasting && EDITOR.is_running {
+                if structure_changed {
                     EDITOR.redraw();
+                } else if line_changed {
+                    EDITOR.redraw_current_line();
+                } else if cursor_only {
+                    EDITOR.update_cursor_only();
                 }
-                EDITOR.needs_redraw = false;
                 cursor_only = false;
             }
 
