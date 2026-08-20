@@ -227,6 +227,8 @@ impl PulseEditor {
             if self.buffer[i] == b'\n' {
                 row += 1;
                 col = 1;
+            } else if self.buffer[i] == b'\t' {
+                col += 4;
             } else {
                 col += 1;
             }
@@ -367,6 +369,9 @@ impl PulseEditor {
             serial_print!("\x1b[1;32m[MSG] {}\x1b[0m\r\n", status);
         }
         serial_print!("\x1b[7m [^R Run/Compile]  [^S Save]  [^Q Quit]  [^C Clear] \x1b[0m\r\n");
+
+        // Reposition terminal cursor at the exact editing position and make it visible
+        serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
 
         self.needs_redraw = false;
     }

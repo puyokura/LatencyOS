@@ -79,16 +79,41 @@ fn run_cargo_build(release: bool) -> PathBuf {
 }
 
 #[cfg(windows)]
+static mut SAVED_IN_MODE: u32 = 0x0187;
+#[cfg(windows)]
+static mut SAVED_OUT_MODE: u32 = 0x0007;
+
+#[cfg(windows)]
+unsafe extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> i32 {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
+        fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
+    }
+    const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+
+    let stdin = GetStdHandle(STD_INPUT_HANDLE);
+    let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    SetConsoleMode(stdin, SAVED_IN_MODE);
+    SetConsoleMode(stdout, SAVED_OUT_MODE);
+    0
+}
+
+#[cfg(windows)]
 fn save_and_restore_console_mode<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
+    use std::io::Write;
     unsafe {
         #[link(name = "kernel32")]
         extern "system" {
             fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
             fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
             fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
+            fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
         }
         const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
@@ -102,10 +127,23 @@ where
         GetConsoleMode(stdin, &mut in_mode);
         GetConsoleMode(stdout, &mut out_mode);
 
+        if in_mode != 0 {
+            SAVED_IN_MODE = in_mode;
+        }
+        if out_mode != 0 {
+            SAVED_OUT_MODE = out_mode;
+        }
+
+        SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
+
         let res = f();
 
-        SetConsoleMode(stdin, in_mode);
-        SetConsoleMode(stdout, out_mode);
+        SetConsoleMode(stdin, SAVED_IN_MODE);
+        SetConsoleMode(stdout, SAVED_OUT_MODE);
+        SetConsoleCtrlHandler(Some(console_ctrl_handler), 0);
+
+        print!("\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = std::io::stdout().flush();
 
         res
     }
@@ -175,7 +213,7 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             loop {
                 if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
                     println!("{}", line);
-                    let is_complete = line.contains("LatencyOS 0.0.4") || line.contains("latencyos$") || line.contains("Interactive Control Shell") || line.contains("initialization complete");
+                    let is_complete = line.contains("LatencyOS 0.0.5") || line.contains("[c0|") || line.contains("latencyos") || line.contains("initialization complete");
                     output_lines.push(line);
                     if is_complete {
                         // Small delay to allow prompt to output
