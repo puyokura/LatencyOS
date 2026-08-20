@@ -316,3 +316,59 @@ $rtt > 300us ? {
     @rate(100);
 };
 ```
+
+---
+
+## 5. Module System & Real-Time Compositional Architecture
+
+PulseLang v2 introduces a zero-allocation, statically verified module system designed for hard real-time composability.
+
+### 5.1 Module Declaration & Syntax
+```pulse
+// module declaration (file header)
+module net::congestion;
+
+// import syntax
+import std::time;
+import hw::e1000::{send, rate};
+
+// namespace scope
+namespace filter {
+    pub $min_rtt := 50us;
+    
+    pub @func check_congestion($current_rtt) {
+        $current_rtt > $min_rtt ? rate(80) : rate(100);
+    };
+}
+```
+
+### 5.2 Public vs Private Symbols
+- **`pub $var` / `pub #handle`**: Public symbol exported to importing modules.
+- **`$var` / `#handle`**: Private symbol scoped strictly to the declaring module.
+- **`pub @func(...)`**: Exported real-time function with explicit WCET contract.
+
+### 5.3 Cross-Module Type & Handle Ownership
+- **Linear Type Transfer**: Passing `#handle` to an imported function transfers linear ownership. The calling module cannot reference `#handle` after the call.
+- **Type Invariance**: Time literals and register types maintain compile-time static verification across module boundaries.
+
+### 5.4 Cross-Module WCET Propagation
+When module $A$ calls function $F$ from module $B$:
+$$\text{WCET}(A) = \text{WCET}_{\text{local}}(A) + \text{WCET}(B::F) + \text{CallOverhead}(25\text{ ns})$$
+The compiler validates that $\text{WCET}(A) \le \text{Budget}(A)$ across all imported modules.
+
+### 5.5 Static Memory Layout & Namespace Partitioning
+The 32 global register slots (`$0`..`$31`) are statically partitioned per module at link/compile time. No dynamic register allocation or stack spill to DRAM occurs.
+
+### 5.6 Circular Dependency Prevention & Compilation Order
+- **DAG Enforcement**: Circular imports (`A -> B -> A`) are detected at compile time and rejected with `CircularDependencyError`.
+- **Topological Compilation**: Modules are compiled in reverse topological order, generating independent standalone `.bin` bytecode artifacts.
+
+### 5.7 Standard Library & Hardware Intrinsic Modules
+- **`std::math`**: Fixed-point arithmetic, clamp, min, max, linear interpolation.
+- **`std::time`**: TSC cycle conversions, deadline comparison, jitter timers.
+- **`std::net`**: RTT estimators, congestion window calculators, SRTP packet formatters.
+- **`std::gpu`**: Framebuffer descriptor management, VBLANK synchronization.
+- **`hw::e1000`**: Direct Intel 82540EM PMD register access.
+- **`hw::tsc`**: Invariant CPU timestamp counter intrinsics.
+- **`hw::apic`**: Inter-processor interrupt (IPI) and core synchronization primitives.
+

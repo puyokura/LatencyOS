@@ -330,17 +330,34 @@ impl PulseEditor {
         (row, col)
     }
 
+    // Function: update_cursor_only
+    // Description: Smoothly reposition cursor and update status header without redrawing lines (Zero Flicker).
+    // Worst-case execution time: ~1200 ns
+    pub fn update_cursor_only(&self) {
+        let (row, col) = self.get_row_col();
+        // Update top line
+        serial_print!(
+            "\x1b[H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
+            self.filename_str(),
+            self.buf_len,
+            row,
+            col
+        );
+        // Move cursor to editing position
+        serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
+    }
+
     // Function: redraw
-    // Description: Render full editor screen with ANSI color syntax highlighting and position cursor.
-    // Worst-case execution time: ~60_000 ns
+    // Description: Render full editor screen smoothly using line-by-line clear (No \x1b[2J full-screen flash).
+    // Worst-case execution time: ~40_000 ns
     pub fn redraw(&mut self) {
-        serial_print!("\x1b[2J\x1b[H");
+        serial_print!("\x1b[H");
 
         let (row, col) = self.get_row_col();
 
         // Top Status Header (Inverted Bar)
         serial_print!(
-            "\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\r\n",
+            "\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K\r\n",
             self.filename_str(),
             self.buf_len,
             row,
@@ -362,7 +379,7 @@ impl PulseEditor {
                 line_num += 1;
                 in_comment = false;
                 in_string = false;
-                serial_print!("\x1b[0m\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
+                serial_print!("\x1b[0m\x1b[K\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
                 i += 1;
                 continue;
             }
@@ -464,16 +481,16 @@ impl PulseEditor {
         }
 
         // Empty bottom line and status bar
-        serial_print!("\x1b[0m\r\n\r\n");
+        serial_print!("\x1b[0m\x1b[K\r\n\r\n");
         let status = self.status_str();
         if !status.is_empty() {
-            serial_print!("\x1b[33m[MSG] {}\x1b[0m\r\n", status);
+            serial_print!("\x1b[33m[MSG] {}\x1b[0m\x1b[K\r\n", status);
         } else {
-            serial_print!("\r\n");
+            serial_print!("\x1b[K\r\n");
         }
 
         // Footer Navigation Bar
-        serial_print!("\x1b[7m [^S Save]  [^R Run]  [^Q Quit]  [^C Clear]  [^X Save&Quit]  [^K KillLine] \x1b[0m\r\n");
+        serial_print!("\x1b[7m [^S Save]  [^R Run]  [^Q Quit]  [^C Clear]  [^X Save&Quit]  [^K KillLine] \x1b[0m\x1b[K\x1b[J\r\n");
 
         // Reposition terminal cursor at the exact editing position and make it visible
         serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
@@ -543,6 +560,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
         let mut is_pasting = false;
         let mut last_was_cr = false;
         let mut paste_idle_spins: u32 = 0;
+        let mut cursor_only = false;
 
         while EDITOR.is_running {
             let mut got_input = false;
@@ -817,6 +835,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else {
                                     EDITOR.move_cursor_up();
                                 }
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -831,6 +850,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else {
                                     EDITOR.move_cursor_down();
                                 }
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -843,6 +863,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else if EDITOR.cursor < EDITOR.buf_len {
                                     EDITOR.cursor += 1;
                                 }
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -855,6 +876,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else if EDITOR.cursor > 0 {
                                     EDITOR.cursor -= 1;
                                 }
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -863,6 +885,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             b'H' => {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 EDITOR.cursor = start;
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -878,6 +901,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     }
                                 }
                                 EDITOR.cursor = end;
+                                cursor_only = true;
                                 EDITOR.needs_redraw = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
@@ -904,6 +928,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else if params[0] == 1 || params[0] == 7 {
                                     let (start, _) = EDITOR.get_current_line_start_and_col();
                                     EDITOR.cursor = start;
+                                    cursor_only = true;
                                     EDITOR.needs_redraw = true;
                                 } else if params[0] == 4 || params[0] == 8 {
                                     let (start, _) = EDITOR.get_current_line_start_and_col();
@@ -915,6 +940,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                         }
                                     }
                                     EDITOR.cursor = end;
+                                    cursor_only = true;
                                     EDITOR.needs_redraw = true;
                                 }
                                 EDITOR.esc_state = EditorEscState::Normal;
@@ -940,8 +966,15 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 }
             }
 
-            if !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
-                EDITOR.redraw();
+            // Only redraw when UART RX buffer is fully drained
+            if !SERIAL.is_data_ready() && !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
+                if cursor_only {
+                    EDITOR.update_cursor_only();
+                } else {
+                    EDITOR.redraw();
+                }
+                EDITOR.needs_redraw = false;
+                cursor_only = false;
             }
 
             core::hint::spin_loop();

@@ -21,41 +21,74 @@ LatencyOS の対話環境は、マイクロ秒・ナノ秒単位のハードウ�
 | コマンド | 引数例 | 説明 |
 |---|---|---|
 | `help` | なし | 利用可能コマンド一覧と最悪実行時間の表示 |
-| `ls` | `-l`, `-t` | ファイル一覧。`-t` でスクリプト/バイナリ/テキストの種別と静的 WCET を表示 |
+| `ls` | `-l`, `-t`, `[dir]` | ファイル一覧。`-l` でパーミッション・サイズ、`-t` で種別と静的 WCET を表示 |
 | `cat` | `readme.txt` | 任意のテキストファイル（`.txt`, `.json`, `.log`, `.pl`）の内容を出力 |
-| `edit` | `test.txt` | 任意のファイルを内蔵エディタ PulseEditor で作成・編集 |
+| `edit` | `test.txt` | 任意のファイルを内蔵エディタ PulseEditor で作成・編集（Ctrl ショートカット対応） |
 | `compile` / `build` | `stream.pl [out.bin]` | PulseLang スクリプトをスタンドアロンのバイトコードバイナリ（`.bin`）へコンパイル |
 | `run` / `exec` | `stream.pl` または `stream.bin` | スクリプトまたはコンパイル済みバイナリを即時実行（バイナリはコンパイル遅延ゼロ） |
 | `disasm` | `stream.bin` | バイトコードバイナリを逆アセンブルし、Opcode とオペランドを一覧表示 |
+| `hex` / `xxd` | `stream.bin` | バイナリ・テキストファイルの 16 進ダンプ (Hex Dump) を ASCII と共に出力 |
+| `pwd` | なし | 現在のカレントワーキングディレクトリを表示 |
+| `cd` | `/bin`, `..`, `/` | カレントディレクトリを移動 |
+| `mkdir` | `/custom` | LatencyFS に新しいディレクトリを作成 |
+| `tree` | なし | 階層的ディレクトリ構造をツリー形式で表示 |
 | `touch` | `notes.txt` | 空のファイルを LatencyFS に新規作成 |
-| `rm` / `del` | `old.bin` | ファイルを LatencyFS から削除 |
+| `rm` / `del` | `old.bin` | ファイルまたはディレクトリを LatencyFS から削除 |
 | `cp` | `src.pl dst.pl` | ファイルを複製 |
-| `mv` | `old.pl new.pl` | ファイル名を変更 |
+| `mv` | `old.pl new.pl` | ファイル名を変更・移動 |
 | `within` | `500us run filter.bin` | 指定時間以内にコマンドが完了するかハードウェア検証 |
 | `timeline` | なし | 6 つのパイプラインステージのマイクロ秒内訳を表示 |
 | `ring` | なし | SPSC Lock-Free リングバッファの占有率とポインタを表示 |
 | `cores` | なし | 各 CPU コアの APIC ID、役割、C0 ロック状態を表示 |
 | `tsc` | なし | ハードウェア TSC のシリアル化現在値とクロック分解能を表示 |
+| `status` | なし | 各コアのリアルタイムループ回数とシステム稼働時間を表示 |
+| `pipeline` | なし | ストリーミングフレームの送受信統計カウンタを表示 |
+| `latency` | なし | ハードウェア・ドライバ・ネットワークの遅延内訳を表示 |
+| `benchmark` | なし | 1,000 サンプルのハードウェア遅延ベンチマークを実行 |
+| `congestion` | なし | 輻輳制御アルゴリズムの RTT 統計と帯域スロットル状態を表示 |
+| `power` | なし | RAPL 電力測定と CPU 温度テレメトリを表示 |
+| `pci` | なし | PCI バスのデバイス一覧（Intel e1000 NIC 等）を表示 |
+| `clear` | なし | ターミナル画面をクリア |
 | `doc pulse` | なし | カーネル内蔵の PulseLang v2 形式言語仕様書を表示 |
 | `exit` / `poweroff`| なし | ACPI ハードウェア電源切断を行いホストへ復帰 |
 
 ---
 
-### 1.3 `within` デッドラインガードの使い方
-コマンドの実行時間が指定した予算内に収まるかをハードウェア TSC で厳密に検証します。
-```text
-[c0|15ns] % within 500us run filter.pl
-[FILTER] Measured RTT (ns):
-44772
-[ACTION] Optimal latency -> Rate: 100%
-[within] Execution time: 14.82us (Budget: 500.00us) -> PASSED
-```
+### 1.3 コンパイル済みバイナリの実行方法 (`compile` & `run`)
+PulseLang のスクリプト（`.pl`）は、その場でコンパイルして実行できるほか、事前にバイトコードバイナリ（`.bin`）へビルドしておくことで、**コンパイル時間ゼロの $O(1)$ 最速起動**が可能です。
+
+1. **コンパイル**:
+   ```text
+   [c0|14ns] % compile stream.pl stream.bin
+   [BUILD] Compiled stream.pl -> stream.bin (108 B binary bytecode, wcet ~2400 ns)
+   ```
+2. **実行**:
+   ```text
+   [c0|12ns] % run stream.bin
+   [STREAM] Glass-to-Glass Pipeline executing on Core 1-3...
+   ```
+   ※ `run` コマンドは引数のファイル先頭のマジック（`PULS`）を自動検知するため、`.pl` と `.bin` のいずれも同じ `run <ファイル名>` で実行可能です。
+
+3. **バイナリビューア (`hex` / `xxd` / `disasm`)**:
+   - `hex stream.bin`: バイトコードの 16 進ダンプを出力
+   - `disasm stream.bin`: バイトコードの Opcode とオペランドを逆アセンブル
 
 ---
 
-## 2. PulseEditor (カーネル内蔵フルスクリーンエディタ)
-
-PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作する ANSI フルスクリーンテキストエディタです。`.pl` スクリプトのほか、`.txt`、`.json`、`.log`、`.md` などあらゆるテキストファイルを編集できます。
+### 1.4 階層的ファイルシステムコマンド (`pwd`, `cd`, `mkdir`, `tree`)
+LatencyOS は階層化されたファイルパス（`/bin/stream.pl`, `/etc/config.json`, `/var/log/system.log`）を標準でサポートしています。
+```text
+[c0|10ns] % tree
+.
+├── /bin/stream.pl
+├── /bin/bench.pl
+├── /bin/filter.pl
+├── /bin/jitter.pl
+├── /bin/telemetry.pl
+├── /etc/config.json
+├── /var/log/system.log
+└── /home/readme.txt
+```
 
 ```text
  LatencyOS PulseEditor | File: stream.pl       | Size:  192B | Line:  1 Col:  1

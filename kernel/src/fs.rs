@@ -4,8 +4,8 @@
 
 use crate::tsc::read_tsc_serialized;
 
-pub const MAX_FILES: usize = 32;
-pub const MAX_FILENAME_LEN: usize = 32;
+pub const MAX_FILES: usize = 64;
+pub const MAX_FILENAME_LEN: usize = 64;
 pub const MAX_FILE_SIZE: usize = 4096;
 
 #[derive(Clone, Copy)]
@@ -14,6 +14,7 @@ pub struct FileEntry {
     pub name_len: usize,
     pub data: [u8; MAX_FILE_SIZE],
     pub size: usize,
+    pub is_dir: bool,
     pub read_only: bool,
     pub modified_tsc: u64,
     pub used: bool,
@@ -26,6 +27,7 @@ impl FileEntry {
             name_len: 0,
             data: [0; MAX_FILE_SIZE],
             size: 0,
+            is_dir: false,
             read_only: false,
             modified_tsc: 0,
             used: false,
@@ -55,12 +57,15 @@ impl LatencyFS {
 pub static mut FS: LatencyFS = LatencyFS::new();
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum FsError {
     FileNotFound,
     DiskFull,
     FileTooLarge,
     ReadOnly,
     InvalidName,
+    NotADirectory,
+    IsADirectory,
 }
 
 // Function: fs_init
@@ -175,13 +180,86 @@ $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.")
         let _ = fs_create_internal("config.json", config_json, false);
 
         // 8. system.log - Hardware initialization log
-        let system_log = br#"[BOOT] LatencyOS 0.0.17 x86_64 hard-realtime
+        let system_log = br#"[BOOT] LatencyOS 0.0.18 x86_64 hard-realtime
 [APIC] Cores 0-3 initialized with static affinity.
 [PMD] Intel e1000 poll-mode driver active. MAC: 52:54:00:12:34:56.
 [GPU] Zero-copy frame ring ready: 1920x1080 @ 32bpp.
-[FS] LatencyFS initialized with 32 slots.
+[FS] LatencyFS initialized with 64 slots.
 "#;
         let _ = fs_create_internal("system.log", system_log, false);
+
+        // Hierarchical directories & paths
+        let _ = fs_mkdir("/bin");
+        let _ = fs_mkdir("/etc");
+        let _ = fs_mkdir("/var");
+        let _ = fs_mkdir("/var/log");
+        let _ = fs_mkdir("/home");
+
+        let _ = fs_create_internal("/bin/stream.pl", stream_src, false);
+        let _ = fs_create_internal("/bin/bench.pl", bench_src, false);
+        let _ = fs_create_internal("/bin/filter.pl", filter_src, false);
+        let _ = fs_create_internal("/bin/jitter.pl", jitter_src, false);
+        let _ = fs_create_internal("/bin/telemetry.pl", telemetry_src, false);
+        let _ = fs_create_internal("/etc/config.json", config_json, false);
+        let _ = fs_create_internal("/var/log/system.log", system_log, false);
+        let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
+    }
+}
+
+// Function: fs_mkdir
+// Description: Create a directory entry in LatencyFS.
+// Worst-case execution time: ~1200 ns
+pub fn fs_mkdir(path: &str) -> Result<usize, FsError> {
+    if path.is_empty() || path.len() > MAX_FILENAME_LEN {
+        return Err(FsError::InvalidName);
+    }
+    unsafe {
+        // Check if already exists
+        for (idx, file) in FS.files.iter().enumerate() {
+            if file.used && file.name_str() == path {
+                return Ok(idx);
+            }
+        }
+        // Find empty slot
+        for (idx, file) in FS.files.iter_mut().enumerate() {
+            if !file.used {
+                file.used = true;
+                file.is_dir = true;
+                file.name_len = path.len();
+                file.name[..path.len()].copy_from_slice(path.as_bytes());
+                file.size = 0;
+                file.read_only = false;
+                file.modified_tsc = read_tsc_serialized();
+                return Ok(idx);
+            }
+        }
+        Err(FsError::DiskFull)
+    }
+}
+
+// Function: fs_is_dir
+// Description: Check if a given path is a directory.
+// Worst-case execution time: ~400 ns
+pub fn fs_is_dir(path: &str) -> bool {
+    if path == "/" || path == "." || path == ".." {
+        return true;
+    }
+    unsafe {
+        for file in FS.files.iter() {
+            if file.used && file.name_str() == path && file.is_dir {
+                return true;
+            }
+        }
+        // Or if any file has path as prefix directory
+        for file in FS.files.iter() {
+            if file.used {
+                let name = file.name_str();
+                if name.starts_with(path) && name.as_bytes().get(path.len()) == Some(&b'/') {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -203,6 +281,7 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
                 if file.read_only {
                     return Err(FsError::ReadOnly);
                 }
+                file.is_dir = false;
                 file.data[..content.len()].copy_from_slice(content);
                 file.size = content.len();
                 file.modified_tsc = read_tsc_serialized();
@@ -214,6 +293,7 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
         for (idx, file) in FS.files.iter_mut().enumerate() {
             if !file.used {
                 file.used = true;
+                file.is_dir = false;
                 file.name_len = name.len();
                 file.name[..name.len()].copy_from_slice(name.as_bytes());
                 file.data[..content.len()].copy_from_slice(content);
@@ -229,13 +309,25 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
 }
 
 // Function: fs_read
-// Description: Read file contents from LatencyFS.
-// Worst-case execution time: ~300 ns
+// Description: Read file contents from LatencyFS with path fallback.
+// Worst-case execution time: ~500 ns
 pub fn fs_read(name: &str) -> Option<&'static [u8]> {
     unsafe {
+        // 1. Exact match
         for file in FS.files.iter() {
-            if file.used && file.name_str() == name {
+            if file.used && !file.is_dir && file.name_str() == name {
                 return Some(&file.data[..file.size]);
+            }
+        }
+        // 2. Basename match
+        for file in FS.files.iter() {
+            if file.used && !file.is_dir {
+                let fname = file.name_str();
+                if let Some(pos) = fname.rfind('/') {
+                    if &fname[pos + 1..] == name {
+                        return Some(&file.data[..file.size]);
+                    }
+                }
             }
         }
         None
@@ -250,7 +342,7 @@ pub fn fs_write(name: &str, content: &[u8]) -> Result<(), FsError> {
 }
 
 // Function: fs_delete
-// Description: Delete a file from LatencyFS.
+// Description: Delete a file or directory from LatencyFS.
 // Worst-case execution time: ~400 ns
 pub fn fs_delete(name: &str) -> Result<(), FsError> {
     unsafe {

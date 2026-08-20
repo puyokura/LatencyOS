@@ -50,9 +50,11 @@ static mut HISTORY_IDX: usize = 0;
 
 static mut LAST_CMD_LATENCY_NS: u64 = 18;
 static mut PROMPT_SHOWN: bool = false;
+static mut CURRENT_DIR: [u8; 64] = *b"/\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static mut CURRENT_DIR_LEN: usize = 1;
 
 // Function: print_formatted_time
-// Description: Print human-readable time without float allocations.
+// Description: Print human-readable time (ns, us, ms, s, m s) without float allocations.
 // Worst-case execution time: ~1000 ns
 fn print_formatted_time(ns: u64) {
     if ns < 1_000 {
@@ -61,10 +63,19 @@ fn print_formatted_time(ns: u64) {
         let us = ns / 1_000;
         let frac = (ns % 1_000) / 100;
         serial_print!("{}.{}us", us, frac);
-    } else {
+    } else if ns < 1_000_000_000 {
         let ms = ns / 1_000_000;
         let frac = (ns % 1_000_000) / 100_000;
         serial_print!("{}.{}ms", ms, frac);
+    } else if ns < 60_000_000_000 {
+        let s = ns / 1_000_000_000;
+        let frac = (ns % 1_000_000_000) / 100_000_000;
+        serial_print!("{}.{}s", s, frac);
+    } else {
+        let total_s = ns / 1_000_000_000;
+        let m = total_s / 60;
+        let s = total_s % 60;
+        serial_print!("{}m {}s", m, s);
     }
 }
 
@@ -452,16 +463,25 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("LatencyOS built-in commands:");
             serial_println!("  ls [-l|-t]       list files (-l: details, -t: WCET budgets)");
             serial_println!("  cat <file>       concatenate files and print on stdout");
-            serial_println!("  edit <file>      open full-screen text editor");
-            serial_println!("  run <file>       execute PulseLang script");
-            serial_println!("  compile <file>   compile script and show diagnostics");
-            serial_println!("  doc pulse        show PulseLang v2 AI-Native formal specification");
+            serial_println!("  edit <file>      open full-screen text editor (Ctrl shortcuts)");
+            serial_println!("  compile <file>   compile script to standalone binary bytecode (.bin)");
+            serial_println!("  run <file>       execute PulseLang script (.pl) or binary (.bin)");
+            serial_println!("  disasm <file>    disassemble binary bytecode with opcodes");
+            serial_println!("  hex <file>       display binary hex dump (xxd/hexdump)");
+            serial_println!("  pwd              print current working directory");
+            serial_println!("  cd <dir>         change directory (cd /, cd .., cd /bin)");
+            serial_println!("  mkdir <dir>      create directory in LatencyFS");
+            serial_println!("  tree             display hierarchical directory tree");
+            serial_println!("  touch <file>     create new empty file");
+            serial_println!("  rm <file>        remove file or directory");
+            serial_println!("  cp <src> <dst>   copy file");
+            serial_println!("  mv <src> <dst>   rename / move file");
             serial_println!("  within <t> <cmd> execute command with hard deadline guard");
+            serial_println!("  doc pulse        show PulseLang v2 AI-Native formal specification");
             serial_println!("  timeline         display stage-by-stage pipeline timing");
             serial_println!("  ring             display SPSC lock-free ring buffer telemetry");
             serial_println!("  cores            display hardware core status and C-states");
             serial_println!("  tsc              display raw hardware TSC clock");
-            serial_println!("  rm <file>        remove file");
             serial_println!("  status           display core loops and uptime");
             serial_println!("  pipeline         display streaming frame counters");
             serial_println!("  latency          display latency measurement breakdown");
@@ -793,6 +813,129 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     Ok(()) => {}
                     Err(e) => serial_println!("mv: error: {:?}", e),
                 }
+            }
+        }
+
+        "pwd" => {
+            unsafe {
+                serial_println!("{}", core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/"));
+            }
+        }
+
+        "cd" => {
+            let target = if arg.is_empty() { "/" } else { arg };
+            if target == "/" {
+                unsafe {
+                    CURRENT_DIR[0] = b'/';
+                    CURRENT_DIR_LEN = 1;
+                }
+            } else if target == ".." {
+                unsafe {
+                    let cur = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
+                    if let Some(pos) = cur.rfind('/') {
+                        if pos == 0 {
+                            CURRENT_DIR[0] = b'/';
+                            CURRENT_DIR_LEN = 1;
+                        } else {
+                            CURRENT_DIR_LEN = pos;
+                        }
+                    }
+                }
+            } else if target == "." {
+                // No-op
+            } else {
+                let mut check_buf = [0u8; 64];
+                let check_path = if target.starts_with('/') {
+                    target
+                } else {
+                    unsafe {
+                        let cur = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
+                        if cur == "/" {
+                            let len = 1 + target.len();
+                            if len <= 64 {
+                                check_buf[0] = b'/';
+                                check_buf[1..len].copy_from_slice(target.as_bytes());
+                                core::str::from_utf8(&check_buf[..len]).unwrap_or(target)
+                            } else { target }
+                        } else {
+                            let cur_len = CURRENT_DIR_LEN;
+                            let len = cur_len + 1 + target.len();
+                            if len <= 64 {
+                                check_buf[..cur_len].copy_from_slice(&CURRENT_DIR[..cur_len]);
+                                check_buf[cur_len] = b'/';
+                                check_buf[cur_len + 1..len].copy_from_slice(target.as_bytes());
+                                core::str::from_utf8(&check_buf[..len]).unwrap_or(target)
+                            } else { target }
+                        }
+                    }
+                };
+                if crate::fs::fs_is_dir(check_path) {
+                    unsafe {
+                        CURRENT_DIR_LEN = check_path.len();
+                        CURRENT_DIR[..check_path.len()].copy_from_slice(check_path.as_bytes());
+                    }
+                } else {
+                    serial_println!("cd: {}: No such directory", target);
+                }
+            }
+        }
+
+        "mkdir" => {
+            if arg.is_empty() {
+                serial_println!("mkdir: missing operand");
+            } else {
+                match crate::fs::fs_mkdir(arg) {
+                    Ok(_) => {}
+                    Err(e) => serial_println!("mkdir: cannot create directory '{}': {:?}", arg, e),
+                }
+            }
+        }
+
+        "tree" => {
+            serial_println!(".");
+            unsafe {
+                for file in crate::fs::FS.files.iter() {
+                    if file.used && file.name_str().starts_with('/') {
+                        let type_suffix = if file.is_dir { "/" } else { "" };
+                        serial_println!("├── {}{}", file.name_str(), type_suffix);
+                    }
+                }
+            }
+        }
+
+        "hex" | "xxd" | "hexdump" => {
+            if arg.is_empty() {
+                serial_println!("hex: missing operand (usage: hex <file>)");
+            } else if let Some(data) = crate::fs::fs_read(arg) {
+                serial_println!("=== Hex Dump: {} ({} bytes) ===", arg, data.len());
+                let mut offset = 0;
+                while offset < data.len() {
+                    serial_print!("{:08x}: ", offset);
+                    let chunk_len = core::cmp::min(16, data.len() - offset);
+                    for i in 0..16 {
+                        if i < chunk_len {
+                            serial_print!("{:02x} ", data[offset + i]);
+                        } else {
+                            serial_print!("   ");
+                        }
+                        if i == 7 {
+                            serial_print!(" ");
+                        }
+                    }
+                    serial_print!(" |");
+                    for i in 0..chunk_len {
+                        let b = data[offset + i];
+                        if (0x20..=0x7E).contains(&b) {
+                            serial_print!("{}", b as char);
+                        } else {
+                            serial_print!(".");
+                        }
+                    }
+                    serial_println!("|");
+                    offset += chunk_len;
+                }
+            } else {
+                serial_println!("hex: cannot access '{}': No such file or directory", arg);
             }
         }
 
