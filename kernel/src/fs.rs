@@ -203,6 +203,24 @@ $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.")
         let _ = fs_create_internal("/etc/config.json", config_json, false);
         let _ = fs_create_internal("/var/log/system.log", system_log, false);
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
+
+        // Pre-compile and place standalone .bin binaries in /bin/
+        let mut bin_buf = [0u8; 1024];
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(stream_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/stream.bin", &bin_buf[..sz], false);
+        }
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(bench_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/bench.bin", &bin_buf[..sz], false);
+        }
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(filter_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/filter.bin", &bin_buf[..sz], false);
+        }
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(jitter_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/jitter.bin", &bin_buf[..sz], false);
+        }
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(telemetry_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/telemetry.bin", &bin_buf[..sz], false);
+        }
     }
 }
 

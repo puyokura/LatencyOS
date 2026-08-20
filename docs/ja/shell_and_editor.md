@@ -75,23 +75,63 @@ PulseLang のスクリプト（`.pl`）は、その場でコンパイルして�
 
 ---
 
-### 1.4 階層的ファイルシステムコマンド (`pwd`, `cd`, `mkdir`, `tree`)
-LatencyOS は階層化されたファイルパス（`/bin/stream.pl`, `/etc/config.json`, `/var/log/system.log`）を標準でサポートしています。
-```text
-[c0|10ns] % tree
-.
-├── /bin/stream.pl
-├── /bin/bench.pl
-├── /bin/filter.pl
-├── /bin/jitter.pl
-├── /bin/telemetry.pl
-├── /etc/config.json
-├── /var/log/system.log
-└── /home/readme.txt
-```
+### 1.4 階層的ファイルシステムと初期ディレクトリ構成
+LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。すべてのスクリプト（`.pl`）とコンパイル済みバイナリ（`.bin`）は `/bin/` 配下に格納されています。
 
 ```text
- LatencyOS PulseEditor | File: stream.pl       | Size:  192B | Line:  1 Col:  1
+/ (ルート)
+├── /bin/
+│   ├── stream.pl       # ゼロコピー GPU-to-NIC パイプライン
+│   ├── stream.bin      # コンパイル済みバイナリ (即時実行用)
+│   ├── bench.pl        # リアルタイム演算ベンチマーク
+│   ├── bench.bin       # コンパイル済みバイナリ
+│   ├── filter.pl       # 輻輳制御ガード
+│   ├── filter.bin      # コンパイル済みバイナリ
+│   ├── jitter.pl       # ジッター計測
+│   ├── jitter.bin      # コンパイル済みバイナリ
+│   ├── telemetry.pl    # ハードウェアテレメトリ
+│   └── telemetry.bin   # コンパイル済みバイナリ
+├── /etc/
+│   └── config.json     # システム・コア設定ファイル
+├── /var/
+│   └── /log/
+│       └── system.log  # カーネル初期化ログ
+└── /home/
+    └── readme.txt      # テキストガイド
+```
+
+### 1.5 カレントディレクトリ限定 `ls` の動作
+`ls` コマンドは**現在のカレントワーキングディレクトリ内のファイル・ディレクトリのみ**を表示します。
+
+```text
+[c0|12ns] % pwd
+/
+[c0|10ns] % ls
+bin/  etc/  var/  home/
+
+[c0|14ns] % cd /bin
+[c0|10ns] % pwd
+/bin
+[c0|12ns] % ls
+stream.pl  stream.bin  bench.pl  bench.bin  filter.pl  filter.bin  jitter.pl  jitter.bin  telemetry.pl  telemetry.bin
+
+[c0|15ns] % ls -t
+stream.pl        (wcet: ~3.2us , size:  192 B)
+stream.bin       (wcet: ~0.8us , size:  108 B)
+bench.pl         (wcet: ~3.2us , size:  248 B)
+bench.bin        (wcet: ~0.8us , size:   96 B)
+...
+
+[c0|10ns] % cd /etc
+[c0|11ns] % ls
+config.json
+```
+
+---
+
+## 2. PulseEditor (カーネル内蔵フルスクリーンエディタ)
+
+PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作する ANSI フルスクリーンテキストエディタです。`.pl` スクリプトのほか、`.txt`、`.json`、`.log`、`.md` などあらゆるテキストファイルを編集できます。
   1 | // stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
   2 | @pipeline: UltraStream @budget(8000us);
   3 | @on_vblank: {

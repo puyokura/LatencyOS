@@ -519,47 +519,105 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "ls" => {
-            let is_long = arg == "-l" || arg == "-la" || arg == "-al";
-            let is_timing = arg == "-t" || arg == "-timing";
+            let mut is_long = false;
+            let mut is_timing = false;
+            let mut target_dir_buf = [0u8; 64];
+            let mut target_dir_len = 0;
+
+            let mut words = arg.split_whitespace();
+            while let Some(w) = words.next() {
+                if w == "-l" || w == "-la" || w == "-al" {
+                    is_long = true;
+                } else if w == "-t" || w == "-timing" {
+                    is_timing = true;
+                } else if !w.starts_with('-') {
+                    let w_len = w.len();
+                    if w_len < 64 {
+                        target_dir_buf[..w_len].copy_from_slice(w.as_bytes());
+                        target_dir_len = w_len;
+                    }
+                }
+            }
+
+            let cur_dir = unsafe {
+                if target_dir_len > 0 {
+                    core::str::from_utf8(&target_dir_buf[..target_dir_len]).unwrap_or("/")
+                } else {
+                    core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/")
+                }
+            };
+
             unsafe {
-                if is_timing {
-                    for file in crate::fs::FS.files.iter() {
-                        if file.used {
-                            let type_str = if file.name_str().ends_with(".pl") {
+                let mut count = 0;
+                for file in crate::fs::FS.files.iter() {
+                    if !file.used {
+                        continue;
+                    }
+                    let name = file.name_str();
+
+                    // Check if file is inside cur_dir
+                    let (is_match, display_name) = if cur_dir == "/" {
+                        if name.starts_with('/') {
+                            let rel = &name[1..];
+                            if !rel.contains('/') && !rel.is_empty() {
+                                (true, rel)
+                            } else {
+                                (false, "")
+                            }
+                        } else if !name.contains('/') {
+                            (true, name)
+                        } else {
+                            (false, "")
+                        }
+                    } else {
+                        if name.starts_with(cur_dir) && name.as_bytes().get(cur_dir.len()) == Some(&b'/') {
+                            let rel = &name[cur_dir.len() + 1..];
+                            if !rel.contains('/') && !rel.is_empty() {
+                                (true, rel)
+                            } else {
+                                (false, "")
+                            }
+                        } else {
+                            (false, "")
+                        }
+                    };
+
+                    if is_match {
+                        count += 1;
+                        let suffix = if file.is_dir { "/" } else { "" };
+                        if is_timing {
+                            let type_str = if file.is_dir {
+                                "directory"
+                            } else if display_name.ends_with(".pl") {
                                 "wcet: ~3.2us"
-                            } else if file.name_str().ends_with(".bin") {
+                            } else if display_name.ends_with(".bin") {
                                 "wcet: ~0.8us"
-                            } else if file.name_str().ends_with(".json") {
+                            } else if display_name.ends_with(".json") {
                                 "type: config"
-                            } else if file.name_str().ends_with(".log") {
+                            } else if display_name.ends_with(".log") {
                                 "type: log"
                             } else {
                                 "type: text"
                             };
-                            serial_print!("{:<16} ({:<13}, size: {:>4} B)\r\n", file.name_str(), type_str, file.size);
-                        }
-                    }
-                } else if is_long {
-                    for file in crate::fs::FS.files.iter() {
-                        if file.used {
-                            let mode = if file.read_only { "-r--r--r--" } else { "-rw-r--r--" };
-                            serial_println!("{} 1 root root {:5} {}", mode, file.size, file.name_str());
-                        }
-                    }
-                } else {
-                    let mut first = true;
-                    for file in crate::fs::FS.files.iter() {
-                        if file.used {
-                            if !first {
-                                serial_print!("  ");
+                            serial_print!("{:<16}{} ({:<13}, size: {:>4} B)\r\n", display_name, suffix, type_str, file.size);
+                        } else if is_long {
+                            let mode = if file.is_dir { "drwxr-xr-x" } else if file.read_only { "-r--r--r--" } else { "-rw-r--r--" };
+                            serial_println!("{} 1 root root {:5} {}{}", mode, file.size, display_name, suffix);
+                        } else {
+                            if file.is_dir {
+                                serial_print!("\x1b[1;34m{}{}\x1b[0m  ", display_name, suffix);
+                            } else if display_name.ends_with(".pl") {
+                                serial_print!("\x1b[1;32m{}\x1b[0m  ", display_name);
+                            } else if display_name.ends_with(".bin") {
+                                serial_print!("\x1b[1;33m{}\x1b[0m  ", display_name);
+                            } else {
+                                serial_print!("{}  ", display_name);
                             }
-                            serial_print!("{}", file.name_str());
-                            first = false;
                         }
                     }
-                    if !first {
-                        serial_println!();
-                    }
+                }
+                if !is_long && !is_timing && count > 0 {
+                    serial_println!();
                 }
             }
         }

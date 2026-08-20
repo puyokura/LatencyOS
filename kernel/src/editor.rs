@@ -966,15 +966,18 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 }
             }
 
-            // Only redraw when UART RX buffer is fully drained
+            // Only redraw when UART RX buffer is fully drained AND not in the middle of an incoming paste burst!
+            // When text is typed/pasted: debounce for 30,000 spins (~300us) to absorb all stream characters first.
             if !SERIAL.is_data_ready() && !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
-                if cursor_only {
-                    EDITOR.update_cursor_only();
-                } else {
-                    EDITOR.redraw();
+                if cursor_only || paste_idle_spins > 30_000 {
+                    if cursor_only {
+                        EDITOR.update_cursor_only();
+                    } else {
+                        EDITOR.redraw();
+                    }
+                    EDITOR.needs_redraw = false;
+                    cursor_only = false;
                 }
-                EDITOR.needs_redraw = false;
-                cursor_only = false;
             }
 
             core::hint::spin_loop();
