@@ -9,9 +9,8 @@ LatencyOS は、汎用性を完全に排し、**「入力から出力までの�
 | ドキュメント | 概要 | 主な内容 |
 |---|---|---|
 | [**アーキテクチャ仕様書**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/architecture.md) | OSの内部構造・コア間パイプライン | 4コア固定割当、SPSC Lock-Free通信、8.0msレイテンシ予算、C-Stateロック |
-| [**PulseLang v2 言語仕様書**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/pulselang.md) | AIネイティブ・時間駆動型DSL仕様 | 形式文法、型システム、線形型 `#handle`、WCETモデル、Bytecode ISA |
+| [**PulseLang v2 言語ポータル**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/ja/README.md) | 言語仕様書・AIリファレンス・ISA・クックブック | 形式文法、型システム、線形型 `#handle`、Bytecode ISA、スクリプト集 |
 | [**シェル & エディタガイド**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/shell_and_editor.md) | Pulse Shell & PulseEditor 操作手引 | 時間ネイティブプロンプト、`within` ガード、高速一括ペースト、キーバインド |
-| [**スクリプトクックブック**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/scripts_cookbook.md) | 実践スクリプト解説と開発レシピ | `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl` |
 
 ---
 

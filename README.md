@@ -51,7 +51,8 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 - Mathematically dense, AI-optimized grammar with first-class time literals (`50ns`, `200us`, `5ms`, `1s`).
 - Direct register bindings (`$rtt`, `$sum`), hardware handles (`#f`), and compiler contracts (`@contract: @wcet(5us) @budget(50us);`).
 - Zero-copy stream piping (`|>`) and deadline assertions (`@within(500us) { ... } !drop;`).
-- Standard scripts: `stream.pl`, `bench.pl`, `filter.pl`.
+- Standard scripts: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`.
+- **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)
 - Full-screen terminal text editor running inside the kernel on Core 0.
