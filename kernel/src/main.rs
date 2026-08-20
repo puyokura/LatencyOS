@@ -10,7 +10,10 @@ mod apic;
 mod cstate;
 mod crypto;
 mod e1000;
+mod editor;
+mod fs;
 mod gpu;
+mod lang;
 mod latency;
 mod net;
 mod pci;
@@ -30,7 +33,6 @@ use net::{
 use ring_buffer::CAPTURE_TO_ENCODE_RING;
 use smp::{
     boot_application_processors, run_role_loop, CoreRole, CORES_BOOTED, CORE_ROLES, NUM_CORES,
-    START_SIGNAL,
 };
 
 // Function: panic
@@ -208,11 +210,17 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
         CONGESTION_RATE_PCT.load(Ordering::Relaxed)
     );
 
-    // 11. Release AP cores into continuous streaming
-    serial_println!("[SMP] Releasing worker cores into domain streaming loops...");
-    START_SIGNAL.store(true, Ordering::Release);
+    // 12. Initialize LatencyFS in-memory filesystem & verify PulseLang runtime
+    fs::fs_init();
+    serial_println!("[FS] LatencyFS initialized with default PulseLang scripts.");
+    if let Some(bench_data) = fs::fs_read("bench.flow") {
+        match lang::run_pulse_script(bench_data, tsc_freq_hz) {
+            Ok(()) => serial_println!("[LANG] PulseLang Time-Native VM Self-Test (bench.flow): PASSED"),
+            Err(e) => serial_println!("[LANG] PulseLang VM Self-Test FAILED: {}", e),
+        }
+    }
 
-    // 12. Initialize and start Core 0 interactive control shell
+    // 13. Initialize and start Core 0 interactive control shell
     shell::init_shell();
 
     // Core 0 enters its designated Control domain loop (which runs shell::poll_shell)

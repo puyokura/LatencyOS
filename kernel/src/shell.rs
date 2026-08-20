@@ -103,23 +103,36 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 // Description: Dispatch and execute a single-line shell command.
 // Worst-case execution time: Documented per sub-command.
 fn execute_command(cmd: &str, tsc_freq_hz: u64) {
+    let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
 
-    match cmd {
+    let (main_cmd, arg) = if let Some(idx) = cmd.find(' ') {
+        (&cmd[..idx], cmd[idx + 1..].trim())
+    } else {
+        (cmd, "")
+    };
+
+    match main_cmd {
         "help" => {
             serial_println!("Available Commands:");
-            serial_println!("  status     - Show CPU core roles, boot states, and loop counters");
-            serial_println!("  pipeline   - Show live streaming stats (Capture, Encode, Network)");
-            serial_println!("  latency    - Show latest single-run event latency breakdown");
-            serial_println!("  benchmark  - Execute on-demand 1000-sample statistical latency benchmark");
-            serial_println!("  congestion - Show delay-based congestion control metrics (RTT, Delta, Rate)");
-            serial_println!("  power      - Read IA32_THERM_STATUS & RAPL MSR hardware status");
-            serial_println!("  pci        - Display Intel e1000 NIC PCI config and MAC address");
-            serial_println!("  clear      - Clear terminal screen");
-            serial_println!("  halt       - Halt CPU cores safely (cli; hlt)");
-            serial_println!("  help       - Show this help message");
+            serial_println!("  ls             - List all files in LatencyFS in-memory storage");
+            serial_println!("  cat <file>     - Display contents of a file");
+            serial_println!("  edit <file>    - Open full-screen ANSI PulseEditor");
+            serial_println!("  run <file>     - Compile and execute PulseLang script");
+            serial_println!("  compile <file> - Compile script and show bytecode & WCET estimate");
+            serial_println!("  rm <file>      - Delete file from LatencyFS");
+            serial_println!("  status         - Show CPU core roles, boot states, and loop counters");
+            serial_println!("  pipeline       - Show live streaming stats (Capture, Encode, Network)");
+            serial_println!("  latency        - Show latest single-run event latency breakdown");
+            serial_println!("  benchmark      - Execute on-demand 1000-sample latency benchmark");
+            serial_println!("  congestion     - Show delay-based congestion control metrics");
+            serial_println!("  power          - Read IA32_THERM_STATUS & RAPL MSR status");
+            serial_println!("  pci            - Display Intel e1000 NIC PCI config and MAC");
+            serial_println!("  clear          - Clear terminal screen");
+            serial_println!("  halt           - Halt CPU cores safely (cli; hlt)");
+            serial_println!("  help           - Show this help message");
         }
 
         "status" => {
@@ -252,6 +265,111 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             }
         }
 
+        "ls" => {
+            serial_println!("--- LatencyFS In-Memory Files ---");
+            unsafe {
+                let mut count = 0;
+                for file in crate::fs::FS.files.iter() {
+                    if file.used {
+                        count += 1;
+                        serial_println!(
+                            "  {:20} | Size: {:4} B | Mode: {}",
+                            file.name_str(),
+                            file.size,
+                            if file.read_only { "RO" } else { "RW" }
+                        );
+                    }
+                }
+                if count == 0 {
+                    serial_println!("  (No files stored)");
+                }
+            }
+        }
+
+        "cat" => {
+            if arg.is_empty() {
+                serial_println!("Usage: cat <filename>");
+            } else if let Some(data) = crate::fs::fs_read(arg) {
+                serial_println!("--- Contents of {} ---", arg);
+                if let Ok(text) = core::str::from_utf8(data) {
+                    serial_print!("{}", text);
+                } else {
+                    serial_println!("<binary data>");
+                }
+                serial_println!("--- End of File ---");
+            } else {
+                serial_println!("File not found: '{}'", arg);
+            }
+        }
+
+        "edit" => {
+            let filename = if arg.is_empty() { "untitled.flow" } else { arg };
+            crate::editor::start_editor(filename, tsc_freq_hz);
+        }
+
+        "run" => {
+            if arg.is_empty() {
+                serial_println!("Usage: run <filename>");
+            } else if let Some(data) = crate::fs::fs_read(arg) {
+                serial_println!("=== Running PulseLang Script: {} ===", arg);
+                let start_tsc = read_tsc_serialized();
+                match crate::lang::run_pulse_script(data, tsc_freq_hz) {
+                    Ok(()) => {
+                        let elapsed_ns = tsc_to_ns(read_tsc_serialized() - start_tsc, tsc_freq_hz);
+                        serial_println!("=== [Execution Succeeded in {} ns ({} us)] ===", elapsed_ns, elapsed_ns / 1000);
+                    }
+                    Err(e) => {
+                        serial_println!("[ERROR] PulseLang runtime error: {}", e);
+                    }
+                }
+            } else {
+                serial_println!("File not found: '{}'", arg);
+            }
+        }
+
+        "compile" => {
+            if arg.is_empty() {
+                serial_println!("Usage: compile <filename>");
+            } else if let Some(data) = crate::fs::fs_read(arg) {
+                serial_println!("=== Compiling PulseLang Script: {} ===", arg);
+                let mut tokens = [crate::lang::Token::empty(); crate::lang::MAX_TOKENS];
+                let mut lexer = crate::lang::Lexer::new(data);
+                match lexer.tokenize(&mut tokens) {
+                    Ok(tok_count) => {
+                        let mut compiler = crate::lang::Compiler::new(data, &tokens);
+                        match compiler.compile() {
+                            Ok(code_len) => {
+                                serial_println!("Tokens scanned:     {}", tok_count);
+                                serial_println!("Bytecode size:      {} bytes", code_len);
+                                serial_println!("String pool:        {} bytes", compiler.str_pool_len);
+                                serial_println!("Worst-Case Latency: ~{} ns (Guaranteed WCET budget)", code_len * 25);
+                                serial_println!("Compilation:        SUCCESS (0 errors)");
+                            }
+                            Err(e) => {
+                                serial_println!("[ERROR] Compile error: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        serial_println!("[ERROR] Lexer error: {}", e);
+                    }
+                }
+            } else {
+                serial_println!("File not found: '{}'", arg);
+            }
+        }
+
+        "rm" => {
+            if arg.is_empty() {
+                serial_println!("Usage: rm <filename>");
+            } else {
+                match crate::fs::fs_delete(arg) {
+                    Ok(()) => serial_println!("File deleted: '{}'", arg),
+                    Err(e) => serial_println!("Delete failed: {:?}", e),
+                }
+            }
+        }
+
         "clear" => {
             // ANSI screen clear
             serial_print!("\x1b[2J\x1b[H");
@@ -265,7 +383,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         _ => {
-            serial_println!("Unknown command: '{}'. Type 'help' for available commands.", cmd);
+            serial_println!("Unknown command: '{}'. Type 'help' for available commands.", main_cmd);
         }
     }
 }

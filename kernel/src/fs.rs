@@ -1,0 +1,228 @@
+// fs.rs - LatencyFS Static Zero-Allocation In-Memory Filesystem
+//
+// Worst-case execution time: Documented per function.
+
+use crate::tsc::read_tsc_serialized;
+
+pub const MAX_FILES: usize = 16;
+pub const MAX_FILENAME_LEN: usize = 32;
+pub const MAX_FILE_SIZE: usize = 4096;
+
+#[derive(Clone, Copy)]
+pub struct FileEntry {
+    pub name: [u8; MAX_FILENAME_LEN],
+    pub name_len: usize,
+    pub data: [u8; MAX_FILE_SIZE],
+    pub size: usize,
+    pub read_only: bool,
+    pub modified_tsc: u64,
+    pub used: bool,
+}
+
+impl FileEntry {
+    pub const fn empty() -> Self {
+        Self {
+            name: [0; MAX_FILENAME_LEN],
+            name_len: 0,
+            data: [0; MAX_FILE_SIZE],
+            size: 0,
+            read_only: false,
+            modified_tsc: 0,
+            used: false,
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        if self.name_len == 0 {
+            return "";
+        }
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("<invalid utf8>")
+    }
+}
+
+pub struct LatencyFS {
+    pub files: [FileEntry; MAX_FILES],
+}
+
+impl LatencyFS {
+    pub const fn new() -> Self {
+        Self {
+            files: [FileEntry::empty(); MAX_FILES],
+        }
+    }
+}
+
+pub static mut FS: LatencyFS = LatencyFS::new();
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FsError {
+    FileNotFound,
+    DiskFull,
+    FileTooLarge,
+    ReadOnly,
+    InvalidName,
+}
+
+// Function: fs_init
+// Description: Initialize LatencyFS and populate with initial default PulseLang scripts.
+// Worst-case execution time: ~15_000 ns
+pub fn fs_init() {
+    unsafe {
+        for file in FS.files.iter_mut() {
+            *file = FileEntry::empty();
+        }
+
+        // 1. stream.flow - Real-time pipeline stream controller
+        let stream_src = b"// stream.flow - PulseLang Time-Native Streaming\n\
+pipeline UltraStream {\n\
+    budget: 8000us;\n\
+\n\
+    on vblank {\n\
+        let f = gpu.capture();\n\
+        emit f;\n\
+    }\n\
+\n\
+    on frame(f) {\n\
+        within 500us {\n\
+            let rtt = net.rtt();\n\
+            if (rtt > 200us) {\n\
+                net.set_rate(80);\n\
+                println(\"[WARN] Backoff rate to 80%\");\n\
+            } else {\n\
+                net.set_rate(100);\n\
+            }\n\
+            net.send(f);\n\
+        } or drop;\n\
+    }\n\
+}\n";
+        let _ = fs_create_internal("stream.flow", stream_src, false);
+
+        // 2. bench.flow - Micro-benchmark script
+        let bench_src = b"// bench.flow - Realtime Math & Latency Benchmark\n\
+let start = sys.tsc();\n\
+let sum = 0;\n\
+let i = 0;\n\
+while (i < 100) {\n\
+    sum = sum + i * 2;\n\
+    i = i + 1;\n\
+}\n\
+let elapsed = sys.tsc() - start;\n\
+println(\"[BENCH] 100 loop iterations completed\");\n\
+println(\"[RESULT] Sum:\");\n\
+println(sum);\n\
+println(\"[LATENCY] Cycles:\");\n\
+println(elapsed);\n";
+        let _ = fs_create_internal("bench.flow", bench_src, false);
+
+        // 3. filter.flow - Packet filter and congestion controller
+        let filter_src = b"// filter.flow - Congestion Tuning Guard\n\
+let rtt = net.rtt();\n\
+println(\"[FILTER] Current RTT (ns):\");\n\
+println(rtt);\n\
+if (rtt > 300us) {\n\
+    println(\"[ACTION] Severe congestion! Dropping frames.\");\n\
+    net.set_rate(60);\n\
+} else {\n\
+    println(\"[ACTION] Network optimal. Full throttle.\");\n\
+    net.set_rate(100);\n\
+}\n";
+        let _ = fs_create_internal("filter.flow", filter_src, false);
+    }
+}
+
+// Function: fs_create_internal
+// Description: Create or update a file in LatencyFS without dynamic allocation.
+// Worst-case execution time: ~1200 ns
+pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result<usize, FsError> {
+    if name.is_empty() || name.len() > MAX_FILENAME_LEN {
+        return Err(FsError::InvalidName);
+    }
+    if content.len() > MAX_FILE_SIZE {
+        return Err(FsError::FileTooLarge);
+    }
+
+    unsafe {
+        // Check if file already exists
+        for (idx, file) in FS.files.iter_mut().enumerate() {
+            if file.used && file.name_str() == name {
+                if file.read_only {
+                    return Err(FsError::ReadOnly);
+                }
+                file.data[..content.len()].copy_from_slice(content);
+                file.size = content.len();
+                file.modified_tsc = read_tsc_serialized();
+                return Ok(idx);
+            }
+        }
+
+        // Find empty slot
+        for (idx, file) in FS.files.iter_mut().enumerate() {
+            if !file.used {
+                file.used = true;
+                file.name_len = name.len();
+                file.name[..name.len()].copy_from_slice(name.as_bytes());
+                file.data[..content.len()].copy_from_slice(content);
+                file.size = content.len();
+                file.read_only = read_only;
+                file.modified_tsc = read_tsc_serialized();
+                return Ok(idx);
+            }
+        }
+
+        Err(FsError::DiskFull)
+    }
+}
+
+// Function: fs_read
+// Description: Read file contents from LatencyFS.
+// Worst-case execution time: ~300 ns
+pub fn fs_read(name: &str) -> Option<&'static [u8]> {
+    unsafe {
+        for file in FS.files.iter() {
+            if file.used && file.name_str() == name {
+                return Some(&file.data[..file.size]);
+            }
+        }
+        None
+    }
+}
+
+// Function: fs_write
+// Description: Overwrite or create file content in LatencyFS.
+// Worst-case execution time: ~1200 ns
+pub fn fs_write(name: &str, content: &[u8]) -> Result<(), FsError> {
+    fs_create_internal(name, content, false).map(|_| ())
+}
+
+// Function: fs_delete
+// Description: Delete a file from LatencyFS.
+// Worst-case execution time: ~400 ns
+pub fn fs_delete(name: &str) -> Result<(), FsError> {
+    unsafe {
+        for file in FS.files.iter_mut() {
+            if file.used && file.name_str() == name {
+                if file.read_only {
+                    return Err(FsError::ReadOnly);
+                }
+                *file = FileEntry::empty();
+                return Ok(());
+            }
+        }
+        Err(FsError::FileNotFound)
+    }
+}
+
+// Function: fs_exists
+// Description: Check if file exists.
+// Worst-case execution time: ~250 ns
+#[allow(dead_code)]
+pub fn fs_exists(name: &str) -> bool {
+    unsafe {
+        for file in FS.files.iter() {
+            if file.used && file.name_str() == name {
+                return true;
+            }
+        }
+        false
+    }
+}
