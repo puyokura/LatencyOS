@@ -755,8 +755,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     // Expression statement starting with var
                     self.current -= 1; // rewind
-                    self.expression()?;
-                    self.match_token(TokenKind::Semi);
+                    self.expression_statement()?;
                 }
             }
 
@@ -770,8 +769,20 @@ impl<'a> Compiler<'a> {
 
     fn expression_statement(&mut self) -> Result<(), &'static str> {
         self.expression()?;
+        self.match_token(TokenKind::Semi);
+        Ok(())
+    }
 
-        // Check for ternary condition statement: cond ? { true_block } : { false_block };
+    fn expression(&mut self) -> Result<(), &'static str> {
+        self.ternary()?;
+        while self.match_token(TokenKind::Pipe) {
+            self.ternary()?;
+        }
+        Ok(())
+    }
+
+    fn ternary(&mut self) -> Result<(), &'static str> {
+        self.equality()?;
         if self.match_token(TokenKind::Question) {
             self.emit_byte(OP_JUMP_IF_FALSE)?;
             let jump_false_pos = self.emit_u16(0)?;
@@ -804,17 +815,6 @@ impl<'a> Compiler<'a> {
             } else {
                 self.patch_u16(jump_false_pos, self.code_len as u16);
             }
-        }
-
-        self.match_token(TokenKind::Semi);
-        Ok(())
-    }
-
-    fn expression(&mut self) -> Result<(), &'static str> {
-        self.equality()?;
-        // Support pipe operator: expr |> func()
-        while self.match_token(TokenKind::Pipe) {
-            self.equality()?;
         }
         Ok(())
     }

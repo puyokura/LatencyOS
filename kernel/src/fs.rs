@@ -73,50 +73,83 @@ pub fn fs_init() {
         }
 
         // 1. stream.pl - Ultra-low-latency pipeline stream script
-        let stream_src = b"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline\n\
-@pipeline: UltraStream @budget(8000us);\n\
-@on_vblank: {\n\
-    #f := @capture();\n\
-    @within(500us) {\n\
-        $rtt := @rtt();\n\
-        $rtt > 200us ? @rate(80) : @rate(100);\n\
-        @send(#f);\n\
-    } !drop;\n\
-};\n";
+        let stream_src = br#"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+@pipeline: UltraStream @budget(8000us);
+@on_vblank: {
+    #f := @capture();
+    @within(500us) {
+        $rtt := @rtt();
+        $rtt > 200us ? @rate(80) : @rate(100);
+        @send(#f);
+    } !drop;
+};
+"#;
         let _ = fs_create_internal("stream.pl", stream_src, false);
 
         // 2. bench.pl - Micro-benchmark script
-        let bench_src = b"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]\n\
-@contract: @wcet(5us) @budget(50us);\n\
-$t0 := @tsc();\n\
-$sum := 0;\n\
-$i := 0;\n\
-@while($i < 100) {\n\
-    $sum += $i * 2;\n\
-    $i += 1;\n\
-}\n\
-$dt := @tsc() - $t0;\n\
-@println(\"[BENCH] Iterations: 100\");\n\
-@println(\"[RESULT] Sum:\");\n\
-@println($sum);\n\
-@println(\"[LATENCY] Cycles:\");\n\
-@println($dt);\n";
+        let bench_src = br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
+@contract: @wcet(5us) @budget(50us);
+$t0 := @tsc();
+$sum := 0;
+$i := 0;
+@while($i < 100) {
+    $sum += $i * 2;
+    $i += 1;
+}
+$dt := @tsc() - $t0;
+@println("[BENCH] Iterations: 100");
+@println("[RESULT] Sum:");
+@println($sum);
+@println("[LATENCY] Cycles:");
+@println($dt);
+"#;
         let _ = fs_create_internal("bench.pl", bench_src, false);
 
         // 3. filter.pl - Packet filter and congestion controller
-        let filter_src = b"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]\n\
-@contract: @wcet(2us) @budget(100us);\n\
-$rtt := @rtt();\n\
-@println(\"[FILTER] Measured RTT (ns):\");\n\
-@println($rtt);\n\
-$rtt > 300us ? {\n\
-    @println(\"[ACTION] Congestion detected -> Rate: 60%\");\n\
-    @rate(60);\n\
-} : {\n\
-    @println(\"[ACTION] Optimal latency -> Rate: 100%\");\n\
-    @rate(100);\n\
-};\n";
+        let filter_src = br#"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
+@contract: @wcet(2us) @budget(100us);
+$rtt := @rtt();
+@println("[FILTER] Measured RTT (ns):");
+@println($rtt);
+$rtt > 300us ? {
+    @println("[ACTION] Congestion detected -> Rate: 60%");
+    @rate(60);
+} : {
+    @println("[ACTION] Optimal latency -> Rate: 100%");
+    @rate(100);
+};
+"#;
         let _ = fs_create_internal("filter.pl", filter_src, false);
+
+        // 4. jitter.pl - Jitter analysis measuring cycle delta
+        let jitter_src = br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
+@contract: @wcet(3us) @budget(30us);
+$t1 := @tsc();
+$t2 := @tsc();
+$delta := $t2 - $t1;
+@println("[JITTER] Consecutive TSC Delta (Cycles):");
+@println($delta);
+$delta < 100 ? {
+    @println("[STATUS] Determinism: Optimal (<100 cycles)");
+} : {
+    @println("[STATUS] Determinism: Jitter detected");
+};
+"#;
+        let _ = fs_create_internal("jitter.pl", jitter_src, false);
+
+        // 5. telemetry.pl - Real-Time Telemetry and Hardware Inspector
+        let telemetry_src = br#"// telemetry.pl - Real-Time Hardware Telemetry
+@contract: @wcet(2us) @budget(20us);
+$rtt := @rtt();
+$tsc := @tsc();
+@println("=== LatencyOS Hardware Telemetry ===");
+@println("[CLOCK] Serialized TSC Ticks:");
+@println($tsc);
+@println("[NET] Active Round-Trip Time (ns):");
+@println($rtt);
+$rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
+"#;
+        let _ = fs_create_internal("telemetry.pl", telemetry_src, false);
     }
 }
 
