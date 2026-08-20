@@ -180,7 +180,6 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .arg("-display")
             .arg("none")
             .arg("-no-reboot")
-            .arg("-no-shutdown")
             .arg("-m")
             .arg("128M")
             .arg("-smp")

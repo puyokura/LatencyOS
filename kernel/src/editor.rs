@@ -427,7 +427,8 @@ impl PulseEditor {
     // Description: Compile and execute the current script in the editor buffer.
     // Worst-case execution time: ~100_000 ns
     pub fn run_code(&mut self, tsc_freq_hz: u64) {
-        serial_println!("\r\n==================== [PulseLang Execution Output] ====================");
+        serial_print!("\x1b[2J\x1b[H");
+        serial_println!("==================== [PulseLang Execution Output] ====================");
         match run_pulse_script(&self.buffer[..self.buf_len], tsc_freq_hz) {
             Ok(()) => {
                 serial_println!("==================== [Execution Success: 0 Errors] ====================");
@@ -443,7 +444,7 @@ impl PulseEditor {
         while SERIAL.read_byte_nonblocking().is_none() {
             core::hint::spin_loop();
         }
-        self.needs_redraw = true;
+        self.redraw();
     }
 }
 
