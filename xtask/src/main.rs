@@ -113,7 +113,8 @@ where
         const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
         const ENABLE_LINE_INPUT: u32 = 0x0002;
         const ENABLE_ECHO_INPUT: u32 = 0x0004;
-        const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
+        const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+        const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
 
         let stdin = GetStdHandle(STD_INPUT_HANDLE);
         let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -134,8 +135,11 @@ where
         // Install handler that ignores host Ctrl+C so raw 0x03 reaches guest
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
 
-        // Put stdin in raw mode so Ctrl+C is transmitted as 0x03 byte instead of generating OS interrupt
-        let raw_in_mode = (in_mode & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        // Put stdin in unbuffered, non-echo mode with native Windows QuickEdit & Ctrl+V clipboard paste enabled
+        let raw_in_mode = (in_mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
+            | ENABLE_PROCESSED_INPUT
+            | ENABLE_QUICK_EDIT_MODE
+            | ENABLE_EXTENDED_FLAGS;
         SetConsoleMode(stdin, raw_in_mode);
 
         let res = f();
