@@ -1,42 +1,38 @@
-# PulseLang v2 Complete Monolithic AI Reference & Autonomous Code Generation Manual
+# PulseLang v2 Complete Monolithic AI Reference & System Architecture Specification
 
-> **Document Type**: Monolithic All-in-One AI Specification & In-Context Generation Reference
-> **Target Audience**: AI Coding Agents, LLMs, Compilers, Static Analyzers, Formal Verification Engines
+> **Document Type**: Exhaustive All-in-One AI Specification, Formal Semantics & Low-Level Architectural Reference
+> **Target Audience**: AI Coding Assistants, LLMs, Static Analyzers, Formal Verification Engines, Kernel Engineers
 > **Language Version**: `2.0.0-hard-realtime`
 > **Host Kernel**: `LatencyOS (x86_64 freestanding no_std)`
-> **Zero-Dependency Guarantee**: This single document contains the complete syntax, type system, operational semantics, standard intrinsics, ISA, and generation rules required for an AI to generate 100% valid PulseLang v2 programs.
+> **Zero-Dependency Guarantee**: This single document defines the complete syntax, type system, linear logic, hardware intrinsics, bytecode ISA, memory ordering, DMA coherency, and 43 formal architectural contracts.
 
 ---
 
-## 1. AI System Prompt & Core Invariants
+## 1. AI System Prompt & Five Invariants
 
-You are an expert real-time systems compiler and autonomous code generation agent for **PulseLang v2**, the native domain-specific language of **LatencyOS**.
+When generating PulseLang v2 code, an AI agent **MUST ALWAYS** follow these five core invariants:
 
-When generating PulseLang code, you **MUST ALWAYS** follow these five core invariants without exception:
-
-1. **Prefix Discipline (Zero Ambiguity)**:
+1. **Prefix Taxonomy (Zero Ambiguity)**:
    - **`$`** for all Variables (`$rtt`, `$sum`, `$i`, `$t0`, `$dt`).
    - **`#`** for all Linear Hardware/DMA Buffer Handles (`#f`, `#packet`, `#frame`).
    - **`@`** for all Contracts, Control Structures, and Intrinsics (`@contract`, `@pipeline`, `@on_vblank`, `@within`, `@while`, `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@print()`, `@println()`).
-2. **Linear Type Single Consumption Guarantee**:
-   - Every handle obtained via `#f := @capture();` **MUST be consumed exactly once** in every execution branch (typically via `@send(#f);`).
-   - A handle cannot be copied, discarded without handling, or double-freed.
-3. **Mandatory Time Units**:
-   - Every time literal **MUST** include an explicit unit suffix: `ns` (nanoseconds), `us` (microseconds), `ms` (milliseconds), `s` (seconds).
-   - Time literals are auto-folded at compile time into 64-bit unsigned integer nanoseconds (e.g. `500us` $\to$ `500_000`).
+2. **Linear Type Single Consumption Proof**:
+   - Every handle obtained via `#f := @capture();` **MUST be consumed exactly once** in every possible execution path (typically via `@send(#f);`).
+   - Handles cannot be duplicated, leaked, or double-freed.
+3. **Mandatory Explicit Time Units**:
+   - Time constants **MUST** include valid unit suffixes: `ns` (nanoseconds), `us` (microseconds), `ms` (milliseconds), `s` (seconds).
+   - Time literals are auto-folded at compile time into 64-bit unsigned integer nanoseconds (`500us` $\to$ `500_000`).
 4. **Mandatory Statement Semicolons**:
-   - Every statement **MUST** end with a semicolon `;`.
+   - Every statement **MUST** terminate with a semicolon `;`.
 5. **Zero Dynamic Allocation & Bounded Execution**:
-   - PulseLang has **NO heap allocation (`malloc`/`Box` do not exist)**, **NO dynamic pointer arithmetic**, and **NO unbounded recursion**.
-   - Loops **MUST** be monotonically bounded. The runtime enforces a hard limit of 10,000 instructions per execution.
+   - No heap allocation (`malloc`/`Box`), no pointer arithmetic, no unbounded recursion.
+   - Every loop is statically bounded. Runtime hard limit: 10,000 bytecode instructions.
 
 ---
 
 ## 2. Complete Formal Grammar (EBNF)
 
 ```ebnf
-(* PulseLang v2 Complete Grammar *)
-
 Script          ::= TopLevelDecl* <EOF>
 
 TopLevelDecl    ::= ContractDecl
@@ -44,12 +40,9 @@ TopLevelDecl    ::= ContractDecl
                   | OnVblankDecl
                   | Statement
 
-ContractDecl    ::= "@contract:" WcetSpec? BudgetSpec? ";"
-PipelineDecl    ::= "@pipeline:" Identifier BudgetSpec? (";" | Block)
+ContractDecl    ::= "@contract:" ("@wcet(" TimeLiteral ")")? ("@budget(" TimeLiteral ")")? ";"
+PipelineDecl    ::= "@pipeline:" Identifier ("@budget(" TimeLiteral ")")? (";" | Block)
 OnVblankDecl    ::= "@on_vblank:" Block ";"?
-
-WcetSpec        ::= "@wcet(" TimeLiteral ")"
-BudgetSpec      ::= "@budget(" TimeLiteral ")"
 
 Statement       ::= AssignStmt
                   | CompoundAssign
@@ -90,7 +83,6 @@ PrimaryExpr     ::= IntegerLiteral
 IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@print" | "@println" ) "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
-(* Lexical Terminals *)
 IntegerLiteral  ::= [0-9]+
 TimeLiteral     ::= [0-9]+ ("ns" | "us" | "ms" | "s")
 StringLiteral   ::= '"' [^"]* '"'
@@ -101,80 +93,176 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 ---
 
-## 3. Type System & Memory Model
+## 3. The 43 Master Architectural & Semantic Specifications
 
-| Type | Internal Representation | Operations Supported | Semantic Rules |
-|---|---|---|---|
-| **`i64`** | 64-bit signed integer | `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=` | General computation, loop counter, arithmetic |
-| **`Time`** | 64-bit unsigned integer (ns) | Immediate comparison with `i64`, addition, subtraction | Auto-converted to integer nanoseconds at compile time |
-| **`Handle`** | 8-bit descriptor slot ID (`#h`) | Passed to `@send()`, assigned once | **Linear Type**: Must be consumed exactly once in all branches |
-| **`String`** | Tagged pointer (`0x7FFF_0000 \| offset`) | Passed to `@print()`, `@println()` | Read-only reference to static 512-byte string pool |
+### 1. Specification WCET Value Alignment
+All documentation, compiler models, and shell telemetry use unified worst-case execution times:
+- Bytecode Instruction Base Dispatch: **25 ns**
+- `@tsc()`: **15 ns**
+- `@rtt()`: **20 ns**
+- `@rate()`: **10 ns**
+- `@capture()`: **100 ns**
+- `@send()`: **200 ns**
+- `@print()` / `@println()`: **500 ns**
+- End-to-End Glass-to-Glass Budget: **8,000 \textmu s (8.00 ms)**
 
-### 3.1 Linear Handle Proof Invariant
-```
-[Capture]   #f := @capture();   --> #f is ACTIVE
-[Branch]    $cond ? {
-                @send(#f);      --> #f is CONSUMED (Branch 1 OK)
-            } : {
-                @send(#f);      --> #f is CONSUMED (Branch 2 OK)
-            };
-[Invariant] #f MUST be consumed in all code paths. Leaking #f is a static compilation error.
-```
+### 2. Intrinsic WCET vs VM Instruction WCET
+Total program WCET is computed statically as:
+$$\text{WCET}_{\text{total}} = \sum (\text{Opcode Count} \times 25\text{ ns}) + \sum (\text{Intrinsic WCET})$$
+
+### 3. Time and i64 Typing Rules
+`Time` is a compile-time dimensional wrapper over `u64` nanoseconds. In VM bytecode, `Time` literals are folded into immediate 64-bit signed integers (`i64`). Relational and arithmetic operations between `Time` and `i64` evaluate with zero runtime casting overhead.
+
+### 4. String Tagged Pointer Semantics
+Strings stored in the static 512-byte string pool are represented on the VM stack as tagged 64-bit pointers:
+$$\text{Ptr} = \mathtt{0x7FFF\_0000\_0000\_0000} \mid (\text{len} \ll 16) \mid \text{offset}$$
+The VM verifies that $\text{offset} + \text{len} \le 512$ before accessing the pool.
+
+### 5. Handle and DMA Completion
+`#f := @capture()` claims an index from the GPU capture ring buffer. `@send(#f)` moves the descriptor into the Intel e1000 NIC TX ring and executes an `sfence` barrier. DMA completion is detected via descriptor writeback status flags (`E1000_TXD_STAT_DD`).
+
+### 6. Handle Lifecycle on `!drop`
+When an `@within(Time) { ... } !drop;` block breaches its deadline, the runtime executes `OP_DROP`. If `#f` has not been sent, the DMA descriptor slot is immediately marked free and reclaimed, preventing stale packet transmission.
+
+### 7. ABI of `OP_CALL_NATIVE`
+- Opcode: `0x11`
+- Operand 1 (`u8`): `func_id` (`1`..`7`)
+- Operand 2 (`u8`): `argc` (number of arguments)
+Arguments are popped from the VM evaluation stack in right-to-left order.
+
+### 8. Return Value Rules for `OP_CALL_NATIVE`
+- Void intrinsics (`@rate`, `@println`, `@send`): Push `0` or nothing.
+- Value intrinsics (`@tsc`, `@rtt`, `@capture`): Push return value (`i64` or `handle_id`) onto the evaluation stack.
+
+### 9. Nesting Rules for `OP_WITHIN_START` / `OP_WITHIN_END`
+The VM maintains an 8-level hardware deadline stack (`deadline_stack[0..7]`). Inner deadlines must have equal or shorter expiration timestamps than outer deadlines ($\text{Deadline}_{\text{inner}} \le \text{Deadline}_{\text{outer}}$).
+
+### 10. `OP_DROP` Execution Condition
+`OP_DROP` (`0x14`) executes if and only if $\text{read\_tsc}() > \text{deadline\_tsc}$.
+
+### 11. Resource Recovery on VM Abort / Timeout
+If execution exceeds the 10,000-step limit or encounters a fatal error:
+1. The deadline stack pointer (`dl_sp`) is reset to 0.
+2. All 32 variable slots are zeroed.
+3. Any unconsumed `#handle` descriptor is reclaimed.
+
+### 12. Unification of Control Constructs
+- `if (cond) { ... } else { ... }` is compiled to `OP_JUMP_IF_FALSE` and `OP_JUMP`.
+- Ternary expressions `$cond ? expr1 : expr2` and ternary blocks `$cond ? { ... } : { ... };` follow identical jump semantics.
+- Directives (`@contract`, `@within`, `@while`) provide temporal and real-time bounding.
+
+### 13. Type Checking of Handles in Conditional Branches
+If a `#handle` is acquired prior to a branch, **both** branches must consume `#handle`. Leaking a handle in one branch produces a compile-time error.
+
+### 14. Handle Rules inside Loops
+A `#handle` captured inside an `@while` loop must be consumed within the same iteration. Handles cannot escape the loop body.
+
+### 15. Handle Behavior on `@capture` Failure
+If the GPU frame ring is exhausted, `@capture()` returns `0` (null descriptor). The script can check `$handle != 0` or rely on zero-overhead kernel drop.
+
+### 16. Handle Behavior on `@send` Failure
+If the NIC TX ring is full, `@send()` drops the frame, increments backpressure counters, and marks the handle as consumed.
+
+### 17. Division by Zero Semantics
+`OP_DIV` (`0x07`) and `OP_MOD` (`0x08`) with a divisor of `0` return `0` without triggering a CPU trap or panic.
+
+### 18. Integer Arithmetic Overflow Semantics
+All 64-bit integer arithmetic (`OP_ADD`, `OP_SUB`, `OP_MUL`) wraps using two's complement arithmetic (`wrapping_add`, `wrapping_sub`, `wrapping_mul`).
+
+### 19. Boolean Representation in Comparison Operations
+Comparison operations (`OP_CMP_EQ` through `OP_CMP_GE`) push `1` for true and `0` for false.
+
+### 20. Internal Boolean Type
+Booleans are represented as `i64`: `0` is false, any non-zero value is true.
+
+### 21. String Pointer Memory Safety
+String pointers are offset-based indices into a fixed read-only buffer. Raw arbitrary pointers cannot be constructed from user space.
+
+### 22. Static String Pool Overflow
+If total literal string bytes exceed 512 bytes, the compiler aborts with `String pool overflow`.
+
+### 23. VM Stack Overflow Protection
+The VM stack is fixed at 64 elements. Attempting to push to a full stack returns `Err("Stack overflow")`.
+
+### 24. Bytecode Verification
+Before execution, the VM verifies:
+- File starts with magic `PULS` (`0x50554C53`).
+- Bytecode length matches file header.
+- Jump targets reside within valid instruction boundaries.
+
+### 25. Bytecode Versioning
+Version `2` (`0x0002`) is required in bytes 4-5 of the binary header.
+
+### 26. Intrinsic ID ABI Specification
+- `1`: `NATIVE_PRINT` (`@print`)
+- `2`: `NATIVE_PRINTLN` (`@println`)
+- `3`: `NATIVE_SYS_TSC` (`@tsc`)
+- `4`: `NATIVE_NET_RTT` (`@rtt`)
+- `5`: `NATIVE_NET_SET_RATE` (`@rate`)
+- `6`: `NATIVE_GPU_CAPTURE` (`@capture`)
+- `7`: `NATIVE_NET_SEND` (`@send`)
+
+### 27. Hardware Target Specification
+- CPU: x86_64 with invariant TSC (`CPUID.80000007H:EDX[8] = 1`).
+- NIC: Intel 82540EM / 82545EM (e1000) PMD.
+- GPU: Linear Framebuffer 1920x1080 @ 32bpp.
+- Cores: 4 SMP cores with dedicated roles.
+
+### 28. TSC Time Unit
+1 TSC tick = 1 CPU clock cycle (e.g. 0.294 ns at 3.40 GHz).
+
+### 29. TSC Ticks to Nanoseconds Conversion
+$$\text{Nanoseconds} = \frac{\text{Ticks} \times 1,000,000,000}{\text{TSC Frequency (Hz)}}$$
+
+### 30. CPU Frequency Scaling & C-State Invariance
+All 4 cores are locked in C0 state via MSR `0x1A0` (`MISC_ENABLE`) and MSR `0x1B0` (`ENERGY_PERF_BIAS = 0x0`). Invariant TSC ensures cycle counts remain constant across temperature changes.
+
+### 31. Interrupts and ISR WCET Bounds
+- Cores 1-3 run with interrupts disabled (`cli`).
+- Core 0 handles APIC timer and UART interrupts, with ISR execution time bounded to $\le 150\text{ ns}$.
+
+### 32. Cache Miss WCET Modeling
+Worst-case execution time modeling assumes L1/L2 cache residency for hot loops (< 4 ns), and cold DRAM fetches bounded to 100 ns.
+
+### 33. DMA Cache Coherency
+DMA memory regions are allocated in uncached (UC) or write-combining (WC) pages. `sfence` and `clflush` ensure CPU-to-NIC coherency without bus snooping stalls.
+
+### 34. `sfence` and `mfence` Issuance Conditions
+- `sfence` is issued after writing frame descriptor headers.
+- `mfence` is issued when updating SPSC lock-free ring buffer tail pointers.
+
+### 35. 4-Core Memory Ordering Model
+Core-to-core communication uses single-producer single-consumer (SPSC) ring buffers with atomic `Acquire`/`Release` ordering matching x86 TSO (Total Store Order).
+
+### 36. VBLANK Event Contention Avoidance
+Core 1 exclusively polls the GPU VBLANK status register, eliminating SMP lock contention.
+
+### 37. Pipeline Buffer Lifecycle
+`Stage 0 (ISR)` $\to$ `Stage 1 (Userspace)` $\to$ `Stage 2 (VBLANK)` $\to$ `Stage 3 (Capture)` $\to$ `Stage 4 (Encode)` $\to$ `Stage 5 (Network TX)` $\to$ `Ring Release`.
+
+### 38. DMA Buffer Lifecycle
+`Slot Free` $\to$ `Allocated to Capture` $\to$ `DMA Transfer` $\to$ `TX Complete` $\to$ `Reclaimed to Free Pool`.
+
+### 39. NIC TX Completion Polling
+Core 3 polls the e1000 TX descriptor status bit `E1000_TXD_STAT_DD` in a lock-free loop without hardware interrupts.
+
+### 40. GPU Frame Buffer Completion
+GPU frame slots are recycled upon receiving the subsequent frame's VBLANK edge.
+
+### 41. Compiler Error Recovery
+Single-pass compiler returns structured `Result<(), &'static str>` with token offset and line number on the first syntax error.
+
+### 42. Formal Specification of Bounded Loop Proofs
+Every `@while(cond)` loop must mutate its condition variable monotonically (e.g. `$i += 1;`). Loops without progress are terminated by the 10,000-instruction VM limit.
+
+### 43. Static WCET vs Measured Dynamic TSC Discrepancy
+Static WCET provides a conservative upper bound. Dynamic TSC evaluates real-time latency at runtime. If dynamic latency exceeds `@within`, `!drop` fires immediately.
 
 ---
 
-## 4. Hardware Intrinsics Catalog
+## 4. Canonical Production Scripts
 
-| Intrinsic | Type Signature | Worst-Case Execution Time (WCET) | Description |
-|---|---|---|---|
-| `@tsc()` | `() -> i64` | **~15 ns** | Reads hardware Time-Stamp Counter (`rdtscp`) with full serialization. |
-| `@rtt()` | `() -> i64` | **~20 ns** | Queries active network round-trip time (in nanoseconds) from NIC PMD. |
-| `@rate(pct)` | `(i64) -> ()` | **~10 ns** | Sets congestion throttle percentage (range: `10` to `100`). |
-| `@capture()` | `() -> #handle` | **~100 ns** | Claims zero-copy GPU frame buffer descriptor slot. |
-| `@send(#h)` | `(#handle) -> ()` | **~200 ns** | Enqueues frame buffer to Intel e1000 NIC TX ring and moves ownership. |
-| `@print(v)` | `(Any) -> ()` | **~500 ns** | Emits value/string to serial port (no newline). |
-| `@println(v)`| `(Any) -> ()` | **~500 ns** | Emits value/string to serial port with automatic CRLF normalization. |
-
----
-
-## 5. Bytecode ISA Specification
-
-The PulseLang VM is a deterministic, stack-based virtual machine running with pre-allocated static resources:
-- **Stack Depth**: 64 entries (`i64`)
-- **Variable Slots**: 32 entries (`$0` to `$31`)
-- **Instruction Step Limit**: 10,000 steps
-
-| Opcode | Mnemonic | Operands | Stack Effect | Description |
-|---|---|---|---|---|
-| `0x00` | `OP_NOP` | None | `[] -> []` | No operation |
-| `0x01` | `OP_PUSH_CONST` | `i64` (8 bytes) | `[] -> [val]` | Push 64-bit constant |
-| `0x02` | `OP_LOAD_VAR` | `u8` (1 byte) | `[] -> [var[idx]]` | Load from variable slot |
-| `0x03` | `OP_STORE_VAR` | `u8` (1 byte) | `[val] -> []` | Store top of stack to variable slot |
-| `0x04` | `OP_ADD` | None | `[a, b] -> [a + b]` | Integer addition |
-| `0x05` | `OP_SUB` | None | `[a, b] -> [a - b]` | Integer subtraction |
-| `0x06` | `OP_MUL` | None | `[a, b] -> [a * b]` | Integer multiplication |
-| `0x07` | `OP_DIV` | None | `[a, b] -> [a / b]` | Integer division (zero-safe) |
-| `0x08` | `OP_MOD` | None | `[a, b] -> [a % b]` | Integer modulo |
-| `0x09` | `OP_CMP_EQ` | None | `[a, b] -> [a == b]` | Equality comparison |
-| `0x0A` | `OP_CMP_NE` | None | `[a, b] -> [a != b]` | Inequality comparison |
-| `0x0B` | `OP_CMP_LT` | None | `[a, b] -> [a < b]` | Less than comparison |
-| `0x0C` | `OP_CMP_LE` | None | `[a, b] -> [a <= b]` | Less than or equal |
-| `0x0D` | `OP_CMP_GT` | None | `[a, b] -> [a > b]` | Greater than comparison |
-| `0x0E` | `OP_CMP_GE` | None | `[a, b] -> [a >= b]` | Greater than or equal |
-| `0x0F` | `OP_JUMP` | `u16` (2 bytes) | `[] -> []` | Unconditional jump |
-| `0x10` | `OP_JUMP_IF_FALSE`| `u16` (2 bytes)| `[cond] -> []` | Conditional branch on false (0) |
-| `0x11` | `OP_CALL_NATIVE` | `u8, u8` (2 bytes)| `[args...] -> [res]` | Call hardware intrinsic |
-| `0x12` | `OP_WITHIN_START`| `i64` (8 bytes) | `[] -> []` | Push temporal deadline (ns) |
-| `0x13` | `OP_WITHIN_END` | None | `[] -> []` | Pop and verify temporal deadline |
-| `0x14` | `OP_DROP` | None | `[] -> []` | Drop overdue frame & free descriptors |
-| `0x15` | `OP_PUSH_STR` | `u16, u16` (4B) | `[] -> [ptr]` | Push static string pointer |
-| `0x16` | `OP_HALT` | None | `[] -> []` | Terminate VM execution |
-
----
-
-## 6. Canonical Production Script Catalog (10 Complete Examples)
-
-### Example 1: Zero-Copy Ultra-Low-Latency Stream Pipeline (`stream.pl`)
+### 4.1 Zero-Copy Stream Pipeline (`stream.pl`)
 ```pulse
 // stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
@@ -189,7 +277,7 @@ The PulseLang VM is a deterministic, stack-based virtual machine running with pr
 };
 ```
 
-### Example 2: Cycle-Accurate Latency & Arithmetic Benchmark (`bench.pl`)
+### 4.2 Latency Benchmark (`bench.pl`)
 ```pulse
 // bench.pl - Realtime Math & Latency Benchmark
 @contract: @wcet(5us) @budget(50us);
@@ -211,7 +299,7 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### Example 3: Adaptive Congestion Controller (`filter.pl`)
+### 4.3 Adaptive Congestion Controller (`filter.pl`)
 ```pulse
 // filter.pl - Adaptive Congestion Guard
 @contract: @wcet(2us) @budget(100us);
@@ -228,167 +316,3 @@ $rtt > 300us ? {
     @rate(100);
 };
 ```
-
-### Example 4: Hardware Jitter Analyzer (`jitter.pl`)
-```pulse
-// jitter.pl - Cycle-Accurate Jitter Analyzer
-@contract: @wcet(3us) @budget(30us);
-
-$t1 := @tsc();
-$t2 := @tsc();
-$delta := $t2 - $t1;
-
-@println("[JITTER] Consecutive TSC Delta (Cycles):");
-@println($delta);
-
-$delta < 100 ? {
-    @println("[STATUS] Determinism: Optimal (<100 cycles)");
-} : {
-    @println("[STATUS] Determinism: Jitter detected");
-};
-```
-
-### Example 5: Real-Time Hardware Telemetry (`telemetry.pl`)
-```pulse
-// telemetry.pl - Real-Time Hardware Telemetry Inspector
-@contract: @wcet(2us) @budget(20us);
-
-$rtt := @rtt();
-$tsc := @tsc();
-
-@println("=== LatencyOS Hardware Telemetry ===");
-@println("[CLOCK] Serialized TSC Ticks:");
-@println($tsc);
-@println("[NET] Active Round-Trip Time (ns):");
-@println($rtt);
-
-$rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
-```
-
-### Example 6: Dual-Threshold Dynamic Rate Controller (`rate_guard.pl`)
-```pulse
-// rate_guard.pl - Multi-Tier Adaptive Rate Guard
-@contract: @wcet(3us) @budget(40us);
-
-$rtt := @rtt();
-
-$rtt > 1000us ? {
-    @println("[TIER-3] Severe Congestion -> Rate: 30%");
-    @rate(30);
-} : {
-    $rtt > 400us ? {
-        @println("[TIER-2] Moderate Delay -> Rate: 70%");
-        @rate(70);
-    } : {
-        @println("[TIER-1] Optimal Path -> Rate: 100%");
-        @rate(100);
-    };
-};
-```
-
-### Example 7: Burst Packet Counter (`packet_burst.pl`)
-```pulse
-// packet_burst.pl - High-Frequency Packet Loop with Deadline
-@contract: @wcet(8us) @budget(80us);
-
-$count := 0;
-$t_start := @tsc();
-
-@within(50us) {
-    @while($count < 64) {
-        $count += 1;
-    }
-} !drop;
-
-$elapsed := @tsc() - $t_start;
-@println("[BURST] Processed Packets:");
-@println($count);
-@println("[BURST] Elapsed Cycles:");
-@println($elapsed);
-```
-
-### Example 8: Monotonic Linear Search (`search.pl`)
-```pulse
-// search.pl - Bounded Array Target Search Simulation
-@contract: @wcet(4us) @budget(30us);
-
-$target := 42;
-$found := 0;
-$i := 0;
-
-@while($i < 50) {
-    $i == $target ? {
-        $found := 1;
-    } : {};
-    $i += 1;
-}
-
-$found == 1 ? @println("[SEARCH] Target 42 found.") : @println("[SEARCH] Target not found.");
-```
-
-### Example 9: Deadline Health Watchdog (`watchdog.pl`)
-```pulse
-// watchdog.pl - Real-Time Pipeline Watchdog
-@contract: @wcet(2us) @budget(15us);
-
-$rtt := @rtt();
-$tsc := @tsc();
-
-@within(10us) {
-    $rtt > 5000us ? {
-        @println("[CRITICAL] RTT exceeded 5ms! Triggering safe throttle.");
-        @rate(10);
-    } : {
-        @rate(100);
-    };
-} !drop;
-```
-
-### Example 10: Matrix Vector Product Simulation (`matvec.pl`)
-```pulse
-// matvec.pl - Fixed 4x4 Dot Product Inner Loop
-@contract: @wcet(6us) @budget(60us);
-
-$dot := 0;
-$row := 0;
-
-@while($row < 4) {
-    $dot += $row * 10 + 5;
-    $row += 1;
-}
-
-@println("[MATVEC] Dot product result:");
-@println($dot);
-```
-
----
-
-## 7. Common AI Generation Mistakes & Fixes
-
-| Incorrect Code | Cause of Failure | Correct Code |
-|---|---|---|
-| `let x = 10;` | PulseLang does not use `let`/`var` keywords | `$x := 10;` |
-| `f := @capture();` | Hardware DMA handles must use `#` prefix | `#f := @capture();` |
-| `while ($i < 10) {}` | Directives require `@` prefix | `@while($i < 10) {}` |
-| `delay(10);` | Unbounded sleep functions do not exist | Use `@within(Time) {}` |
-| `malloc(1024);` | Dynamic heap memory is strictly forbidden | Use pre-allocated `$var` slots |
-| `print("hi")` | Built-in functions require `@` prefix | `@print("hi");` |
-| Missing `@send(#f)` | Leaking a linear handle `#f` causes compile error | `#f` must be sent or consumed |
-| `@within(500)` (no unit) | Time constants require unit suffix | `@within(500us)` |
-| `$sum = $sum + 1` (no `;`) | Every statement requires a trailing semicolon | `$sum += 1;` |
-| `$cond ? a : b` (as stmt) | Ternary statements require terminating semicolon | `$cond ? $a : $b;` |
-
----
-
-## 8. AI Code Generation Pre-Flight Checklist
-
-Before finalizing any generated PulseLang v2 code, verify every item on this checklist:
-
-- [ ] Every variable starts with `$` (`$var`).
-- [ ] Every hardware handle starts with `#` (`#handle`).
-- [ ] Every directive / intrinsic starts with `@` (`@contract`, `@tsc()`, etc.).
-- [ ] Every statement terminates with `;`.
-- [ ] Every `#handle` is consumed exactly once in every possible branch.
-- [ ] Every time constant includes a valid unit (`ns`, `us`, `ms`, `s`).
-- [ ] Every `@while` loop has a strictly monotonic increment/decrement (e.g. `$i += 1;`).
-- [ ] No `let`, `var`, `function`, `def`, `class`, `malloc`, `free`, or `return` keywords are used.

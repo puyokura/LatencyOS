@@ -110,26 +110,45 @@ impl PulseEditor {
     }
 
     // Function: insert_char
-    // Description: Insert character at cursor position.
+    // Description: Insert character at cursor position (O(1) at end of buffer).
     // Worst-case execution time: ~800 ns
     pub fn insert_char(&mut self, c: u8) {
         if self.buf_len < MAX_EDITOR_BUF - 1 {
-            for i in (self.cursor..self.buf_len).rev() {
-                self.buffer[i + 1] = self.buffer[i];
+            if self.cursor == self.buf_len {
+                self.buffer[self.cursor] = c;
+                self.cursor += 1;
+                self.buf_len += 1;
+            } else {
+                for i in (self.cursor..self.buf_len).rev() {
+                    self.buffer[i + 1] = self.buffer[i];
+                }
+                self.buffer[self.cursor] = c;
+                self.cursor += 1;
+                self.buf_len += 1;
             }
-            self.buffer[self.cursor] = c;
-            self.cursor += 1;
-            self.buf_len += 1;
             self.needs_redraw = true;
         }
     }
 
     // Function: insert_str
-    // Description: Insert string at cursor position (e.g. 4 spaces for Tab).
-    // Worst-case execution time: ~2000 ns
+    // Description: Insert a byte slice at cursor position with single-shift block copy.
+    // Worst-case execution time: ~1200 ns
     pub fn insert_str(&mut self, s: &[u8]) {
-        for &b in s {
-            self.insert_char(b);
+        let len = s.len();
+        if self.buf_len + len <= MAX_EDITOR_BUF {
+            if self.cursor == self.buf_len {
+                self.buffer[self.cursor..self.cursor + len].copy_from_slice(s);
+                self.cursor += len;
+                self.buf_len += len;
+            } else {
+                for i in (self.cursor..self.buf_len).rev() {
+                    self.buffer[i + len] = self.buffer[i];
+                }
+                self.buffer[self.cursor..self.cursor + len].copy_from_slice(s);
+                self.cursor += len;
+                self.buf_len += len;
+            }
+            self.needs_redraw = true;
         }
     }
 
@@ -523,6 +542,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
         let mut is_pasting = false;
         let mut last_was_cr = false;
+        let mut paste_idle_spins: u32 = 0;
 
         while EDITOR.is_running {
             let mut got_input = false;
@@ -908,7 +928,19 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 }
             }
 
-            if got_input && !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
+            if got_input {
+                paste_idle_spins = 0;
+            } else {
+                paste_idle_spins = paste_idle_spins.saturating_add(1);
+                // Watchdog: If in paste mode but no bytes arrive for ~50,000 spins, auto-exit paste mode and redraw
+                if is_pasting && paste_idle_spins > 50_000 {
+                    is_pasting = false;
+                    EDITOR.esc_state = EditorEscState::Normal;
+                    EDITOR.needs_redraw = true;
+                }
+            }
+
+            if !is_pasting && EDITOR.needs_redraw && EDITOR.is_running {
                 EDITOR.redraw();
             }
 

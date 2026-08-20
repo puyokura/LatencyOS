@@ -1,38 +1,33 @@
-# PulseLang v2 完全自律AI仕様書 & コード生成マニュアル (日本語版)
+# PulseLang v2 完全自律AI仕様書 & システムアーキテクチャ定義書 (日本語版)
 
-> **ドキュメント種別**: 単一ファイル完結型 AI インコンテキスト学習 & 自動コード生成リファレンス
-> **対象読者**: AIコーディングエージェント、LLM、コンパイラ開発者、形式検証エンジン
+> **ドキュメント種別**: 単一ファイル完結型 AI 形式仕様書・意味論 & 低レイヤアーキテクチャ定義書
+> **対象読者**: AIコーディングエージェント、LLM、静的解析器、形式検証エンジン、カーネルエンジニア
 > **言語バージョン**: `2.0.0-hard-realtime`
 > **実行環境**: `LatencyOS (x86_64 freestanding no_std)`
-> **自己完結保証**: 本ファイル 1 つを LLM / AI エージェントのコンテキストに投入するだけで、構文・型システム・線形型所有権・全組み込み関数・ISA・生成テンプレート・アンチパターンを 100% 網羅し、誤りのない PulseLang v2 コードを生成できます。
+> **自己完結保証**: 本ドキュメント 1 つで、構文・型システム・線形論理・全組み込み命令・バイトコード ISA・メモリ順序付け・DMA コヒーレンシ・43項目の形式アーキテクチャ契約を 100% 網羅しています。
 
 ---
 
-## 1. AI システムプロンプト & 5大不変条件 (Core Invariants)
+## 1. AI システムプロンプト & 5大不変条件 (Invariants)
 
-あなたは **LatencyOS** 上で動作する **PulseLang v2** の専門コンパイラ兼自律コード生成エージェントです。
+AI が PulseLang v2 のコードを生成する際は、**必ず以下の 5 つの不変条件を厳守** してください：
 
-PulseLang のコードを生成する際は、**必ず以下の 5 つの不変条件を例外なく厳守**してください：
-
-1. **接頭辞ディシプリン (曖昧性ゼロ原則)**:
-   - **`$`**: すべての変数（例: `$rtt`, `$sum`, `$i`, `$t0`, `$dt`）。静的 32 レジスタスロット（`$0`〜`$31`）にバインド。
-   - **`#`**: すべてのハードウェア/DMA 線形ハンドル（例: `#f`, `#packet`, `#frame`）。複製不能・単一所有権。
-   - **`@`**: すべての契約、時間制御構文、組み込み関数（例: `@contract`, `@pipeline`, `@on_vblank`, `@within`, `@while`, `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@print()`, `@println()`）。
+1. **接頭辞規則 (曖昧性ゼロ)**:
+   - **`$`**: 変数（`$rtt`, `$sum`, `$i`, `$t0`, `$dt`）。静的 32 スロット（`$0`〜`$31`）にバインド。
+   - **`#`**: ハードウェア/DMA 線形ハンドル（`#f`, `#packet`, `#frame`）。複製不能・単一消費。
+   - **`@`**: 契約・時間制御・組み込み命令（`@contract`, `@pipeline`, `@on_vblank`, `@within`, `@while`, `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@print()`, `@println()`）。
 2. **線形型（Linear Type）の単一消費保証**:
-   - `#f := @capture();` で取得したハンドルは、**すべての実行分岐で厳密に 1 回だけ消費（通常は `@send(#f);`）** されなければならない。
-   - 二重解放、解放漏れ、複製（Copy）はコンパイルエラーとなります。
+   - `#f := @capture();` で取得したハンドルは、**すべての実行パスで厳密に 1 回だけ消費（通常は `@send(#f);`）** すること。
 3. **時間単位の必須付与**:
-   - 時間定数には必ず明示的な単位接尾辞を付与する: `ns`（ナノ秒）, `us`（マイクロ秒）, `ms`（ミリ秒）, `s`（秒）。
-   - コンパイル時に即座に 64 ビット整数のナノ秒値へ展開されます（例: `500us` $\to$ `500000`）。
+   - 時間定数には必ず単位接尾辞を付与する（`ns`, `us`, `ms`, `s`）。コンパイル時に即座に整数ナノ秒へ展開。
 4. **文末セミコロンの必須化**:
    - すべての文末には必ずセミコロン `;` を付与する。
 5. **動的メモリ確保・非決定論的ループの禁止**:
-   - ヒープ確保（`malloc`/`Box`）、動的再帰、無限ループは存在しません。
-   - すべてのループは有界（Bounded）であり、最大 10,000 ステップで強制終了されます。
+   - ヒープ確保（`malloc`/`Box`）、動的再帰、無限ループは存在しない。最大 10,000 命令で強制停止。
 
 ---
 
-## 2. 完全形式文法 (EBNF)
+## 2. 形式文法 (EBNF)
 
 ```ebnf
 Script          ::= TopLevelDecl* <EOF>
@@ -95,54 +90,175 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 ---
 
-## 3. ハードウェア組み込み関数カタログ
+## 3. 43項目マスターアーキテクチャ & 意味論定義
 
-| 関数名 | シグネチャ | 最悪実行時間 | 説明 |
-|---|---|---|---|
-| `@tsc()` | `() -> i64` | **~15 ns** | ハードウェア TSC（`rdtscp`）のシリアル化現在値を返す |
-| `@rtt()` | `() -> i64` | **~20 ns** | PMD ドライバが計測した最新の RTT（ナノ秒）を取得 |
-| `@rate(pct)` | `(i64) -> ()` | **~10 ns** | 送信レート（10〜100%）を設定 |
-| `@capture()` | `() -> #handle` | **~100 ns** | GPU フレームバッファの線形記述子スロットを取得 |
-| `@send(#h)` | `(#handle) -> ()` | **~200 ns** | NIC 送信リングへゼロコピー送出し、所有権を移動 |
-| `@print(v)` | `(Any) -> ()` | **~500 ns** | シリアル出力（改行なし） |
-| `@println(v)` | `(Any) -> ()` | **~500 ns** | シリアル出力（改行あり、CRLF 自動正規化） |
+### 1. 仕様間 WCET 値の完全統一
+すべてのドキュメント・コンパイラ・シェル計測において以下の最悪実行時間を統一：
+- バイトコード基本命令ディスパッチ: **25 ns**
+- `@tsc()`: **15 ns**
+- `@rtt()`: **20 ns**
+- `@rate()`: **10 ns**
+- `@capture()`: **100 ns**
+- `@send()`: **200 ns**
+- `@print()` / `@println()`: **500 ns**
+- パイプライン総遅延予算: **8,000 \textmu s (8.00 ms)**
+
+### 2. 組み込み命令 WCET と VM 命令 WCET の関係
+プログラム全体の静的 WCET は以下のように算出されます：
+$$\text{WCET}_{\text{total}} = \sum (\text{Opcode 数} \times 25\text{ ns}) + \sum (\text{組み込み命令 WCET})$$
+
+### 3. Time 型と i64 型の型規則
+`Time` はコンパイル時にナノ秒単位の `u64` へ即値展開され、VM 内部では `i64` として扱われます。`Time` と `i64` の四則演算や比較は実行時キャストなしで直接評価されます。
+
+### 4. String Tagged Pointer の意味論
+静的 512 バイト文字列プール内の文字列は、VM スタック上でタグ付き 64 ビットポインタとして保持されます：
+$$\text{Ptr} = \mathtt{0x7FFF\_0000\_0000\_0000} \mid (\text{len} \ll 16) \mid \text{offset}$$
+VM はアクセス前に $\text{offset} + \text{len} \le 512$ の境界チェックを行います。
+
+### 5. Handle と DMA 完了の関係
+`#f := @capture()` は GPU キャプチャリングからスロット番号を確保し、`@send(#f)` は記述子を NIC 送信リングへ移譲して `sfence` を発行します。DMA 完了は記述子ステータス（`E1000_TXD_STAT_DD`）のポーリングで検知されます。
+
+### 6. `!drop` 時の Handle ライフサイクル
+`@within(Time) { ... } !drop;` の制限時間を超過した場合、`OP_DROP` が実行され、未送信の `#handle` 記述子は直ちに破棄・解放され、古いフレームの送信を防止します。
+
+### 7. `OP_CALL_NATIVE` の ABI
+- Opcode: `0x11`
+- オペランド 1 (`u8`): `func_id` (`1`〜`7`)
+- オペランド 2 (`u8`): `argc`（引数の個数）
+引数は VM スタックから逆順（右から左）でポップされます。
+
+### 8. `OP_CALL_NATIVE` の戻り値規則
+- 戻り値なしの命令（`@rate`, `@println`, `@send`）: 何もプッシュしない、または `0` をプッシュ。
+- 戻り値ありの命令（`@tsc`, `@rtt`, `@capture`）: 結果値（`i64` または `handle_id`）をスタックへプッシュ。
+
+### 9. `OP_WITHIN_START` / `OP_WITHIN_END` のネスト規則
+VM は 8 階層のデッドラインスタックを保持します。内側のデッドラインは外側のデッドライン以下の値でなければなりません（$\text{Deadline}_{\text{inner}} \le \text{Deadline}_{\text{outer}}$）。
+
+### 10. `OP_DROP` の実行条件
+`read_tsc() > deadline_tsc` である場合のみ `OP_DROP` (`0x14`) が実行されます。
+
+### 11. VM 中断時のリソース回収
+ステップ数上限（10,000命令）超過や実行時エラーで中断した場合：
+1. デッドラインスタックポインタ（`dl_sp`）を 0 にリセット。
+2. 32 個の変数スロットをクリア。
+3. 消費されなかった `#handle` 記述子を回収。
+
+### 12. 制御構文の統一
+- `if (cond) { ... } else { ... }` は `OP_JUMP_IF_FALSE` と `OP_JUMP` にコンパイル。
+- 三項演算子 `$cond ? expr1 : expr2` および三項ブロック `$cond ? { ... } : { ... };` も同一のジャンプ意味論を共有。
+- `@contract`, `@within`, `@while` は時間・リアルタイム制約を付与。
+
+### 13. 分岐における Handle の型検査
+分岐前に取得された `#handle` は、`if/else` や三項演算子の**両方の分岐で消費**されなければコンパイルエラーとなります。
+
+### 14. ループ内での Handle 使用規則
+`@while` ループ内で取得された `#handle` は、同一反復内で消費されなければなりません。ループ境界をまたぐことはできません。
+
+### 15. `@capture` 失敗時の状態
+GPU フレームリングが枯渇している場合、`@capture()` は `0`（null 記述子）を返します。
+
+### 16. `@send` 失敗時の状態
+NIC 送信リングが満杯の場合、`@send()` はフレームをドロップしてバックプレッシャカウンタを加算し、ハンドルは消費済みとして扱われます。
+
+### 17. ゼロ除算の正確な意味論
+`OP_DIV` (`0x07`) および `OP_MOD` (`0x08`) で除数が `0` の場合、CPU トラップを起こさず `0` を返します。
+
+### 18. 整数オーバーフローの意味論
+すべての 64 ビット整数演算は 2 の補数でラップアラウンド（`wrapping_add`, `wrapping_sub`, `wrapping_mul`）します。
+
+### 19. 比較演算のブール表現
+比較演算（`OP_CMP_EQ` 〜 `OP_CMP_GE`）は真のとき `1`、偽のとき `0` をプッシュします。
+
+### 20. ブールの内部型
+ブール値は `i64` で表されます（`0` は偽、非ゼロは真）。
+
+### 21. 文字列ポインタのメモリ安全性
+文字列ポインタは固定の読み取り専用プール内のオフセットで管理され、領域外アクセスは VM によって拒否されます。
+
+### 22. 静的文字列プールの上限
+文字列リテラルの合計が 512 バイトを超えるとコンパイルエラーとなります。
+
+### 23. VM スタックオーバーフロー保護
+VM スタックは最大 64 要素で固定され、超過時は `Err("Stack overflow")` を返します。
+
+### 24. バイトコード検証
+実行前にマジック `PULS`（`0x50554C53`）、コード長、ジャンプ先境界の妥当性を検証します。
+
+### 25. バイトコードバージョン
+ヘッダーのバイト 4-5 にバージョン `2`（`0x0002`）が指定されている必要があります。
+
+### 26. 組み込み命令 ID の ABI 定義
+- `1`: `NATIVE_PRINT` (`@print`)
+- `2`: `NATIVE_PRINTLN` (`@println`)
+- `3`: `NATIVE_SYS_TSC` (`@tsc`)
+- `4`: `NATIVE_NET_RTT` (`@rtt`)
+- `5`: `NATIVE_NET_SET_RATE` (`@rate`)
+- `6`: `NATIVE_GPU_CAPTURE` (`@capture`)
+- `7`: `NATIVE_NET_SEND` (`@send`)
+
+### 27. ハードウェアターゲット仕様
+- CPU: x86_64（Invariant TSC 対応）
+- NIC: Intel 82540EM / 82545EM (e1000) PMD
+- GPU: Linear Framebuffer 1920x1080 @ 32bpp
+- コア構成: 4 コア SMP（役割固定）
+
+### 28. TSC の時間単位
+1 TSC tick = 1 CPU クロックサイクル（3.40 GHz の場合 約 0.294 ns）。
+
+### 29. TSC ticks とナノ秒の変換式
+$$\text{Nanoseconds} = \frac{\text{Ticks} \times 1,000,000,000}{\text{TSC Frequency (Hz)}}$$
+
+### 30. CPU 周波数変動と C-State 固定
+全 4 コアは MSR `0x1A0`（`MISC_ENABLE`）および MSR `0x1B0`（`ENERGY_PERF_BIAS = 0x0`）で C0 ステートに固定され、クロック周波数変動によるジッタを排除します。
+
+### 31. 割り込みによる WCET 変動
+- Core 1〜3 は割り込み禁止（`cli`）で動作。
+- Core 0 のみタイマーおよびシリアル割り込みを処理（ISR 実行時間は $\le 150\text{ ns}$ に制限）。
+
+### 32. キャッシュミスを考慮した WCET モデル
+最悪実行時間モデルは、ホットループの L1/L2 キャッシュ保持（< 4 ns）と、コールド DRAM アクセス上限（100 ns）を考慮して算出されます。
+
+### 33. DMA キャッシュコヒーレンシ
+DMA メモリ領域は非キャッシュ（UC）またはライトコンバイニング（WC）に設定され、`sfence` / `clflush` により CPU-NIC 間の整合性を保証します。
+
+### 34. `sfence` / `mfence` の発行条件
+- フレーム記述子の書き込み後に `sfence` を発行。
+- SPSC リングバッファのテールポインタ更新時に `mfence` を発行。
+
+### 35. 4 コア間のメモリ順序付け
+コア間通信は SPSC Lock-Free キューを用い、x86 TSO に整合する atomic `Acquire`/`Release` 順序付けを適用。
+
+### 36. VBLANK イベントの競合排除
+Core 1 のみが GPU VBLANK レジスタをポーリングし、SMP ロック競合を完全排除。
+
+### 37. パイプラインバッファのライフサイクル
+`Stage 0 (ISR)` $\to$ `Stage 1 (Userspace)` $\to$ `Stage 2 (VBLANK)` $\to$ `Stage 3 (Capture)` $\to$ `Stage 4 (Encode)` $\to$ `Stage 5 (Network TX)` $\to$ `Ring Release`。
+
+### 38. DMA バッファのライフサイクル
+`スロット解放` $\to$ `キャプチャ割当` $\to$ `DMA 転送` $\to$ `TX 完了` $\to$ `空きプールへ回収`。
+
+### 39. NIC TX 完了ポーリング
+Core 3 が e1000 TX 記述子のステータスビット `E1000_TXD_STAT_DD` を割り込みなしでポーリング。
+
+### 40. GPU バッファの完了検知
+次フレームの VBLANK エッジ検知時に前フレームのスロットをリサイクル。
+
+### 41. コンパイラエラーリカバリ
+単一パスコンパイラが構文エラーの発生行・列・トークンを含む構造化 `Result` を即時返却。
+
+### 42. 有界ループ証明 (Bounded Loop Proof) の形式仕様
+`@while(cond)` は条件変数の単調増減（`$i += 1;` 等）を要求し、進捗のないループは VM の 10,000 命令制限で強制停止。
+
+### 43. 静的 WCET と動的 TSC 実測値の不一致時の扱い
+静的 WCET は理論上の安全上限値を提供し、実行時はハードウェア TSC で動的遅延を計測。`@within` を超過した場合は `!drop` が即座に発動して破棄。
 
 ---
 
-## 4. バイトコード ISA 仕様
+## 4. 標準スクリプト一覧
 
-| Opcode | ニーモニック | オペランド | スタック効果 | 説明 |
-|---|---|---|---|---|
-| `0x01` | `OP_PUSH_CONST` | `i64` (8B) | `[] -> [val]` | 即値をプッシュ |
-| `0x02` | `OP_LOAD_VAR` | `u8` (1B) | `[] -> [var[idx]]` | レジスタスロットからロード |
-| `0x03` | `OP_STORE_VAR` | `u8` (1B) | `[val] -> []` | スタック先頭をレジスタへ保存 |
-| `0x04` | `OP_ADD` | なし | `[a, b] -> [a + b]` | 加算 |
-| `0x05` | `OP_SUB` | なし | `[a, b] -> [a - b]` | 減算 |
-| `0x06` | `OP_MUL` | なし | `[a, b] -> [a * b]` | 乗算 |
-| `0x07` | `OP_DIV` | なし | `[a, b] -> [a / b]` | 除算（0除算保護） |
-| `0x08` | `OP_MOD` | なし | `[a, b] -> [a % b]` | 剰余 |
-| `0x09` | `OP_CMP_EQ` | なし | `[a, b] -> [a == b]` | 一致比較 |
-| `0x0A` | `OP_CMP_NE` | なし | `[a, b] -> [a != b]` | 不一致比較 |
-| `0x0B` | `OP_CMP_LT` | なし | `[a, b] -> [a < b]` | 小なり比較 |
-| `0x0C` | `OP_CMP_LE` | なし | `[a, b] -> [a <= b]` | 以下比較 |
-| `0x0D` | `OP_CMP_GT` | なし | `[a, b] -> [a > b]` | 大なり比較 |
-| `0x0E` | `OP_CMP_GE` | なし | `[a, b] -> [a >= b]` | 以上比較 |
-| `0x0F` | `OP_JUMP` | `u16` (2B) | `[] -> []` | 無条件ジャンプ |
-| `0x10` | `OP_JUMP_IF_FALSE`| `u16` (2B) | `[cond] -> []` | 偽（0）ならジャンプ |
-| `0x11` | `OP_CALL_NATIVE` | `u8, u8` | `[args...] -> [res]` | ハードウェア組み込み命令呼出 |
-| `0x12` | `OP_WITHIN_START`| `i64` (8B) | `[] -> []` | デッドラインタイマー開始 |
-| `0x13` | `OP_WITHIN_END` | なし | `[] -> []` | デッドライン検証 |
-| `0x14` | `OP_DROP` | なし | `[] -> []` | 超過フレーム破棄 |
-| `0x15` | `OP_PUSH_STR` | `u16, u16` | `[] -> [ptr]` | 文字列プール参照をプッシュ |
-| `0x16` | `OP_HALT` | なし | `[] -> []` | スクリプト実行終了 |
-
----
-
-## 5. 実践コード生成テンプレート 10 選
-
-### テンプレート 1: ゼロコピー GPU-to-NIC パイプライン (`stream.pl`)
+### 4.1 ゼロコピー GPU-to-NIC パイプライン (`stream.pl`)
 ```pulse
-// stream.pl - Zero-Copy Ultra-Low-Latency Pipeline
+// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -155,9 +271,9 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 };
 ```
 
-### テンプレート 2: 有界反復数学ベンチマーク (`bench.pl`)
+### 4.2 レイテンシベンチマーク (`bench.pl`)
 ```pulse
-// bench.pl - Real-Time Bounded Iteration Benchmark
+// bench.pl - Realtime Math & Latency Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -176,88 +292,3 @@ $dt := @tsc() - $t0;
 @println("[LATENCY] Cycles:");
 @println($dt);
 ```
-
-### テンプレート 3: 適応型輻輳制御ガード (`filter.pl`)
-```pulse
-// filter.pl - Adaptive Congestion Controller
-@contract: @wcet(2us) @budget(100us);
-
-$rtt := @rtt();
-@println("[FILTER] Measured RTT (ns):");
-@println($rtt);
-
-$rtt > 300us ? {
-    @println("[ACTION] Congestion detected -> Rate: 60%");
-    @rate(60);
-} : {
-    @println("[ACTION] Optimal latency -> Rate: 100%");
-    @rate(100);
-};
-```
-
-### テンプレート 4: ハードウェアジッタ解析 (`jitter.pl`)
-```pulse
-// jitter.pl - Cycle-Accurate Jitter Analyzer
-@contract: @wcet(3us) @budget(30us);
-
-$t1 := @tsc();
-$t2 := @tsc();
-$delta := $t2 - $t1;
-
-@println("[JITTER] Consecutive TSC Delta (Cycles):");
-@println($delta);
-
-$delta < 100 ? {
-    @println("[STATUS] Determinism: Optimal (<100 cycles)");
-} : {
-    @println("[STATUS] Determinism: Jitter detected");
-};
-```
-
-### テンプレート 5: リアルタイムハードウェアテレメトリ (`telemetry.pl`)
-```pulse
-// telemetry.pl - Real-Time Hardware Telemetry Inspector
-@contract: @wcet(2us) @budget(20us);
-
-$rtt := @rtt();
-$tsc := @tsc();
-
-@println("=== LatencyOS Hardware Telemetry ===");
-@println("[CLOCK] Serialized TSC Ticks:");
-@println($tsc);
-@println("[NET] Active Round-Trip Time (ns):");
-@println($rtt);
-
-$rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
-```
-
----
-
-## 6. AI が犯しやすいアンチパターンと修正例
-
-| 誤ったコード | 失敗原因 | 正しいコード |
-|---|---|---|
-| `let x = 10;` | `let` / `var` キーワードは存在しない | `$x := 10;` |
-| `f := @capture();` | ハードウェア DMA ハンドルには `#` が必須 | `#f := @capture();` |
-| `while ($i < 10) {}` | 制御構文には `@` が必須 | `@while($i < 10) {}` |
-| `delay(10);` | スリープ関数は存在しない | `@within(Time) {}` を使用 |
-| `malloc(1024);` | 動的ヒープメモリは完全禁止 | 静的 `$var` スロットを使用 |
-| `print("hi")` | 組み込み関数には `@` が必須 | `@print("hi");` |
-| `@send(#f)` の欠落 | 線形ハンドル `#f` の解放漏れ | 全分岐で `@send(#f)` を呼ぶ |
-| `@within(500)` (単位なし) | 時間定数には単位接尾辞が必須 | `@within(500us)` |
-| `$sum = $sum + 1` (`;`なし)| 文末セミコロンが必須 | `$sum += 1;` |
-
----
-
-## 7. AI コード生成前チェックリスト
-
-コードを出力する前に、以下の全項目をチェックしてください：
-
-- [ ] すべての変数が `$` で始まっているか（`$var`）。
-- [ ] すべてのハードウェアハンドルが `#` で始まっているか（`#handle`）。
-- [ ] すべてのディレクティブ・組み込み命令が `@` で始まっているか（`@contract`, `@tsc()` 等）。
-- [ ] すべての文末に `;` が付いているか。
-- [ ] すべての `#handle` が全分岐で厳密に 1 回消費されているか。
-- [ ] すべての時間定数に単位（`ns`, `us`, `ms`, `s`）が付いているか。
-- [ ] すべての `@while` ループに変数の単調増減（`$i += 1;` 等）があるか。
-- [ ] `let`, `var`, `function`, `def`, `class`, `malloc`, `free`, `return` などの汎用言語キーワードを使っていないか。
