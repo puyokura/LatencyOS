@@ -56,9 +56,9 @@ impl PulseEditor {
 
     pub fn filename_str(&self) -> &str {
         if self.filename_len == 0 {
-            return "untitled.pulse";
+            return "untitled.pl";
         }
-        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.pulse")
+        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.pl")
     }
 
     pub fn set_status(&mut self, msg: &str) {
@@ -577,10 +577,12 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             }
 
                             // Right Arrow / Ctrl+Right
+                            // Right Arrow / Ctrl+Right
                             b'C' => {
                                 let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
                                 if is_ctrl {
                                     EDITOR.move_word_right();
+                                    EDITOR.redraw();
                                 } else if EDITOR.cursor < EDITOR.buf_len {
                                     EDITOR.cursor += 1;
                                     EDITOR.redraw();
@@ -593,6 +595,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
                                 if is_ctrl {
                                     EDITOR.move_word_left();
+                                    EDITOR.redraw();
                                 } else if EDITOR.cursor > 0 {
                                     EDITOR.cursor -= 1;
                                     EDITOR.redraw();

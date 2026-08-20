@@ -37,7 +37,7 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 
 ### 3.1 Pulse Shell (Time-Native Unix Minimalist Shell)
 - **Time-First Prompt**: `[c0|18ns] % ` displays the active CPU core and hardware TSC execution latency ($\Delta t$) of the preceding command.
-- **Deadline Guard (`within <time> <cmd>`)**: Evaluates real-time execution against strict hardware budgets (e.g. `within 500us run filter.pulse`).
+- **Deadline Guard (`within <time> <cmd>`)**: Evaluates real-time execution against strict hardware budgets (e.g. `within 500us run filter.pl`).
 - **Hardware Telemetry Commands**:
   - `timeline`: Monospace microsecond breakdown of the 6 pipeline stages.
   - `ring`: Real-time inspection of SPSC lock-free queues (occupancy, head/tail pointers).
@@ -51,7 +51,7 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 - Mathematically dense, AI-optimized grammar with first-class time literals (`50ns`, `200us`, `5ms`, `1s`).
 - Direct register bindings (`$rtt`, `$sum`), hardware handles (`#f`), and compiler contracts (`@contract: @wcet(5us) @budget(50us);`).
 - Zero-copy stream piping (`|>`) and deadline assertions (`@within(500us) { ... } !drop;`).
-- Standard scripts: `stream.pulse`, `bench.pulse`, `filter.pulse`.
+- Standard scripts: `stream.pl`, `bench.pl`, `filter.pl`.
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)
 - Full-screen terminal text editor running inside the kernel on Core 0.

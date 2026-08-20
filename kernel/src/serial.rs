@@ -39,6 +39,8 @@ pub struct SerialPort {
     base: u16,
 }
 
+static mut LAST_BYTE_SENT: u8 = 0;
+
 impl SerialPort {
     // Function: new
     // Description: Create a new SerialPort instance for a given base I/O port.
@@ -77,14 +79,21 @@ impl SerialPort {
     }
 
     // Function: send_byte
-    // Description: Send a single byte over the serial port, busy-waiting until transmitter is ready.
-    // Worst-case execution time: ~1000 ns (at 115200 baud, ~87 us per byte if full, ~1 us when empty)
+    // Description: Send a single byte over the serial port with automatic CRLF normalization.
+    // Worst-case execution time: ~2000 ns
     pub fn send_byte(&self, byte: u8) {
-        while !self.is_transmit_empty() {
-            core::hint::spin_loop();
-        }
         unsafe {
+            if byte == b'\n' && LAST_BYTE_SENT != b'\r' {
+                while !self.is_transmit_empty() {
+                    core::hint::spin_loop();
+                }
+                outb(self.base, b'\r');
+            }
+            while !self.is_transmit_empty() {
+                core::hint::spin_loop();
+            }
             outb(self.base, byte);
+            LAST_BYTE_SENT = byte;
         }
     }
 
@@ -109,16 +118,11 @@ impl SerialPort {
     }
 
     // Function: send_str
-    // Description: Send a string slice over the serial port with clean CRLF normalization.
+    // Description: Send a string slice over the serial port.
     // Worst-case execution time: ~1000 ns * s.len()
     pub fn send_str(&self, s: &str) {
-        let mut prev = 0u8;
         for byte in s.bytes() {
-            if byte == b'\n' && prev != b'\r' {
-                self.send_byte(b'\r');
-            }
             self.send_byte(byte);
-            prev = byte;
         }
     }
 }

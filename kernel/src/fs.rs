@@ -72,8 +72,8 @@ pub fn fs_init() {
             *file = FileEntry::empty();
         }
 
-        // 1. stream.pulse - Ultra-low-latency pipeline stream script
-        let stream_src = b"// stream.pulse - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline\n\
+        // 1. stream.pl - Ultra-low-latency pipeline stream script
+        let stream_src = b"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline\n\
 @pipeline: UltraStream @budget(8000us);\n\
 @on_vblank: {\n\
     #f := @capture();\n\
@@ -83,10 +83,10 @@ pub fn fs_init() {
         @send(#f);\n\
     } !drop;\n\
 };\n";
-        let _ = fs_create_internal("stream.pulse", stream_src, false);
+        let _ = fs_create_internal("stream.pl", stream_src, false);
 
-        // 2. bench.pulse - Micro-benchmark script
-        let bench_src = b"// bench.pulse - Realtime Math & Latency Benchmark [AI-Native Spec]\n\
+        // 2. bench.pl - Micro-benchmark script
+        let bench_src = b"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]\n\
 @contract: @wcet(5us) @budget(50us);\n\
 $t0 := @tsc();\n\
 $sum := 0;\n\
@@ -101,10 +101,10 @@ $dt := @tsc() - $t0;\n\
 @println($sum);\n\
 @println(\"[LATENCY] Cycles:\");\n\
 @println($dt);\n";
-        let _ = fs_create_internal("bench.pulse", bench_src, false);
+        let _ = fs_create_internal("bench.pl", bench_src, false);
 
-        // 3. filter.pulse - Packet filter and congestion controller
-        let filter_src = b"// filter.pulse - Adaptive Congestion Guard [AI-Native Spec]\n\
+        // 3. filter.pl - Packet filter and congestion controller
+        let filter_src = b"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]\n\
 @contract: @wcet(2us) @budget(100us);\n\
 $rtt := @rtt();\n\
 @println(\"[FILTER] Measured RTT (ns):\");\n\
@@ -116,7 +116,7 @@ $rtt > 300us ? {\n\
     @println(\"[ACTION] Optimal latency -> Rate: 100%\");\n\
     @rate(100);\n\
 };\n";
-        let _ = fs_create_internal("filter.pulse", filter_src, false);
+        let _ = fs_create_internal("filter.pl", filter_src, false);
     }
 }
 

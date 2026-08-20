@@ -145,7 +145,7 @@ where
         FlushConsoleInputBuffer(stdin);
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 0);
 
-        print!("\x1b[0m\x1b[?25h\x1b[?1049l");
+        print!("\x1b[0m\x1b[?25h\r\n");
         let _ = std::io::stdout().flush();
 
         res
@@ -166,6 +166,11 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
 
     save_and_restore_console_mode(|| {
         let mut cmd = Command::new(&qemu);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP (ignores host Ctrl+C signal)
+        }
         cmd.arg("-kernel")
             .arg(kernel_elf)
             .arg("-cpu")

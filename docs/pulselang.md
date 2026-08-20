@@ -48,11 +48,11 @@ Unlike traditional human-oriented programming languages that emphasize verbose s
 
 ---
 
-## 4. Standard Scripts (`.pulse`)
+## 4. Standard Scripts (`.pl`)
 
-### 4.1 `bench.pulse` (Realtime Math & Micro-Benchmark)
+### 4.1 `bench.pl` (Realtime Math & Micro-Benchmark)
 ```pulse
-// bench.pulse - Realtime Math & Latency Benchmark [AI-Native Spec]
+// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
 @contract: @wcet(5us) @budget(50us);
 $t0 := @tsc();
 $sum := 0;
@@ -69,9 +69,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### 4.2 `filter.pulse` (Adaptive Congestion Guard)
+### 4.2 `filter.pl` (Adaptive Congestion Guard)
 ```pulse
-// filter.pulse - Adaptive Congestion Guard [AI-Native Spec]
+// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
 @contract: @wcet(2us) @budget(100us);
 $rtt := @rtt();
 @println("[FILTER] Measured RTT (ns):");
@@ -85,9 +85,9 @@ $rtt > 300us ? {
 };
 ```
 
-### 4.3 `stream.pulse` (Zero-Copy Pipeline Stream)
+### 4.3 `stream.pl` (Zero-Copy Pipeline Stream)
 ```pulse
-// stream.pulse - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 @on_vblank: {
     #f := @capture();
