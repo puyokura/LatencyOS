@@ -32,8 +32,10 @@ pub const HISTORY_SIZE: usize = 8;
 enum EscapeState {
     Normal,
     Esc,
-    Csi,
-    CsiParam(u8),
+    Csi {
+        params: [u16; 4],
+        param_count: usize,
+    },
 }
 
 static mut LINE_BUF: [u8; MAX_LINE_LEN] = [0; MAX_LINE_LEN];
@@ -49,7 +51,7 @@ static mut HISTORY_IDX: usize = 0;
 static mut LAST_CMD_LATENCY_NS: u64 = 18;
 static mut PROMPT_SHOWN: bool = false;
 
-// Function: format_time_ns
+// Function: print_formatted_time
 // Description: Print human-readable time without float allocations.
 // Worst-case execution time: ~1000 ns
 fn print_formatted_time(ns: u64) {
@@ -126,8 +128,48 @@ unsafe fn save_to_history(line: &[u8]) {
     HISTORY_IDX = HISTORY_COUNT;
 }
 
+// Function: move_word_left
+// Description: Move cursor to previous word boundary (Ctrl+Left).
+// Worst-case execution time: ~200 ns
+unsafe fn move_word_left() {
+    if CURSOR_POS == 0 {
+        return;
+    }
+    let mut pos = CURSOR_POS;
+    // Skip preceding whitespace
+    while pos > 0 && LINE_BUF[pos - 1] == b' ' {
+        pos -= 1;
+    }
+    // Skip word characters
+    while pos > 0 && LINE_BUF[pos - 1] != b' ' {
+        pos -= 1;
+    }
+    CURSOR_POS = pos;
+    redraw_line();
+}
+
+// Function: move_word_right
+// Description: Move cursor to next word boundary (Ctrl+Right).
+// Worst-case execution time: ~200 ns
+unsafe fn move_word_right() {
+    if CURSOR_POS >= LINE_LEN {
+        return;
+    }
+    let mut pos = CURSOR_POS;
+    // Skip current word
+    while pos < LINE_LEN && LINE_BUF[pos] != b' ' {
+        pos += 1;
+    }
+    // Skip following whitespace
+    while pos < LINE_LEN && LINE_BUF[pos] == b' ' {
+        pos += 1;
+    }
+    CURSOR_POS = pos;
+    redraw_line();
+}
+
 // Function: poll_shell
-// Description: Non-blocking poll for incoming serial characters and line editing.
+// Description: Non-blocking poll for incoming serial characters, full multi-byte ANSI CSI sequences, and line editing.
 // Worst-case execution time: ~25 ns (when idle) to ~100_000 ns (when executing a command)
 pub fn poll_shell(tsc_freq_hz: u64) {
     unsafe {
@@ -207,15 +249,30 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
                 EscapeState::Esc => {
                     if b == b'[' {
-                        ESC_STATE = EscapeState::Csi;
+                        ESC_STATE = EscapeState::Csi {
+                            params: [0; 4],
+                            param_count: 0,
+                        };
                     } else {
                         ESC_STATE = EscapeState::Normal;
                     }
                 }
 
-                EscapeState::Csi => {
+                EscapeState::Csi { ref mut params, ref mut param_count } => {
                     match b {
-                        // Up Arrow: History Previous
+                        b'0'..=b'9' => {
+                            if *param_count < 4 {
+                                params[*param_count] = params[*param_count].saturating_mul(10).saturating_add((b - b'0') as u16);
+                            }
+                        }
+
+                        b';' => {
+                            if *param_count < 3 {
+                                *param_count += 1;
+                            }
+                        }
+
+                        // Up Arrow
                         b'A' => {
                             if HISTORY_COUNT > 0 && HISTORY_IDX > 0 {
                                 HISTORY_IDX -= 1;
@@ -229,7 +286,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             ESC_STATE = EscapeState::Normal;
                         }
 
-                        // Down Arrow: History Next
+                        // Down Arrow
                         b'B' => {
                             if HISTORY_IDX + 1 < HISTORY_COUNT {
                                 HISTORY_IDX += 1;
@@ -248,18 +305,24 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             ESC_STATE = EscapeState::Normal;
                         }
 
-                        // Right Arrow
+                        // Right Arrow / Ctrl+Right
                         b'C' => {
-                            if CURSOR_POS < LINE_LEN {
+                            let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                            if is_ctrl {
+                                move_word_right();
+                            } else if CURSOR_POS < LINE_LEN {
                                 CURSOR_POS += 1;
                                 serial_print!("\x1b[1C");
                             }
                             ESC_STATE = EscapeState::Normal;
                         }
 
-                        // Left Arrow
+                        // Left Arrow / Ctrl+Left
                         b'D' => {
-                            if CURSOR_POS > 0 {
+                            let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                            if is_ctrl {
+                                move_word_left();
+                            } else if CURSOR_POS > 0 {
                                 CURSOR_POS -= 1;
                                 serial_print!("\x1b[1D");
                             }
@@ -267,41 +330,44 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                         }
 
                         // Home
-                        b'H' | b'1' => {
+                        b'H' => {
                             CURSOR_POS = 0;
                             redraw_line();
                             ESC_STATE = EscapeState::Normal;
                         }
 
                         // End
-                        b'F' | b'4' => {
+                        b'F' => {
                             CURSOR_POS = LINE_LEN;
                             redraw_line();
                             ESC_STATE = EscapeState::Normal;
                         }
 
-                        // Delete: \x1b[3~
-                        b'3' => {
-                            ESC_STATE = EscapeState::CsiParam(3);
+                        // Tilde sequences: 3~ (Delete), 1~ (Home), 4~ (End)
+                        b'~' => {
+                            if params[0] == 3 {
+                                if CURSOR_POS < LINE_LEN {
+                                    for i in CURSOR_POS..LINE_LEN - 1 {
+                                        LINE_BUF[i] = LINE_BUF[i + 1];
+                                    }
+                                    LINE_LEN -= 1;
+                                    redraw_line();
+                                }
+                            } else if params[0] == 1 || params[0] == 7 {
+                                CURSOR_POS = 0;
+                                redraw_line();
+                            } else if params[0] == 4 || params[0] == 8 {
+                                CURSOR_POS = LINE_LEN;
+                                redraw_line();
+                            }
+                            ESC_STATE = EscapeState::Normal;
                         }
 
                         _ => {
+                            // Any unexpected character terminates CSI sequence cleanly without leaking
                             ESC_STATE = EscapeState::Normal;
                         }
                     }
-                }
-
-                EscapeState::CsiParam(param) => {
-                    if param == 3 && b == b'~' {
-                        if CURSOR_POS < LINE_LEN {
-                            for i in CURSOR_POS..LINE_LEN - 1 {
-                                LINE_BUF[i] = LINE_BUF[i + 1];
-                            }
-                            LINE_LEN -= 1;
-                            redraw_line();
-                        }
-                    }
-                    ESC_STATE = EscapeState::Normal;
                 }
             }
         }
@@ -389,6 +455,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("  edit <file>      open full-screen text editor");
             serial_println!("  run <file>       execute PulseLang script");
             serial_println!("  compile <file>   compile script and show diagnostics");
+            serial_println!("  doc pulse        show PulseLang v2 AI-Native formal specification");
             serial_println!("  within <t> <cmd> execute command with hard deadline guard");
             serial_println!("  timeline         display stage-by-stage pipeline timing");
             serial_println!("  ring             display SPSC lock-free ring buffer telemetry");
@@ -404,6 +471,31 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("  pci              list PCI devices");
             serial_println!("  clear            clear screen");
             serial_println!("  exit|halt        poweroff / halt system");
+        }
+
+        "doc" | "man" => {
+            serial_println!("=== PulseLang v2 Formal Specification (AI-Native DSL) ===");
+            serial_println!("1. DIRECTIVES & CONTRACTS:");
+            serial_println!("   @contract: @wcet(<time>) @budget(<time>);");
+            serial_println!("   @pipeline: <Name> @budget(<time>);");
+            serial_println!("   @on_vblank: {{ <statements> }};");
+            serial_println!("2. REGISTERS & HARDWARE HANDLES:");
+            serial_println!("   $var := <expr>;       // Register assignment (e.g. $rtt, $sum)");
+            serial_println!("   $var += <expr>;       // In-place register mutation");
+            serial_println!("   #handle := @capture();// Hardware slot handle (e.g. #f)");
+            serial_println!("3. TEMPORAL GUARDS & PIPELINES:");
+            serial_println!("   @within(<time>) {{ <statements> }} !drop;");
+            serial_println!("   <cond> ? {{ <true_block> }} : {{ <false_block> }};");
+            serial_println!("   <expr> |> <fn>        // Zero-copy stream pipe");
+            serial_println!("4. INTRINSIC HARDWARE CALLS:");
+            serial_println!("   @tsc()                // Read serialized CPU cycle clock");
+            serial_println!("   @rtt()                // Read minimum hardware RTT (ns)");
+            serial_println!("   @rate(<pct>)          // Set NIC flow throttle (10-100%)");
+            serial_println!("   @capture()            // Zero-copy GPU frame capture");
+            serial_println!("   @send(#handle)        // Hard-realtime kernel-bypass TX");
+            serial_println!("   @println(<val>)       // Zero-alloc string/integer print");
+            serial_println!("5. TIME LITERALS:");
+            serial_println!("   50ns, 200us, 5ms, 1s  // Auto-compiled to integer nanoseconds");
         }
 
         "ls" => {

@@ -72,60 +72,50 @@ pub fn fs_init() {
             *file = FileEntry::empty();
         }
 
-        // 1. stream.flow - Real-time pipeline stream controller
-        let stream_src = b"// stream.flow - PulseLang Time-Native Streaming\n\
-pipeline UltraStream {\n\
-    budget: 8000us;\n\
-\n\
-    on vblank {\n\
-        let f = gpu.capture();\n\
-        emit f;\n\
-    }\n\
-\n\
-    on frame(f) {\n\
-        within 500us {\n\
-            let rtt = net.rtt();\n\
-            if (rtt > 200us) {\n\
-                net.set_rate(80);\n\
-                println(\"[WARN] Backoff rate to 80%\");\n\
-            } else {\n\
-                net.set_rate(100);\n\
-            }\n\
-            net.send(f);\n\
-        } or drop;\n\
-    }\n\
-}\n";
+        // 1. stream.flow - Ultra-low-latency pipeline stream script
+        let stream_src = b"// stream.flow - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline\n\
+@pipeline: UltraStream @budget(8000us);\n\
+@on_vblank: {\n\
+    #f := @capture();\n\
+    @within(500us) {\n\
+        $rtt := @rtt();\n\
+        $rtt > 200us ? @rate(80) : @rate(100);\n\
+        @send(#f);\n\
+    } !drop;\n\
+};\n";
         let _ = fs_create_internal("stream.flow", stream_src, false);
 
         // 2. bench.flow - Micro-benchmark script
-        let bench_src = b"// bench.flow - Realtime Math & Latency Benchmark\n\
-let start = sys.tsc();\n\
-let sum = 0;\n\
-let i = 0;\n\
-while (i < 100) {\n\
-    sum = sum + i * 2;\n\
-    i = i + 1;\n\
+        let bench_src = b"// bench.flow - Realtime Math & Latency Benchmark [AI-Native Spec]\n\
+@contract: @wcet(5us) @budget(50us);\n\
+$t0 := @tsc();\n\
+$sum := 0;\n\
+$i := 0;\n\
+@while($i < 100) {\n\
+    $sum += $i * 2;\n\
+    $i += 1;\n\
 }\n\
-let elapsed = sys.tsc() - start;\n\
-println(\"[BENCH] 100 loop iterations completed\");\n\
-println(\"[RESULT] Sum:\");\n\
-println(sum);\n\
-println(\"[LATENCY] Cycles:\");\n\
-println(elapsed);\n";
+$dt := @tsc() - $t0;\n\
+@println(\"[BENCH] Iterations: 100\");\n\
+@println(\"[RESULT] Sum:\");\n\
+@println($sum);\n\
+@println(\"[LATENCY] Cycles:\");\n\
+@println($dt);\n";
         let _ = fs_create_internal("bench.flow", bench_src, false);
 
         // 3. filter.flow - Packet filter and congestion controller
-        let filter_src = b"// filter.flow - Congestion Tuning Guard\n\
-let rtt = net.rtt();\n\
-println(\"[FILTER] Current RTT (ns):\");\n\
-println(rtt);\n\
-if (rtt > 300us) {\n\
-    println(\"[ACTION] Severe congestion! Dropping frames.\");\n\
-    net.set_rate(60);\n\
-} else {\n\
-    println(\"[ACTION] Network optimal. Full throttle.\");\n\
-    net.set_rate(100);\n\
-}\n";
+        let filter_src = b"// filter.flow - Adaptive Congestion Guard [AI-Native Spec]\n\
+@contract: @wcet(2us) @budget(100us);\n\
+$rtt := @rtt();\n\
+@println(\"[FILTER] Measured RTT (ns):\");\n\
+@println($rtt);\n\
+$rtt > 300us ? {\n\
+    @println(\"[ACTION] Congestion detected -> Rate: 60%\");\n\
+    @rate(60);\n\
+} : {\n\
+    @println(\"[ACTION] Optimal latency -> Rate: 100%\");\n\
+    @rate(100);\n\
+};\n";
         let _ = fs_create_internal("filter.flow", filter_src, false);
     }
 }

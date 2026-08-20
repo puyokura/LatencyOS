@@ -89,6 +89,7 @@ unsafe extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> i32 {
     extern "system" {
         fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
         fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
+        fn FlushConsoleInputBuffer(hConsoleInput: *mut std::ffi::c_void) -> i32;
     }
     const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
     const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
@@ -98,6 +99,7 @@ unsafe extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> i32 {
 
     SetConsoleMode(stdin, SAVED_IN_MODE);
     SetConsoleMode(stdout, SAVED_OUT_MODE);
+    FlushConsoleInputBuffer(stdin);
     0
 }
 
@@ -114,6 +116,7 @@ where
             fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
             fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
             fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
+            fn FlushConsoleInputBuffer(hConsoleInput: *mut std::ffi::c_void) -> i32;
         }
         const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
@@ -140,6 +143,7 @@ where
 
         SetConsoleMode(stdin, SAVED_IN_MODE);
         SetConsoleMode(stdout, SAVED_OUT_MODE);
+        FlushConsoleInputBuffer(stdin);
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 0);
 
         print!("\x1b[0m\x1b[?25h\x1b[?1049l");

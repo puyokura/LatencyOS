@@ -14,8 +14,10 @@ pub const MAX_EDITOR_BUF: usize = 4096;
 enum EditorEscState {
     Normal,
     Esc,
-    Csi,
-    CsiParam(u8),
+    Csi {
+        params: [u16; 4],
+        param_count: usize,
+    },
 }
 
 pub struct PulseEditor {
@@ -84,9 +86,9 @@ impl PulseEditor {
             let len = core::cmp::min(data.len(), MAX_EDITOR_BUF);
             self.buffer[..len].copy_from_slice(&data[..len]);
             self.buf_len = len;
-            self.set_status("File loaded from LatencyFS.");
+            self.set_status("Loaded from LatencyFS.");
         } else {
-            self.set_status("New file created.");
+            self.set_status("New buffer.");
         }
         self.needs_redraw = true;
     }
@@ -101,7 +103,7 @@ impl PulseEditor {
                 self.set_status("Saved to LatencyFS.");
             }
             Err(_e) => {
-                self.set_status("Save failed: Disk full or invalid name!");
+                self.set_status("Save failed!");
             }
         }
         self.needs_redraw = true;
@@ -158,13 +160,48 @@ impl PulseEditor {
         }
     }
 
+    // Function: move_word_left
+    // Description: Move cursor to previous word boundary (Ctrl+Left).
+    // Worst-case execution time: ~400 ns
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let mut pos = self.cursor;
+        while pos > 0 && (self.buffer[pos - 1] == b' ' || self.buffer[pos - 1] == b'\t' || self.buffer[pos - 1] == b'\n') {
+            pos -= 1;
+        }
+        while pos > 0 && self.buffer[pos - 1] != b' ' && self.buffer[pos - 1] != b'\t' && self.buffer[pos - 1] != b'\n' {
+            pos -= 1;
+        }
+        self.cursor = pos;
+        self.needs_redraw = true;
+    }
+
+    // Function: move_word_right
+    // Description: Move cursor to next word boundary (Ctrl+Right).
+    // Worst-case execution time: ~400 ns
+    pub fn move_word_right(&mut self) {
+        if self.cursor >= self.buf_len {
+            return;
+        }
+        let mut pos = self.cursor;
+        while pos < self.buf_len && self.buffer[pos] != b' ' && self.buffer[pos] != b'\t' && self.buffer[pos] != b'\n' {
+            pos += 1;
+        }
+        while pos < self.buf_len && (self.buffer[pos] == b' ' || self.buffer[pos] == b'\t' || self.buffer[pos] == b'\n') {
+            pos += 1;
+        }
+        self.cursor = pos;
+        self.needs_redraw = true;
+    }
+
     // Function: move_cursor_up
     // Description: Move cursor to the same column in the previous line.
     // Worst-case execution time: ~500 ns
     pub fn move_cursor_up(&mut self) {
         let (cur_line_start, col) = self.get_current_line_start_and_col();
         if cur_line_start > 0 {
-            // Find start of previous line
             let prev_line_end = cur_line_start - 1;
             let mut prev_line_start = 0;
             for i in (0..prev_line_end).rev() {
@@ -184,7 +221,6 @@ impl PulseEditor {
     // Worst-case execution time: ~500 ns
     pub fn move_cursor_down(&mut self) {
         let (_cur_line_start, col) = self.get_current_line_start_and_col();
-        // Find start of next line
         let mut next_line_start = None;
         for i in self.cursor..self.buf_len {
             if self.buffer[i] == b'\n' {
@@ -194,7 +230,6 @@ impl PulseEditor {
         }
         if let Some(start) = next_line_start {
             if start <= self.buf_len {
-                // Find end of next line
                 let mut end = self.buf_len;
                 for i in start..self.buf_len {
                     if self.buffer[i] == b'\n' {
@@ -237,10 +272,9 @@ impl PulseEditor {
     }
 
     // Function: redraw
-    // Description: Render full editor screen with ANSI color syntax highlighting and crisp alignment.
+    // Description: Render full editor screen with ANSI color syntax highlighting and position cursor.
     // Worst-case execution time: ~60_000 ns
     pub fn redraw(&mut self) {
-        // Clear screen and move cursor to top-left
         serial_print!("\x1b[2J\x1b[H");
 
         let (row, col) = self.get_row_col();
@@ -275,19 +309,16 @@ impl PulseEditor {
             }
 
             if b == b'\t' {
-                // Render tabs as 4 spaces
                 serial_print!("    ");
                 i += 1;
                 continue;
             }
 
-            // Comment start
             if !in_string && b == b'/' && i + 1 < self.buf_len && self.buffer[i + 1] == b'/' {
                 in_comment = true;
                 serial_print!("\x1b[90m");
             }
 
-            // String start/end
             if !in_comment && b == b'"' {
                 if in_string {
                     serial_print!("\"\x1b[0m");
@@ -308,52 +339,49 @@ impl PulseEditor {
                 continue;
             }
 
-            // Keyword & Syntax highlighting
-            if self.match_keyword_at(i, b"pipeline")
-                || self.match_keyword_at(i, b"within")
-                || self.match_keyword_at(i, b"budget")
-                || self.match_keyword_at(i, b"let")
-                || self.match_keyword_at(i, b"if")
-                || self.match_keyword_at(i, b"else")
-                || self.match_keyword_at(i, b"while")
-                || self.match_keyword_at(i, b"on")
-                || self.match_keyword_at(i, b"emit")
-                || self.match_keyword_at(i, b"drop")
-                || self.match_keyword_at(i, b"or")
-            {
+            // PulseLang v2: Directives & Intrinsics (@contract, @tsc, etc.)
+            if b == b'@' {
                 let len = self.get_word_len(i);
                 serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
                 continue;
             }
 
-            // Native function highlighting
-            if self.match_keyword_at(i, b"gpu.capture")
-                || self.match_keyword_at(i, b"net.send")
-                || self.match_keyword_at(i, b"net.rtt")
-                || self.match_keyword_at(i, b"net.set_rate")
-                || self.match_keyword_at(i, b"sys.tsc")
-                || self.match_keyword_at(i, b"print")
-                || self.match_keyword_at(i, b"println")
-            {
+            // PulseLang v2: Variables ($rtt, $sum)
+            if b == b'$' {
+                let len = self.get_word_len(i);
+                serial_print!("\x1b[1;32m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                i += len;
+                continue;
+            }
+
+            // PulseLang v2: Hardware Handles (#f, #frame)
+            if b == b'#' {
                 let len = self.get_word_len(i);
                 serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
                 continue;
             }
 
-            // Number / Time Literal highlighting (Yellow)
+            // Walrus := or += or -=
+            if (b == b':' || b == b'+' || b == b'-') && i + 1 < self.buf_len && self.buffer[i + 1] == b'=' {
+                serial_print!("\x1b[1;33m{}{}\x1b[0m", b as char, '=' as char);
+                i += 2;
+                continue;
+            }
+
+            // Pipe |>
+            if b == b'|' && i + 1 < self.buf_len && self.buffer[i + 1] == b'>' {
+                serial_print!("\x1b[1;33m|>\x1b[0m");
+                i += 2;
+                continue;
+            }
+
+            // Numbers & Time literals (500us, 50ns, 100)
             if b.is_ascii_digit() {
                 let len = self.get_time_literal_len(i);
                 serial_print!("\x1b[1;33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
-                continue;
-            }
-
-            // Pipe operator (|>)
-            if b == b'|' && i + 1 < self.buf_len && self.buffer[i + 1] == b'>' {
-                serial_print!("\x1b[1;33m|>\x1b[0m");
-                i += 2;
                 continue;
             }
 
@@ -376,20 +404,13 @@ impl PulseEditor {
         self.needs_redraw = false;
     }
 
-    fn match_keyword_at(&self, pos: usize, kw: &[u8]) -> bool {
-        if pos + kw.len() <= self.buf_len && &self.buffer[pos..pos + kw.len()] == kw {
-            let after = pos + kw.len();
-            if after >= self.buf_len || (!self.buffer[after].is_ascii_alphanumeric() && self.buffer[after] != b'.' && self.buffer[after] != b'_') {
-                return true;
-            }
-        }
-        false
-    }
-
     fn get_word_len(&self, pos: usize) -> usize {
         let mut len = 0;
         while pos + len < self.buf_len && (self.buffer[pos + len].is_ascii_alphanumeric() || self.buffer[pos + len] == b'.' || self.buffer[pos + len] == b'_') {
             len += 1;
+        }
+        if len == 0 && pos < self.buf_len {
+            len = 1;
         }
         len
     }
@@ -504,40 +525,75 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                     EditorEscState::Esc => {
                         if b == b'[' {
-                            EDITOR.esc_state = EditorEscState::Csi;
+                            EDITOR.esc_state = EditorEscState::Csi {
+                                params: [0; 4],
+                                param_count: 0,
+                            };
                         } else {
                             EDITOR.esc_state = EditorEscState::Normal;
                         }
                     }
 
-                    EditorEscState::Csi => {
+                    EditorEscState::Csi { ref mut params, ref mut param_count } => {
                         match b {
+                            b'0'..=b'9' => {
+                                if *param_count < 4 {
+                                    params[*param_count] = params[*param_count].saturating_mul(10).saturating_add((b - b'0') as u16);
+                                }
+                            }
+
+                            b';' => {
+                                if *param_count < 3 {
+                                    *param_count += 1;
+                                }
+                            }
+
                             // Up Arrow
                             b'A' => {
-                                EDITOR.move_cursor_up();
+                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                if is_ctrl {
+                                    for _ in 0..5 {
+                                        EDITOR.move_cursor_up();
+                                    }
+                                } else {
+                                    EDITOR.move_cursor_up();
+                                }
                                 EDITOR.redraw();
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
                             // Down Arrow
                             b'B' => {
-                                EDITOR.move_cursor_down();
+                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                if is_ctrl {
+                                    for _ in 0..5 {
+                                        EDITOR.move_cursor_down();
+                                    }
+                                } else {
+                                    EDITOR.move_cursor_down();
+                                }
                                 EDITOR.redraw();
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
-                            // Right Arrow
+                            // Right Arrow / Ctrl+Right
                             b'C' => {
-                                if EDITOR.cursor < EDITOR.buf_len {
+                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                if is_ctrl {
+                                    EDITOR.move_word_right();
+                                } else if EDITOR.cursor < EDITOR.buf_len {
                                     EDITOR.cursor += 1;
                                     EDITOR.redraw();
                                 }
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
-                            // Left Arrow
+                            // Left Arrow / Ctrl+Left
                             b'D' => {
-                                if EDITOR.cursor > 0 {
+                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                if is_ctrl {
+                                    EDITOR.move_word_left();
+                                } else if EDITOR.cursor > 0 {
                                     EDITOR.cursor -= 1;
                                     EDITOR.redraw();
                                 }
@@ -545,7 +601,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             }
 
                             // Home
-                            b'H' | b'1' => {
+                            b'H' => {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 EDITOR.cursor = start;
                                 EDITOR.redraw();
@@ -553,7 +609,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             }
 
                             // End
-                            b'F' | b'4' => {
+                            b'F' => {
                                 let (start, _) = EDITOR.get_current_line_start_and_col();
                                 let mut end = EDITOR.buf_len;
                                 for i in start..EDITOR.buf_len {
@@ -567,23 +623,34 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 
-                            // Delete key sequence \x1b[3~
-                            b'3' => {
-                                EDITOR.esc_state = EditorEscState::CsiParam(3);
+                            // Tilde sequences: 3~ (Delete), 1~ (Home), 4~ (End)
+                            b'~' => {
+                                if params[0] == 3 {
+                                    EDITOR.delete_char_under_cursor();
+                                    EDITOR.redraw();
+                                } else if params[0] == 1 || params[0] == 7 {
+                                    let (start, _) = EDITOR.get_current_line_start_and_col();
+                                    EDITOR.cursor = start;
+                                    EDITOR.redraw();
+                                } else if params[0] == 4 || params[0] == 8 {
+                                    let (start, _) = EDITOR.get_current_line_start_and_col();
+                                    let mut end = EDITOR.buf_len;
+                                    for i in start..EDITOR.buf_len {
+                                        if EDITOR.buffer[i] == b'\n' {
+                                            end = i;
+                                            break;
+                                        }
+                                    }
+                                    EDITOR.cursor = end;
+                                    EDITOR.redraw();
+                                }
+                                EDITOR.esc_state = EditorEscState::Normal;
                             }
 
                             _ => {
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
                         }
-                    }
-
-                    EditorEscState::CsiParam(param) => {
-                        if param == 3 && b == b'~' {
-                            EDITOR.delete_char_under_cursor();
-                            EDITOR.redraw();
-                        }
-                        EDITOR.esc_state = EditorEscState::Normal;
                     }
                 }
             }
