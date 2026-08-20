@@ -102,12 +102,14 @@ impl SerialPort {
     // Worst-case execution time: ~2000 ns
     pub fn send_byte(&self, byte: u8) {
         unsafe {
+            self.drain_rx_internal();
             if byte == b'\n' && LAST_BYTE_SENT != b'\r' {
                 while !self.is_transmit_empty() {
                     self.drain_rx_internal();
                     core::hint::spin_loop();
                 }
                 outb(self.base, b'\r');
+                self.drain_rx_internal();
             }
             while !self.is_transmit_empty() {
                 self.drain_rx_internal();
@@ -115,6 +117,7 @@ impl SerialPort {
             }
             outb(self.base, byte);
             LAST_BYTE_SENT = byte;
+            self.drain_rx_internal();
         }
     }
 

@@ -76,20 +76,21 @@ PulseLang のスクリプト（`.pl`）は、その場でコンパイルして�
 ---
 
 ### 1.4 階層的ファイルシステムと初期ディレクトリ構成
-LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。すべてのスクリプト（`.pl`）とコンパイル済みバイナリ（`.bin`）は `/bin/` 配下に格納されています。
+LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。すべてのスクリプト（`.pl`）は `/pulselang/`、スタンドアロンバイナリ（`.bin`）は `/bin/` 配下に整理されて配置されます。
 
 ```text
 / (ルート)
-├── /bin/
+├── /pulselang/         # PulseLang v2 スクリプトディレクトリ
 │   ├── stream.pl       # ゼロコピー GPU-to-NIC パイプライン
-│   ├── stream.bin      # コンパイル済みバイナリ (即時実行用)
 │   ├── bench.pl        # リアルタイム演算ベンチマーク
-│   ├── bench.bin       # コンパイル済みバイナリ
 │   ├── filter.pl       # 輻輳制御ガード
-│   ├── filter.bin      # コンパイル済みバイナリ
 │   ├── jitter.pl       # ジッター計測
+│   └── telemetry.pl    # ハードウェアテレメトリ
+├── /bin/               # コンパイル済み実行可能バイナリ
+│   ├── stream.bin      # コンパイル済みバイナリ (即時実行用)
+│   ├── bench.bin       # コンパイル済みバイナリ
+│   ├── filter.bin      # コンパイル済みバイナリ
 │   ├── jitter.bin      # コンパイル済みバイナリ
-│   ├── telemetry.pl    # ハードウェアテレメトリ
 │   └── telemetry.bin   # コンパイル済みバイナリ
 ├── /etc/
 │   └── config.json     # システム・コア設定ファイル
@@ -107,24 +108,25 @@ LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築�
 [c0|12ns] % pwd
 /
 [c0|10ns] % ls
-bin/  etc/  var/  home/
+bin/  etc/  var/  home/  pulselang/
 
-[c0|14ns] % cd /bin
+[c0|14ns] % cd /pulselang
+[c0|10ns] % pwd
+/pulselang
+[c0|12ns] % ls
+stream.pl  bench.pl  filter.pl  jitter.pl  telemetry.pl
+
+[c0|10ns] % cd /bin
 [c0|10ns] % pwd
 /bin
 [c0|12ns] % ls
-stream.pl  stream.bin  bench.pl  bench.bin  filter.pl  filter.bin  jitter.pl  jitter.bin  telemetry.pl  telemetry.bin
+stream.bin  bench.bin  filter.bin  jitter.bin  telemetry.bin
 
 [c0|15ns] % ls -t
-stream.pl        (wcet: ~3.2us , size:  192 B)
 stream.bin       (wcet: ~0.8us , size:  108 B)
-bench.pl         (wcet: ~3.2us , size:  248 B)
 bench.bin        (wcet: ~0.8us , size:   96 B)
+filter.bin       (wcet: ~0.8us , size:  112 B)
 ...
-
-[c0|10ns] % cd /etc
-[c0|11ns] % ls
-config.json
 ```
 
 ---

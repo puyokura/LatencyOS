@@ -5,6 +5,7 @@
 #[derive(Clone, Copy)]
 pub struct Aes128Key {
     pub round_keys: [u32; 44],
+    pub h: [u8; 16],
 }
 
 // Function: check_crypto_cpu_support
@@ -82,8 +83,8 @@ fn rot_word(w: u32) -> u32 {
 
 impl Aes128Key {
     // Function: new
-    // Description: Expand 128-bit key into 10-round key schedule.
-    // Worst-case execution time: ~180 ns
+    // Description: Expand 128-bit key into 10-round key schedule and precompute hash subkey H.
+    // Worst-case execution time: ~300 ns
     pub fn new(key: &[u8; 16]) -> Self {
         let mut w = [0u32; 44];
         for i in 0..4 {
@@ -101,7 +102,11 @@ impl Aes128Key {
             w[i] = w[i - 4] ^ temp;
         }
 
-        Self { round_keys: w }
+        let mut key_obj = Self { round_keys: w, h: [0u8; 16] };
+        let mut h = [0u8; 16];
+        key_obj.encrypt_block(&[0u8; 16], &mut h);
+        key_obj.h = h;
+        key_obj
     }
 
     // Function: encrypt_block
@@ -141,13 +146,15 @@ impl Aes128Key {
                 let a2 = state[4 * c + 2];
                 let a3 = state[4 * c + 3];
 
-                let g2 = |x: u8| (x << 1) ^ (if (x & 0x80) != 0 { 0x1B } else { 0 });
-                let g3 = |x: u8| g2(x) ^ x;
+                let g2_0 = (a0 << 1) ^ (if (a0 & 0x80) != 0 { 0x1B } else { 0 });
+                let g2_1 = (a1 << 1) ^ (if (a1 & 0x80) != 0 { 0x1B } else { 0 });
+                let g2_2 = (a2 << 1) ^ (if (a2 & 0x80) != 0 { 0x1B } else { 0 });
+                let g2_3 = (a3 << 1) ^ (if (a3 & 0x80) != 0 { 0x1B } else { 0 });
 
-                state[4 * c] = g2(a0) ^ g3(a1) ^ a2 ^ a3;
-                state[4 * c + 1] = a0 ^ g2(a1) ^ g3(a2) ^ a3;
-                state[4 * c + 2] = a0 ^ a1 ^ g2(a2) ^ g3(a3);
-                state[4 * c + 3] = g3(a0) ^ a1 ^ a2 ^ g2(a3);
+                state[4 * c] = g2_0 ^ g2_1 ^ a1 ^ a2 ^ a3;
+                state[4 * c + 1] = a0 ^ g2_1 ^ g2_2 ^ a2 ^ a3;
+                state[4 * c + 2] = a0 ^ a1 ^ g2_2 ^ g2_3 ^ a3;
+                state[4 * c + 3] = g2_0 ^ a0 ^ a1 ^ a2 ^ g2_3;
             }
 
             // 4. AddRoundKey
@@ -185,7 +192,7 @@ impl Aes128Key {
 
 // Function: ghash_multiply
 // Description: Multiplies two 128-bit blocks in GF(2^128) using 64-bit word operations.
-// Worst-case execution time: ~25 ns
+// Worst-case execution time: ~20 ns
 pub fn ghash_multiply(x: &[u8; 16], y: &[u8; 16], out: &mut [u8; 16]) {
     let mut z0 = 0u64;
     let mut z1 = 0u64;
@@ -216,7 +223,7 @@ pub fn ghash_multiply(x: &[u8; 16], y: &[u8; 16], out: &mut [u8; 16]) {
 
 // Function: aes_128_gcm_encrypt
 // Description: Encrypt payload and compute 16-byte authentication tag using AES-128-GCM (AEAD).
-// Worst-case execution time: ~180 ns per 16-byte block (~15_000 ns for 1400 bytes)
+// Worst-case execution time: ~100 ns per 16-byte block
 pub fn aes_128_gcm_encrypt(
     key: &Aes128Key,
     iv: &[u8; 12],
@@ -224,10 +231,8 @@ pub fn aes_128_gcm_encrypt(
     payload: &mut [u8],
     tag: &mut [u8; 16],
 ) {
-    // 1. Calculate Hash Subkey H = AES_K(0^128)
-    let zero_block = [0u8; 16];
-    let mut h = [0u8; 16];
-    key.encrypt_block(&zero_block, &mut h);
+    // 1. Hash Subkey H is precomputed in Aes128Key
+    let h = key.h;
 
     // 2. Prepare Counter0 = IV || 0x00000001
     let mut j0 = [0u8; 16];

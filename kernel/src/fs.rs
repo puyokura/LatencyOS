@@ -161,50 +161,51 @@ $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.")
 ===================================================
 - Files are statically allocated in L1/L2 cache with zero fragmentation.
 - Supports text files (.txt, .md, .json, .log, etc.), scripts (.pl), and binaries (.bin).
+- Source scripts (.pl) are located in /pulselang/
+- Pre-compiled binaries (.bin) are located in /bin/
 - Use 'edit <file>' to edit in PulseEditor (Ctrl+S: save, Ctrl+R: run, Ctrl+Q: quit).
 - Use 'compile <script.pl> <out.bin>' to build standalone binary bytecode.
 - Use 'run <file>' to execute either .pl scripts or .bin bytecode.
 "#;
-        let _ = fs_create_internal("readme.txt", readme_txt, false);
+        let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
 
         // 7. config.json - JSON configuration file
         let config_json = br#"{
   "os": "LatencyOS",
-  "version": "0.0.17",
+  "version": "0.0.22",
   "cores": 4,
   "target_latency_us": 8000,
   "c_state_lock": true,
   "uart_baud": 115200
 }
 "#;
-        let _ = fs_create_internal("config.json", config_json, false);
+        let _ = fs_create_internal("/etc/config.json", config_json, false);
 
         // 8. system.log - Hardware initialization log
-        let system_log = br#"[BOOT] LatencyOS 0.0.18 x86_64 hard-realtime
+        let system_log = br#"[BOOT] LatencyOS 0.0.22 x86_64 hard-realtime
 [APIC] Cores 0-3 initialized with static affinity.
 [PMD] Intel e1000 poll-mode driver active. MAC: 52:54:00:12:34:56.
 [GPU] Zero-copy frame ring ready: 1920x1080 @ 32bpp.
 [FS] LatencyFS initialized with 64 slots.
 "#;
-        let _ = fs_create_internal("system.log", system_log, false);
+        let _ = fs_create_internal("/var/log/system.log", system_log, false);
 
-        // Hierarchical directories & paths
+        // Hierarchical directories
         let _ = fs_mkdir("/bin");
         let _ = fs_mkdir("/etc");
         let _ = fs_mkdir("/var");
         let _ = fs_mkdir("/var/log");
         let _ = fs_mkdir("/home");
+        let _ = fs_mkdir("/pulselang");
 
-        let _ = fs_create_internal("/bin/stream.pl", stream_src, false);
-        let _ = fs_create_internal("/bin/bench.pl", bench_src, false);
-        let _ = fs_create_internal("/bin/filter.pl", filter_src, false);
-        let _ = fs_create_internal("/bin/jitter.pl", jitter_src, false);
-        let _ = fs_create_internal("/bin/telemetry.pl", telemetry_src, false);
-        let _ = fs_create_internal("/etc/config.json", config_json, false);
-        let _ = fs_create_internal("/var/log/system.log", system_log, false);
-        let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
+        // 1. Source scripts in /pulselang/
+        let _ = fs_create_internal("/pulselang/stream.pl", stream_src, false);
+        let _ = fs_create_internal("/pulselang/bench.pl", bench_src, false);
+        let _ = fs_create_internal("/pulselang/filter.pl", filter_src, false);
+        let _ = fs_create_internal("/pulselang/jitter.pl", jitter_src, false);
+        let _ = fs_create_internal("/pulselang/telemetry.pl", telemetry_src, false);
 
-        // Pre-compile and place standalone .bin binaries in /bin/
+        // 2. Pre-compiled standalone .bin binaries in /bin/
         let mut bin_buf = [0u8; 1024];
         if let Ok(sz) = crate::lang::compile_pulse_to_binary(stream_src, &mut bin_buf) {
             let _ = fs_create_internal("/bin/stream.bin", &bin_buf[..sz], false);
