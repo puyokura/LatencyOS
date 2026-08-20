@@ -109,14 +109,16 @@ impl SerialPort {
     }
 
     // Function: send_str
-    // Description: Send a string slice over the serial port.
+    // Description: Send a string slice over the serial port with clean CRLF normalization.
     // Worst-case execution time: ~1000 ns * s.len()
     pub fn send_str(&self, s: &str) {
+        let mut prev = 0u8;
         for byte in s.bytes() {
-            if byte == b'\n' {
+            if byte == b'\n' && prev != b'\r' {
                 self.send_byte(b'\r');
             }
             self.send_byte(byte);
+            prev = byte;
         }
     }
 }

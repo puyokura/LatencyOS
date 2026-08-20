@@ -4,11 +4,19 @@
 
 use crate::fs::{fs_read, fs_write};
 use crate::lang::run_pulse_script;
-use crate::serial::{SERIAL};
+use crate::serial::SERIAL;
 use crate::serial_print;
 use crate::serial_println;
 
 pub const MAX_EDITOR_BUF: usize = 4096;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditorEscState {
+    Normal,
+    Esc,
+    Csi,
+    CsiParam(u8),
+}
 
 pub struct PulseEditor {
     pub buffer: [u8; MAX_EDITOR_BUF],
@@ -20,6 +28,7 @@ pub struct PulseEditor {
     pub status_msg_len: usize,
     pub needs_redraw: bool,
     pub is_running: bool,
+    esc_state: EditorEscState,
 }
 
 impl PulseEditor {
@@ -34,6 +43,7 @@ impl PulseEditor {
             status_msg_len: 0,
             needs_redraw: true,
             is_running: false,
+            esc_state: EditorEscState::Normal,
         }
     }
 
@@ -68,14 +78,15 @@ impl PulseEditor {
         self.set_filename(filename);
         self.cursor = 0;
         self.buf_len = 0;
+        self.esc_state = EditorEscState::Normal;
 
         if let Some(data) = fs_read(filename) {
             let len = core::cmp::min(data.len(), MAX_EDITOR_BUF);
             self.buffer[..len].copy_from_slice(&data[..len]);
             self.buf_len = len;
-            self.set_status("File loaded.");
+            self.set_status("File loaded from LatencyFS.");
         } else {
-            self.set_status("New file.");
+            self.set_status("New file created.");
         }
         self.needs_redraw = true;
     }
@@ -87,10 +98,10 @@ impl PulseEditor {
         let name = self.filename_str();
         match fs_write(name, &self.buffer[..self.buf_len]) {
             Ok(()) => {
-                self.set_status("File saved successfully.");
+                self.set_status("Saved to LatencyFS.");
             }
             Err(_e) => {
-                self.set_status("Save failed!");
+                self.set_status("Save failed: Disk full or invalid name!");
             }
         }
         self.needs_redraw = true;
@@ -101,7 +112,6 @@ impl PulseEditor {
     // Worst-case execution time: ~800 ns
     pub fn insert_char(&mut self, c: u8) {
         if self.buf_len < MAX_EDITOR_BUF - 1 {
-            // Shift right
             for i in (self.cursor..self.buf_len).rev() {
                 self.buffer[i + 1] = self.buffer[i];
             }
@@ -109,6 +119,15 @@ impl PulseEditor {
             self.cursor += 1;
             self.buf_len += 1;
             self.needs_redraw = true;
+        }
+    }
+
+    // Function: insert_str
+    // Description: Insert string at cursor position (e.g. 4 spaces for Tab).
+    // Worst-case execution time: ~2000 ns
+    pub fn insert_str(&mut self, s: &[u8]) {
+        for &b in s {
+            self.insert_char(b);
         }
     }
 
@@ -126,19 +145,116 @@ impl PulseEditor {
         }
     }
 
+    // Function: delete_char_under_cursor
+    // Description: Delete character under cursor position (Delete key).
+    // Worst-case execution time: ~800 ns
+    pub fn delete_char_under_cursor(&mut self) {
+        if self.cursor < self.buf_len {
+            for i in self.cursor..self.buf_len - 1 {
+                self.buffer[i] = self.buffer[i + 1];
+            }
+            self.buf_len -= 1;
+            self.needs_redraw = true;
+        }
+    }
+
+    // Function: move_cursor_up
+    // Description: Move cursor to the same column in the previous line.
+    // Worst-case execution time: ~500 ns
+    pub fn move_cursor_up(&mut self) {
+        let (cur_line_start, col) = self.get_current_line_start_and_col();
+        if cur_line_start > 0 {
+            // Find start of previous line
+            let prev_line_end = cur_line_start - 1;
+            let mut prev_line_start = 0;
+            for i in (0..prev_line_end).rev() {
+                if self.buffer[i] == b'\n' {
+                    prev_line_start = i + 1;
+                    break;
+                }
+            }
+            let prev_line_len = prev_line_end - prev_line_start;
+            self.cursor = prev_line_start + core::cmp::min(col, prev_line_len);
+            self.needs_redraw = true;
+        }
+    }
+
+    // Function: move_cursor_down
+    // Description: Move cursor to the same column in the next line.
+    // Worst-case execution time: ~500 ns
+    pub fn move_cursor_down(&mut self) {
+        let (_cur_line_start, col) = self.get_current_line_start_and_col();
+        // Find start of next line
+        let mut next_line_start = None;
+        for i in self.cursor..self.buf_len {
+            if self.buffer[i] == b'\n' {
+                next_line_start = Some(i + 1);
+                break;
+            }
+        }
+        if let Some(start) = next_line_start {
+            if start <= self.buf_len {
+                // Find end of next line
+                let mut end = self.buf_len;
+                for i in start..self.buf_len {
+                    if self.buffer[i] == b'\n' {
+                        end = i;
+                        break;
+                    }
+                }
+                let next_line_len = end - start;
+                self.cursor = start + core::cmp::min(col, next_line_len);
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    fn get_current_line_start_and_col(&self) -> (usize, usize) {
+        let mut line_start = 0;
+        for i in (0..self.cursor).rev() {
+            if self.buffer[i] == b'\n' {
+                line_start = i + 1;
+                break;
+            }
+        }
+        (line_start, self.cursor - line_start)
+    }
+
+    pub fn get_row_col(&self) -> (usize, usize) {
+        let mut row = 1;
+        let mut col = 1;
+        for i in 0..self.cursor {
+            if self.buffer[i] == b'\n' {
+                row += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (row, col)
+    }
+
     // Function: redraw
-    // Description: Render full editor screen with ANSI color syntax highlighting.
+    // Description: Render full editor screen with ANSI color syntax highlighting and crisp alignment.
     // Worst-case execution time: ~60_000 ns
     pub fn redraw(&mut self) {
         // Clear screen and move cursor to top-left
         serial_print!("\x1b[2J\x1b[H");
 
-        // Top Status Header (Inverted Bar)
-        serial_print!("\x1b[7m LatencyOS PulseEditor | File: {} | Size: {}B | WCET Guard: ON \x1b[0m\r\n", self.filename_str(), self.buf_len);
+        let (row, col) = self.get_row_col();
 
-        // Render code lines with syntax coloring
+        // Top Status Header (Inverted Bar)
+        serial_print!(
+            "\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\r\n",
+            self.filename_str(),
+            self.buf_len,
+            row,
+            col
+        );
+
+        // Render code lines with syntax coloring and line numbers
         let mut line_num = 1;
-        serial_print!("\x1b[90m{:2} | \x1b[0m", line_num);
+        serial_print!("\x1b[90m{:3} |\x1b[0m ", line_num);
 
         let mut in_comment = false;
         let mut in_string = false;
@@ -151,7 +267,14 @@ impl PulseEditor {
                 line_num += 1;
                 in_comment = false;
                 in_string = false;
-                serial_print!("\x1b[0m\r\n\x1b[90m{:2} | \x1b[0m", line_num);
+                serial_print!("\x1b[0m\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
+                i += 1;
+                continue;
+            }
+
+            if b == b'\t' {
+                // Render tabs as 4 spaces
+                serial_print!("    ");
                 i += 1;
                 continue;
             }
@@ -197,7 +320,7 @@ impl PulseEditor {
                 || self.match_keyword_at(i, b"or")
             {
                 let len = self.get_word_len(i);
-                serial_print!("\x1b[36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
                 continue;
             }
@@ -212,7 +335,7 @@ impl PulseEditor {
                 || self.match_keyword_at(i, b"println")
             {
                 let len = self.get_word_len(i);
-                serial_print!("\x1b[35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
                 continue;
             }
@@ -220,7 +343,7 @@ impl PulseEditor {
             // Number / Time Literal highlighting (Yellow)
             if b.is_ascii_digit() {
                 let len = self.get_time_literal_len(i);
-                serial_print!("\x1b[33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                serial_print!("\x1b[1;33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
                 i += len;
                 continue;
             }
@@ -250,9 +373,8 @@ impl PulseEditor {
 
     fn match_keyword_at(&self, pos: usize, kw: &[u8]) -> bool {
         if pos + kw.len() <= self.buf_len && &self.buffer[pos..pos + kw.len()] == kw {
-            // Check boundary
             let after = pos + kw.len();
-            if after >= self.buf_len || !self.buffer[after].is_ascii_alphanumeric() && self.buffer[after] != b'.' && self.buffer[after] != b'_' {
+            if after >= self.buf_len || (!self.buffer[after].is_ascii_alphanumeric() && self.buffer[after] != b'.' && self.buffer[after] != b'_') {
                 return true;
             }
         }
@@ -269,7 +391,7 @@ impl PulseEditor {
 
     fn get_time_literal_len(&self, pos: usize) -> usize {
         let mut len = 0;
-        while pos + len < self.buf_len && (self.buffer[pos + len].is_ascii_alphanumeric()) {
+        while pos + len < self.buf_len && self.buffer[pos + len].is_ascii_alphanumeric() {
             len += 1;
         }
         len
@@ -302,7 +424,7 @@ impl PulseEditor {
 pub static mut EDITOR: PulseEditor = PulseEditor::new();
 
 // Function: start_editor
-// Description: Launch full-screen interactive PulseEditor on Core 0.
+// Description: Launch full-screen interactive PulseEditor on Core 0 with stateful escape sequence parsing.
 // Worst-case execution time: Variable (user interactive loop)
 pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
     unsafe {
@@ -312,82 +434,152 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
         while EDITOR.is_running {
             if let Some(b) = SERIAL.read_byte_nonblocking() {
-                match b {
-                    // Ctrl+Q: Quit editor
-                    0x11 => {
-                        EDITOR.is_running = false;
-                        serial_print!("\x1b[2J\x1b[H");
-                        break;
+                match EDITOR.esc_state {
+                    EditorEscState::Normal => {
+                        match b {
+                            // Escape character
+                            0x1B => {
+                                EDITOR.esc_state = EditorEscState::Esc;
+                            }
+
+                            // Ctrl+Q: Quit editor
+                            0x11 => {
+                                EDITOR.is_running = false;
+                                serial_print!("\x1b[2J\x1b[H");
+                                break;
+                            }
+
+                            // Ctrl+S: Save file
+                            0x13 => {
+                                EDITOR.save_file();
+                                EDITOR.redraw();
+                            }
+
+                            // Ctrl+R: Run/Compile code
+                            0x12 => {
+                                EDITOR.run_code(tsc_freq_hz);
+                                EDITOR.redraw();
+                            }
+
+                            // Ctrl+C: Clear buffer
+                            0x03 => {
+                                EDITOR.buf_len = 0;
+                                EDITOR.cursor = 0;
+                                EDITOR.set_status("Buffer cleared.");
+                                EDITOR.redraw();
+                            }
+
+                            // Tab: Insert 4 spaces
+                            b'\t' => {
+                                EDITOR.insert_str(b"    ");
+                                EDITOR.redraw();
+                            }
+
+                            // Backspace
+                            0x08 | 0x7F => {
+                                EDITOR.delete_char_backspace();
+                                EDITOR.redraw();
+                            }
+
+                            // Enter
+                            b'\r' | b'\n' => {
+                                EDITOR.insert_char(b'\n');
+                                EDITOR.redraw();
+                            }
+
+                            // Printable ASCII
+                            0x20..=0x7E => {
+                                EDITOR.insert_char(b);
+                                EDITOR.redraw();
+                            }
+
+                            _ => {}
+                        }
                     }
 
-                    // Ctrl+S: Save file
-                    0x13 => {
-                        EDITOR.save_file();
-                        EDITOR.redraw();
+                    EditorEscState::Esc => {
+                        if b == b'[' {
+                            EDITOR.esc_state = EditorEscState::Csi;
+                        } else {
+                            EDITOR.esc_state = EditorEscState::Normal;
+                        }
                     }
 
-                    // Ctrl+R: Run/Compile code
-                    0x12 => {
-                        EDITOR.run_code(tsc_freq_hz);
-                        EDITOR.redraw();
-                    }
+                    EditorEscState::Csi => {
+                        match b {
+                            // Up Arrow
+                            b'A' => {
+                                EDITOR.move_cursor_up();
+                                EDITOR.redraw();
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
 
-                    // Ctrl+C: Clear buffer
-                    0x03 => {
-                        EDITOR.buf_len = 0;
-                        EDITOR.cursor = 0;
-                        EDITOR.set_status("Buffer cleared.");
-                        EDITOR.redraw();
-                    }
+                            // Down Arrow
+                            b'B' => {
+                                EDITOR.move_cursor_down();
+                                EDITOR.redraw();
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
 
-                    // Backspace / Delete
-                    0x08 | 0x7F => {
-                        EDITOR.delete_char_backspace();
-                        EDITOR.redraw();
-                    }
+                            // Right Arrow
+                            b'C' => {
+                                if EDITOR.cursor < EDITOR.buf_len {
+                                    EDITOR.cursor += 1;
+                                    EDITOR.redraw();
+                                }
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
 
-                    // Enter
-                    b'\r' | b'\n' => {
-                        EDITOR.insert_char(b'\n');
-                        EDITOR.redraw();
-                    }
+                            // Left Arrow
+                            b'D' => {
+                                if EDITOR.cursor > 0 {
+                                    EDITOR.cursor -= 1;
+                                    EDITOR.redraw();
+                                }
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
 
-                    // ANSI Escape sequences (e.g. Arrow keys)
-                    0x1B => {
-                        if let Some(b2) = SERIAL.read_byte_nonblocking() {
-                            if b2 == b'[' {
-                                if let Some(b3) = SERIAL.read_byte_nonblocking() {
-                                    match b3 {
-                                        b'A' => { // Up
-                                            EDITOR.cursor = EDITOR.cursor.saturating_sub(20);
-                                            EDITOR.redraw();
-                                        }
-                                        b'B' => { // Down
-                                            EDITOR.cursor = core::cmp::min(EDITOR.cursor + 20, EDITOR.buf_len);
-                                            EDITOR.redraw();
-                                        }
-                                        b'C' => { // Right
-                                            EDITOR.cursor = core::cmp::min(EDITOR.cursor + 1, EDITOR.buf_len);
-                                            EDITOR.redraw();
-                                        }
-                                        b'D' => { // Left
-                                            EDITOR.cursor = EDITOR.cursor.saturating_sub(1);
-                                            EDITOR.redraw();
-                                        }
-                                        _ => {}
+                            // Home
+                            b'H' | b'1' => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                EDITOR.cursor = start;
+                                EDITOR.redraw();
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
+
+                            // End
+                            b'F' | b'4' => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                let mut end = EDITOR.buf_len;
+                                for i in start..EDITOR.buf_len {
+                                    if EDITOR.buffer[i] == b'\n' {
+                                        end = i;
+                                        break;
                                     }
                                 }
+                                EDITOR.cursor = end;
+                                EDITOR.redraw();
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
+
+                            // Delete key sequence \x1b[3~
+                            b'3' => {
+                                EDITOR.esc_state = EditorEscState::CsiParam(3);
+                            }
+
+                            _ => {
+                                EDITOR.esc_state = EditorEscState::Normal;
                             }
                         }
                     }
 
-                    // Printable ASCII
-                    0x20..=0x7E => {
-                        EDITOR.insert_char(b);
-                        EDITOR.redraw();
+                    EditorEscState::CsiParam(param) => {
+                        if param == 3 && b == b'~' {
+                            EDITOR.delete_char_under_cursor();
+                            EDITOR.redraw();
+                        }
+                        EDITOR.esc_state = EditorEscState::Normal;
                     }
-
-                    _ => {}
                 }
             }
             core::hint::spin_loop();

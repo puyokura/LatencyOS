@@ -78,81 +78,124 @@ fn run_cargo_build(release: bool) -> PathBuf {
         .join("kernel")
 }
 
+#[cfg(windows)]
+fn save_and_restore_console_mode<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    unsafe {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
+            fn GetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, lpMode: *mut u32) -> i32;
+            fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
+        }
+        const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
+        const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+
+        let stdin = GetStdHandle(STD_INPUT_HANDLE);
+        let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+        let mut in_mode = 0u32;
+        let mut out_mode = 0u32;
+
+        GetConsoleMode(stdin, &mut in_mode);
+        GetConsoleMode(stdout, &mut out_mode);
+
+        let res = f();
+
+        SetConsoleMode(stdin, in_mode);
+        SetConsoleMode(stdout, out_mode);
+
+        res
+    }
+}
+
+#[cfg(not(windows))]
+fn save_and_restore_console_mode<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    f()
+}
+
 fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Option<String> {
     let qemu = find_tool("qemu-system-x86_64");
     println!("[xtask] Launching QEMU with kernel: {}", kernel_elf.display());
 
-    let mut cmd = Command::new(&qemu);
-    cmd.arg("-kernel")
-        .arg(kernel_elf)
-        .arg("-cpu")
-        .arg("max")
-        .arg("-serial")
-        .arg("stdio")
-        .arg("-display")
-        .arg("none")
-        .arg("-no-reboot")
-        .arg("-no-shutdown")
-        .arg("-m")
-        .arg("128M")
-        .arg("-smp")
-        .arg("4")
-        .arg("-netdev")
-        .arg("user,id=net0")
-        .arg("-device")
-        .arg("e1000,netdev=net0")
-        .env("PATH", get_augmented_path());
+    save_and_restore_console_mode(|| {
+        let mut cmd = Command::new(&qemu);
+        cmd.arg("-kernel")
+            .arg(kernel_elf)
+            .arg("-cpu")
+            .arg("max")
+            .arg("-serial")
+            .arg("stdio")
+            .arg("-display")
+            .arg("none")
+            .arg("-no-reboot")
+            .arg("-no-shutdown")
+            .arg("-m")
+            .arg("128M")
+            .arg("-smp")
+            .arg("4")
+            .arg("-netdev")
+            .arg("user,id=net0")
+            .arg("-device")
+            .arg("e1000,netdev=net0")
+            .env("PATH", get_augmented_path());
 
-    if !capture_output {
-        let status = cmd.status().expect("Failed to run QEMU");
-        println!("[xtask] QEMU exited with status: {}", status);
-        None
-    } else {
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        if !capture_output {
+            let status = cmd.status().expect("Failed to run QEMU");
+            println!("[xtask] QEMU exited with status: {}", status);
+            None
+        } else {
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
-        let stdout = child.stdout.take().expect("Failed to capture stdout");
-        let reader = BufReader::new(stdout);
+            let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+            let stdout = child.stdout.take().expect("Failed to capture stdout");
+            let reader = BufReader::new(stdout);
 
-        let mut output_lines = Vec::new();
-        let start_time = Instant::now();
+            let mut output_lines = Vec::new();
+            let start_time = Instant::now();
 
-        // Read lines in non-blocking fashion with timeout
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = tx.send(l);
-                } else {
+            // Read lines in non-blocking fashion with timeout
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                for line in reader.lines() {
+                    if let Ok(l) = line {
+                        let _ = tx.send(l);
+                    } else {
+                        break;
+                    }
+                }
+            });
+
+            loop {
+                if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
+                    println!("{}", line);
+                    let is_complete = line.contains("Interactive Control Shell") || line.contains("Control Shell Ready") || line.contains("initialization complete");
+                    output_lines.push(line);
+                    if is_complete {
+                        // Small delay to allow prompt to output
+                        std::thread::sleep(Duration::from_millis(300));
+                        break;
+                    }
+                }
+
+                if start_time.elapsed() > Duration::from_secs(timeout_secs) {
+                    println!("[xtask] Timeout ({}s) reached waiting for QEMU output", timeout_secs);
                     break;
                 }
             }
-        });
 
-        loop {
-            if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
-                println!("{}", line);
-                let is_complete = line.contains("Control Shell Ready") || line.contains("initialization complete");
-                output_lines.push(line);
-                if is_complete {
-                    // Small delay to allow prompt to output
-                    std::thread::sleep(Duration::from_millis(300));
-                    break;
-                }
-            }
+            let _ = child.kill();
+            let _ = child.wait();
 
-            if start_time.elapsed() > Duration::from_secs(timeout_secs) {
-                println!("[xtask] Timeout ({}s) reached waiting for QEMU output", timeout_secs);
-                break;
-            }
+            Some(output_lines.join("\n"))
         }
-
-        let _ = child.kill();
-        let _ = child.wait();
-
-        Some(output_lines.join("\n"))
-    }
+    })
 }
 
 fn check_versions() {
