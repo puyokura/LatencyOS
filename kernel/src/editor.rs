@@ -275,8 +275,9 @@ impl PulseEditor {
     }
 
     // Function: kill_line_forward
-    // Description: Delete text from cursor to end of current line (Ctrl+K).
+    // Description: Delete text from cursor to end of current line.
     // Worst-case execution time: ~1200 ns
+    #[allow(dead_code)]
     pub fn kill_line_forward(&mut self) {
         if self.cursor >= self.buf_len {
             return;
@@ -299,8 +300,9 @@ impl PulseEditor {
     }
 
     // Function: kill_line_backward
-    // Description: Delete text from cursor back to start of line (Ctrl+U).
+    // Description: Delete text from cursor back to start of line.
     // Worst-case execution time: ~1200 ns
+    #[allow(dead_code)]
     pub fn kill_line_backward(&mut self) {
         let (start, _) = self.get_current_line_start_and_col();
         let count = self.cursor - start;
@@ -618,7 +620,7 @@ impl PulseEditor {
         }
 
         // Footer Navigation Bar
-        serial_print!("\x1b[7m [^S Save]  [^R Run]  [^Q Quit]  [^C Clear]  [^X Save&Quit]  [^K KillLine] \x1b[0m\x1b[K\x1b[J\r\n");
+        serial_print!("\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J\r\n");
 
         // Reposition terminal cursor at the exact editing position and make it visible
         serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
@@ -662,10 +664,13 @@ impl PulseEditor {
                 self.set_status("Compile/Runtime error!");
             }
         }
-        serial_println!("Press any key to return to editor...");
+        serial_println!("=======================================================================");
+        serial_println!("[Press any key to return to PulseEditor]");
+        while SERIAL.read_byte_nonblocking().is_some() {}
         while SERIAL.read_byte_nonblocking().is_none() {
             core::hint::spin_loop();
         }
+        self.needs_redraw = true;
         self.redraw();
     }
 }
@@ -679,7 +684,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
     unsafe {
         EDITOR.load_file(filename);
         EDITOR.is_running = true;
-        EDITOR.set_status("Ready. (Ctrl+S: Save, Ctrl+R: Run, Ctrl+Q: Quit, Ctrl+C: Clear)");
+        EDITOR.set_status("Ready. (^S: Save, ^R: Run, ^Q: Quit, ^X: Save&Quit, Esc C: Clear)");
         EDITOR.redraw();
 
         let mut last_was_cr = false;
@@ -726,53 +731,6 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.is_running = false;
                                 serial_print!("\x1b[2J\x1b[H");
                                 break;
-                            }
-
-                            // Ctrl+C: Clear buffer
-                            0x03 => {
-                                EDITOR.buf_len = 0;
-                                EDITOR.cursor = 0;
-                                EDITOR.set_status("Buffer cleared.");
-                                structure_changed = true;
-                            }
-
-                            // Ctrl+A: Beginning of line
-                            0x01 => {
-                                let (start, _) = EDITOR.get_current_line_start_and_col();
-                                EDITOR.cursor = start;
-                                cursor_only = true;
-                            }
-
-                            // Ctrl+E: Jump to end of line (End)
-                            0x05 => {
-                                let (start, _) = EDITOR.get_current_line_start_and_col();
-                                let mut end = EDITOR.buf_len;
-                                for idx in start..EDITOR.buf_len {
-                                    if EDITOR.buffer[idx] == b'\n' {
-                                        end = idx;
-                                        break;
-                                    }
-                                }
-                                EDITOR.cursor = end;
-                                cursor_only = true;
-                            }
-
-                            // Ctrl+K: Kill line forward
-                            0x0B => {
-                                EDITOR.kill_line_forward();
-                                line_changed = true;
-                            }
-
-                            // Ctrl+U: Kill line backward
-                            0x15 => {
-                                EDITOR.kill_line_backward();
-                                line_changed = true;
-                            }
-
-                            // Ctrl+D: Delete char under cursor
-                            0x04 => {
-                                EDITOR.delete_char_under_cursor();
-                                line_changed = true;
                             }
 
                             // Ctrl+L: Full Redraw
