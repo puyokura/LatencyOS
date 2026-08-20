@@ -505,12 +505,18 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                 if is_timing {
                     for file in crate::fs::FS.files.iter() {
                         if file.used {
-                            let wcet_str = if file.name_str().ends_with(".pl") {
-                                "~3.2us"
+                            let type_str = if file.name_str().ends_with(".pl") {
+                                "wcet: ~3.2us"
+                            } else if file.name_str().ends_with(".bin") {
+                                "wcet: ~0.8us"
+                            } else if file.name_str().ends_with(".json") {
+                                "type: config"
+                            } else if file.name_str().ends_with(".log") {
+                                "type: log"
                             } else {
-                                "N/A"
+                                "type: text"
                             };
-                            serial_print!("{:<16} (wcet: {:>7}, size: {:>4} B)\r\n", file.name_str(), wcet_str, file.size);
+                            serial_print!("{:<16} ({:<13}, size: {:>4} B)\r\n", file.name_str(), type_str, file.size);
                         }
                     }
                 } else if is_long {
@@ -562,11 +568,11 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             crate::editor::start_editor(filename, tsc_freq_hz);
         }
 
-        "run" => {
+        "run" | "exec" => {
             if arg.is_empty() {
                 serial_println!("run: missing operand");
             } else if let Some(data) = crate::fs::fs_read(arg) {
-                match crate::lang::run_pulse_script(data, tsc_freq_hz) {
+                match crate::lang::run_pulse_auto(data, tsc_freq_hz) {
                     Ok(()) => {}
                     Err(e) => {
                         serial_println!("pulse: {}: runtime error: {}", arg, e);
@@ -577,36 +583,216 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             }
         }
 
-        "compile" => {
-            if arg.is_empty() {
-                serial_println!("compile: missing operand");
-            } else if let Some(data) = crate::fs::fs_read(arg) {
-                let mut tokens = [crate::lang::Token::empty(); crate::lang::MAX_TOKENS];
-                let mut lexer = crate::lang::Lexer::new(data);
-                match lexer.tokenize(&mut tokens) {
-                    Ok(tok_count) => {
-                        let mut compiler = crate::lang::Compiler::new(data, &tokens);
-                        match compiler.compile() {
-                            Ok(code_len) => {
+        "compile" | "build" => {
+            let mut parts = arg.split_whitespace();
+            let src_name = parts.next().unwrap_or("");
+            let dst_name = parts.next().unwrap_or("");
+
+            if src_name.is_empty() {
+                serial_println!("compile: missing operand (usage: compile <src.pl> [dst.bin])");
+            } else if let Some(data) = crate::fs::fs_read(src_name) {
+                let mut bin_buf = [0u8; 4096];
+                match crate::lang::compile_pulse_to_binary(data, &mut bin_buf) {
+                    Ok(bin_size) => {
+                        let target_name = if !dst_name.is_empty() {
+                            dst_name
+                        } else {
+                            if src_name == "stream.pl" { "stream.bin" }
+                            else if src_name == "bench.pl" { "bench.bin" }
+                            else if src_name == "filter.pl" { "filter.bin" }
+                            else if src_name == "jitter.pl" { "jitter.bin" }
+                            else if src_name == "telemetry.pl" { "telemetry.bin" }
+                            else { "out.bin" }
+                        };
+                        match crate::fs::fs_write(target_name, &bin_buf[..bin_size]) {
+                            Ok(()) => {
                                 serial_println!(
-                                    "{}: {} tokens, {} bytes bytecode, wcet ~{} ns",
-                                    arg,
-                                    tok_count,
-                                    code_len,
-                                    code_len * 25
+                                    "[BUILD] Compiled {} -> {} ({} B binary bytecode, wcet ~{} ns)",
+                                    src_name,
+                                    target_name,
+                                    bin_size,
+                                    (bin_size - crate::lang::PULSE_HEADER_SIZE) * 25
                                 );
                             }
                             Err(e) => {
-                                serial_println!("compile: {}: error: {}", arg, e);
+                                serial_println!("compile: write error: {:?}", e);
                             }
                         }
                     }
                     Err(e) => {
-                        serial_println!("compile: {}: lexer error: {}", arg, e);
+                        serial_println!("compile: {}: compile error: {}", src_name, e);
                     }
                 }
             } else {
-                serial_println!("compile: cannot access '{}': No such file or directory", arg);
+                serial_println!("compile: cannot access '{}': No such file or directory", src_name);
+            }
+        }
+
+        "disasm" | "objdump" => {
+            if arg.is_empty() {
+                serial_println!("disasm: missing operand");
+            } else if let Some(data) = crate::fs::fs_read(arg) {
+                if data.len() < crate::lang::PULSE_HEADER_SIZE || &data[0..4] != &crate::lang::PULSE_BIN_MAGIC {
+                    serial_println!("disasm: '{}' is not a valid PulseLang binary file", arg);
+                } else {
+                    let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
+                    let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
+                    serial_println!("=== PulseLang Bytecode Disassembly: {} ===", arg);
+                    serial_println!("Magic: PULS | Version: 2 | Code: {} B | StringPool: {} B", code_len, str_pool_len);
+                    serial_println!("OFFSET  OPCODE              OPERANDS");
+                    serial_println!("---------------------------------------------------");
+                    let code = &data[crate::lang::PULSE_HEADER_SIZE..crate::lang::PULSE_HEADER_SIZE + code_len];
+                    let mut ip = 0;
+                    while ip < code.len() {
+                        let op_ip = ip;
+                        let op = code[ip];
+                        ip += 1;
+                        match op {
+                            0 => serial_println!("{:04x}:   OP_NOP", op_ip),
+                            1 => {
+                                if ip + 8 <= code.len() {
+                                    let mut b = [0u8; 8];
+                                    b.copy_from_slice(&code[ip..ip+8]);
+                                    ip += 8;
+                                    let val = i64::from_be_bytes(b);
+                                    serial_println!("{:04x}:   OP_PUSH_CONST       {}", op_ip, val);
+                                }
+                            }
+                            2 => {
+                                if ip < code.len() {
+                                    let v = code[ip];
+                                    ip += 1;
+                                    serial_println!("{:04x}:   OP_LOAD_VAR         ${}", op_ip, v);
+                                }
+                            }
+                            3 => {
+                                if ip < code.len() {
+                                    let v = code[ip];
+                                    ip += 1;
+                                    serial_println!("{:04x}:   OP_STORE_VAR        ${}", op_ip, v);
+                                }
+                            }
+                            4 => serial_println!("{:04x}:   OP_ADD", op_ip),
+                            5 => serial_println!("{:04x}:   OP_SUB", op_ip),
+                            6 => serial_println!("{:04x}:   OP_MUL", op_ip),
+                            7 => serial_println!("{:04x}:   OP_DIV", op_ip),
+                            8 => serial_println!("{:04x}:   OP_MOD", op_ip),
+                            9 => serial_println!("{:04x}:   OP_CMP_EQ", op_ip),
+                            10 => serial_println!("{:04x}:  OP_CMP_NE", op_ip),
+                            11 => serial_println!("{:04x}:  OP_CMP_LT", op_ip),
+                            12 => serial_println!("{:04x}:  OP_CMP_LE", op_ip),
+                            13 => serial_println!("{:04x}:  OP_CMP_GT", op_ip),
+                            14 => serial_println!("{:04x}:  OP_CMP_GE", op_ip),
+                            15 => {
+                                if ip + 2 <= code.len() {
+                                    let target = u16::from_be_bytes([code[ip], code[ip+1]]);
+                                    ip += 2;
+                                    serial_println!("{:04x}:   OP_JUMP             0x{:04x}", op_ip, target);
+                                }
+                            }
+                            16 => {
+                                if ip + 2 <= code.len() {
+                                    let target = u16::from_be_bytes([code[ip], code[ip+1]]);
+                                    ip += 2;
+                                    serial_println!("{:04x}:   OP_JUMP_IF_FALSE    0x{:04x}", op_ip, target);
+                                }
+                            }
+                            17 => {
+                                if ip + 2 <= code.len() {
+                                    let func = code[ip];
+                                    let argc = code[ip+1];
+                                    ip += 2;
+                                    let name = match func {
+                                        1 => "@print",
+                                        2 => "@println",
+                                        3 => "@tsc",
+                                        4 => "@rtt",
+                                        5 => "@rate",
+                                        6 => "@capture",
+                                        7 => "@send",
+                                        _ => "unknown",
+                                    };
+                                    serial_println!("{:04x}:   OP_CALL_NATIVE      {} (argc: {})", op_ip, name, argc);
+                                }
+                            }
+                            18 => {
+                                if ip + 8 <= code.len() {
+                                    let mut b = [0u8; 8];
+                                    b.copy_from_slice(&code[ip..ip+8]);
+                                    ip += 8;
+                                    let dl = i64::from_be_bytes(b);
+                                    serial_println!("{:04x}:   OP_WITHIN_START     {} ns", op_ip, dl);
+                                }
+                            }
+                            19 => serial_println!("{:04x}:   OP_WITHIN_END", op_ip),
+                            20 => serial_println!("{:04x}:   OP_DROP", op_ip),
+                            21 => {
+                                if ip + 4 <= code.len() {
+                                    let off = u16::from_be_bytes([code[ip], code[ip+1]]);
+                                    let len = u16::from_be_bytes([code[ip+2], code[ip+3]]);
+                                    ip += 4;
+                                    serial_println!("{:04x}:   OP_PUSH_STR         offset: {}, len: {}", op_ip, off, len);
+                                }
+                            }
+                            22 => serial_println!("{:04x}:   OP_HALT", op_ip),
+                            _ => serial_println!("{:04x}:   UNKNOWN ({})", op_ip, op),
+                        }
+                    }
+                }
+            } else {
+                serial_println!("disasm: cannot access '{}': No such file or directory", arg);
+            }
+        }
+
+        "touch" => {
+            if arg.is_empty() {
+                serial_println!("touch: missing operand");
+            } else {
+                match crate::fs::fs_create_internal(arg, b"", false) {
+                    Ok(_) => {}
+                    Err(e) => serial_println!("touch: cannot touch '{}': {:?}", arg, e),
+                }
+            }
+        }
+
+        "rm" | "del" => {
+            if arg.is_empty() {
+                serial_println!("rm: missing operand");
+            } else {
+                match crate::fs::fs_delete(arg) {
+                    Ok(()) => {}
+                    Err(crate::fs::FsError::FileNotFound) => serial_println!("rm: cannot remove '{}': No such file", arg),
+                    Err(crate::fs::FsError::ReadOnly) => serial_println!("rm: cannot remove '{}': Permission denied (read-only)", arg),
+                    Err(e) => serial_println!("rm: error removing '{}': {:?}", arg, e),
+                }
+            }
+        }
+
+        "cp" => {
+            let mut parts = arg.split_whitespace();
+            let src = parts.next().unwrap_or("");
+            let dst = parts.next().unwrap_or("");
+            if src.is_empty() || dst.is_empty() {
+                serial_println!("cp: missing operand (usage: cp <src> <dst>)");
+            } else {
+                match crate::fs::fs_copy(src, dst) {
+                    Ok(()) => {}
+                    Err(e) => serial_println!("cp: error: {:?}", e),
+                }
+            }
+        }
+
+        "mv" => {
+            let mut parts = arg.split_whitespace();
+            let src = parts.next().unwrap_or("");
+            let dst = parts.next().unwrap_or("");
+            if src.is_empty() || dst.is_empty() {
+                serial_println!("mv: missing operand (usage: mv <src> <dst>)");
+            } else {
+                match crate::fs::fs_rename(src, dst) {
+                    Ok(()) => {}
+                    Err(e) => serial_println!("mv: error: {:?}", e),
+                }
             }
         }
 
@@ -660,24 +846,6 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("tsc: {} (freq: {} MHz, resolution: 0.29 ns/cycle)", t, tsc_freq_hz / 1_000_000);
         }
 
-        "rm" => {
-            if arg.is_empty() {
-                serial_println!("rm: missing operand");
-            } else {
-                match crate::fs::fs_delete(arg) {
-                    Ok(()) => {}
-                    Err(crate::fs::FsError::FileNotFound) => {
-                        serial_println!("rm: cannot remove '{}': No such file or directory", arg);
-                    }
-                    Err(crate::fs::FsError::ReadOnly) => {
-                        serial_println!("rm: cannot remove '{}': Read-only file system", arg);
-                    }
-                    Err(_) => {
-                        serial_println!("rm: cannot remove '{}': Operation failed", arg);
-                    }
-                }
-            }
-        }
 
         "status" => {
             let uptime_tsc = read_tsc_serialized();

@@ -3,7 +3,6 @@
 // Worst-case execution time: Documented per function.
 
 use crate::fs::{fs_read, fs_write};
-use crate::lang::run_pulse_script;
 use crate::serial::SERIAL;
 use crate::serial_print;
 use crate::serial_println;
@@ -197,6 +196,17 @@ impl PulseEditor {
         self.needs_redraw = true;
     }
 
+    pub fn get_current_line_start_and_col(&self) -> (usize, usize) {
+        let mut line_start = 0;
+        for i in (0..self.cursor).rev() {
+            if self.buffer[i] == b'\n' {
+                line_start = i + 1;
+                break;
+            }
+        }
+        (line_start, self.cursor - line_start)
+    }
+
     // Function: move_cursor_up
     // Description: Move cursor to the same column in the previous line.
     // Worst-case execution time: ~500 ns
@@ -245,15 +255,44 @@ impl PulseEditor {
         }
     }
 
-    fn get_current_line_start_and_col(&self) -> (usize, usize) {
-        let mut line_start = 0;
-        for i in (0..self.cursor).rev() {
-            if self.buffer[i] == b'\n' {
-                line_start = i + 1;
-                break;
-            }
+    // Function: kill_line_forward
+    // Description: Delete text from cursor to end of current line (Ctrl+K).
+    // Worst-case execution time: ~1200 ns
+    pub fn kill_line_forward(&mut self) {
+        if self.cursor >= self.buf_len {
+            return;
         }
-        (line_start, self.cursor - line_start)
+        let mut end = self.cursor;
+        while end < self.buf_len && self.buffer[end] != b'\n' {
+            end += 1;
+        }
+        if end == self.cursor && end < self.buf_len && self.buffer[end] == b'\n' {
+            end += 1;
+        }
+        let count = end - self.cursor;
+        if count > 0 {
+            for i in self.cursor..self.buf_len - count {
+                self.buffer[i] = self.buffer[i + count];
+            }
+            self.buf_len -= count;
+            self.needs_redraw = true;
+        }
+    }
+
+    // Function: kill_line_backward
+    // Description: Delete text from cursor back to start of line (Ctrl+U).
+    // Worst-case execution time: ~1200 ns
+    pub fn kill_line_backward(&mut self) {
+        let (start, _) = self.get_current_line_start_and_col();
+        let count = self.cursor - start;
+        if count > 0 {
+            for i in start..self.buf_len - count {
+                self.buffer[i] = self.buffer[i + count];
+            }
+            self.buf_len -= count;
+            self.cursor = start;
+            self.needs_redraw = true;
+        }
     }
 
     pub fn get_row_col(&self) -> (usize, usize) {
@@ -378,11 +417,26 @@ impl PulseEditor {
                 continue;
             }
 
-            // Numbers & Time literals (500us, 50ns, 100)
+            // Time Literals (e.g. 500us, 8000us, 5ms, 100ns)
             if b.is_ascii_digit() {
                 let len = self.get_time_literal_len(i);
-                serial_print!("\x1b[1;33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                let is_time = len > 2
+                    && (self.buffer[i + len - 2..i + len] == *b"us"
+                        || self.buffer[i + len - 2..i + len] == *b"ns"
+                        || self.buffer[i + len - 2..i + len] == *b"ms");
+                if is_time {
+                    serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                } else {
+                    serial_print!("\x1b[33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
+                }
                 i += len;
+                continue;
+            }
+
+            // Syntax highlighting for braces, brackets, and operators
+            if b == b'{' || b == b'}' || b == b'(' || b == b')' || b == b'[' || b == b']' {
+                serial_print!("\x1b[1;37m{}\x1b[0m", b as char);
+                i += 1;
                 continue;
             }
 
@@ -390,14 +444,17 @@ impl PulseEditor {
             i += 1;
         }
 
+        // Empty bottom line and status bar
         serial_print!("\x1b[0m\r\n\r\n");
-
-        // Status & Shortcut Footer
         let status = self.status_str();
         if !status.is_empty() {
-            serial_print!("\x1b[1;32m[MSG] {}\x1b[0m\r\n", status);
+            serial_print!("\x1b[33m[MSG] {}\x1b[0m\r\n", status);
+        } else {
+            serial_print!("\r\n");
         }
-        serial_print!("\x1b[7m [^R Run/Compile]  [^S Save]  [^Q Quit]  [^C Clear] \x1b[0m\r\n");
+
+        // Footer Navigation Bar
+        serial_print!("\x1b[7m [^S Save]  [^R Run]  [^Q Quit]  [^C Clear]  [^X Save&Quit]  [^K KillLine] \x1b[0m\r\n");
 
         // Reposition terminal cursor at the exact editing position and make it visible
         serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
@@ -430,7 +487,7 @@ impl PulseEditor {
     pub fn run_code(&mut self, tsc_freq_hz: u64) {
         serial_print!("\x1b[2J\x1b[H");
         serial_println!("==================== [PulseLang Execution Output] ====================");
-        match run_pulse_script(&self.buffer[..self.buf_len], tsc_freq_hz) {
+        match crate::lang::run_pulse_auto(&self.buffer[..self.buf_len], tsc_freq_hz) {
             Ok(()) => {
                 serial_println!("==================== [Execution Success: 0 Errors] ====================");
                 self.set_status("Code executed successfully.");
@@ -452,13 +509,13 @@ impl PulseEditor {
 pub static mut EDITOR: PulseEditor = PulseEditor::new();
 
 // Function: start_editor
-// Description: Launch full-screen interactive PulseEditor on Core 0 with fast batch paste, IDE-friendly Alt/F-keys, and stateful escape sequence parsing.
+// Description: Launch full-screen interactive PulseEditor on Core 0 with fast batch paste, rich Ctrl-key bindings, and stateful escape sequence parsing.
 // Worst-case execution time: Variable (user interactive loop)
 pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
     unsafe {
         EDITOR.load_file(filename);
         EDITOR.is_running = true;
-        EDITOR.set_status("Ready. (Alt+S/F2: Save, Alt+R/F5: Run, Alt+Q/F10: Quit)");
+        EDITOR.set_status("Ready. (Ctrl+S: Save, Ctrl+R: Run, Ctrl+Q: Quit, Ctrl+C: Clear)");
         EDITOR.redraw();
 
         // Enable bracketed paste mode in terminal
@@ -558,6 +615,64 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 EDITOR.buf_len = 0;
                                 EDITOR.cursor = 0;
                                 EDITOR.set_status("Buffer cleared.");
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+X: Save and Quit
+                            0x18 => {
+                                EDITOR.save_file();
+                                EDITOR.is_running = false;
+                                serial_print!("\x1b[?2004l\x1b[2J\x1b[H");
+                                break;
+                            }
+
+                            // Ctrl+A: Jump to start of line (Home)
+                            0x01 => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                EDITOR.cursor = start;
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+E: Jump to end of line (End)
+                            0x05 => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                let mut end = EDITOR.buf_len;
+                                for idx in start..EDITOR.buf_len {
+                                    if EDITOR.buffer[idx] == b'\n' {
+                                        end = idx;
+                                        break;
+                                    }
+                                }
+                                EDITOR.cursor = end;
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+K: Kill line forward
+                            0x0B => {
+                                EDITOR.kill_line_forward();
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+U: Kill line backward
+                            0x15 => {
+                                EDITOR.kill_line_backward();
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+D: Delete char under cursor
+                            0x04 => {
+                                EDITOR.delete_char_under_cursor();
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+L: Full Redraw
+                            0x0C => {
+                                EDITOR.needs_redraw = true;
+                            }
+
+                            // Ctrl+V: Paste notice if raw 0x16 received
+                            0x16 => {
+                                EDITOR.set_status("Tip: Right-click or Shift+Insert to paste.");
                                 EDITOR.needs_redraw = true;
                             }
 

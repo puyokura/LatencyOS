@@ -1278,3 +1278,77 @@ pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str
     let mut vm = VM::new(&compiler.code[..compiler.code_len], &compiler.str_pool[..compiler.str_pool_len]);
     vm.run(tsc_freq_hz)
 }
+
+pub const PULSE_BIN_MAGIC: [u8; 4] = *b"PULS";
+pub const PULSE_BIN_VERSION: u16 = 2;
+pub const PULSE_HEADER_SIZE: usize = 12;
+
+// Function: compile_pulse_to_binary
+// Description: Compile PulseLang source code into binary bytecode format.
+// Worst-case execution time: ~60_000 ns
+pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, &'static str> {
+    let mut tokens = [Token::empty(); MAX_TOKENS];
+    let mut lexer = Lexer::new(src);
+    let _tok_count = lexer.tokenize(&mut tokens)?;
+
+    let mut compiler = Compiler::new(src, &tokens);
+    let code_len = compiler.compile()?;
+    let str_pool_len = compiler.str_pool_len;
+
+    let total_size = PULSE_HEADER_SIZE + code_len + str_pool_len;
+    if total_size > out_buf.len() {
+        return Err("Binary output buffer too small");
+    }
+
+    // Header
+    out_buf[0..4].copy_from_slice(&PULSE_BIN_MAGIC);
+    out_buf[4..6].copy_from_slice(&PULSE_BIN_VERSION.to_be_bytes());
+    out_buf[6..8].copy_from_slice(&(code_len as u16).to_be_bytes());
+    out_buf[8..10].copy_from_slice(&(str_pool_len as u16).to_be_bytes());
+    out_buf[10..12].copy_from_slice(&0u16.to_be_bytes()); // Reserved
+
+    // Payload
+    out_buf[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
+    out_buf[PULSE_HEADER_SIZE + code_len..total_size].copy_from_slice(&compiler.str_pool[..str_pool_len]);
+
+    Ok(total_size)
+}
+
+// Function: run_pulse_binary
+// Description: Execute pre-compiled PulseLang binary bytecode directly in O(1) zero compilation latency.
+// Worst-case execution time: ~80_000 ns
+pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str> {
+    if bin.len() < PULSE_HEADER_SIZE {
+        return Err("Binary file too small");
+    }
+    if &bin[0..4] != &PULSE_BIN_MAGIC {
+        return Err("Invalid PulseLang binary magic");
+    }
+    let version = u16::from_be_bytes([bin[4], bin[5]]);
+    if version != PULSE_BIN_VERSION {
+        return Err("Unsupported PulseLang binary version");
+    }
+    let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+    let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+
+    if bin.len() < PULSE_HEADER_SIZE + code_len + str_pool_len {
+        return Err("Truncated binary file");
+    }
+
+    let code = &bin[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len];
+    let str_pool = &bin[PULSE_HEADER_SIZE + code_len..PULSE_HEADER_SIZE + code_len + str_pool_len];
+
+    let mut vm = VM::new(code, str_pool);
+    vm.run(tsc_freq_hz)
+}
+
+// Function: run_pulse_auto
+// Description: Automatically detect binary vs source script and execute.
+// Worst-case execution time: ~120_000 ns
+pub fn run_pulse_auto(data: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str> {
+    if data.len() >= 4 && &data[0..4] == &PULSE_BIN_MAGIC {
+        run_pulse_binary(data, tsc_freq_hz)
+    } else {
+        run_pulse_script(data, tsc_freq_hz)
+    }
+}

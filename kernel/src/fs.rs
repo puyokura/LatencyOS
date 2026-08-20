@@ -4,7 +4,7 @@
 
 use crate::tsc::read_tsc_serialized;
 
-pub const MAX_FILES: usize = 16;
+pub const MAX_FILES: usize = 32;
 pub const MAX_FILENAME_LEN: usize = 32;
 pub const MAX_FILE_SIZE: usize = 4096;
 
@@ -64,8 +64,8 @@ pub enum FsError {
 }
 
 // Function: fs_init
-// Description: Initialize LatencyFS and populate with initial default PulseLang scripts.
-// Worst-case execution time: ~15_000 ns
+// Description: Initialize LatencyFS and populate with initial default PulseLang scripts and text files.
+// Worst-case execution time: ~20_000 ns
 pub fn fs_init() {
     unsafe {
         for file in FS.files.iter_mut() {
@@ -150,6 +150,38 @@ $tsc := @tsc();
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 "#;
         let _ = fs_create_internal("telemetry.pl", telemetry_src, false);
+
+        // 6. readme.txt - Plain text guide
+        let readme_txt = br#"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)
+===================================================
+- Files are statically allocated in L1/L2 cache with zero fragmentation.
+- Supports text files (.txt, .md, .json, .log, etc.), scripts (.pl), and binaries (.bin).
+- Use 'edit <file>' to edit in PulseEditor (Ctrl+S: save, Ctrl+R: run, Ctrl+Q: quit).
+- Use 'compile <script.pl> <out.bin>' to build standalone binary bytecode.
+- Use 'run <file>' to execute either .pl scripts or .bin bytecode.
+"#;
+        let _ = fs_create_internal("readme.txt", readme_txt, false);
+
+        // 7. config.json - JSON configuration file
+        let config_json = br#"{
+  "os": "LatencyOS",
+  "version": "0.0.17",
+  "cores": 4,
+  "target_latency_us": 8000,
+  "c_state_lock": true,
+  "uart_baud": 115200
+}
+"#;
+        let _ = fs_create_internal("config.json", config_json, false);
+
+        // 8. system.log - Hardware initialization log
+        let system_log = br#"[BOOT] LatencyOS 0.0.17 x86_64 hard-realtime
+[APIC] Cores 0-3 initialized with static affinity.
+[PMD] Intel e1000 poll-mode driver active. MAC: 52:54:00:12:34:56.
+[GPU] Zero-copy frame ring ready: 1920x1080 @ 32bpp.
+[FS] LatencyFS initialized with 32 slots.
+"#;
+        let _ = fs_create_internal("system.log", system_log, false);
     }
 }
 
@@ -231,6 +263,40 @@ pub fn fs_delete(name: &str) -> Result<(), FsError> {
                 return Ok(());
             }
         }
+        Err(FsError::FileNotFound)
+    }
+}
+
+// Function: fs_rename
+// Description: Rename a file in LatencyFS.
+// Worst-case execution time: ~500 ns
+pub fn fs_rename(old_name: &str, new_name: &str) -> Result<(), FsError> {
+    if new_name.is_empty() || new_name.len() > MAX_FILENAME_LEN {
+        return Err(FsError::InvalidName);
+    }
+    unsafe {
+        for file in FS.files.iter_mut() {
+            if file.used && file.name_str() == old_name {
+                if file.read_only {
+                    return Err(FsError::ReadOnly);
+                }
+                file.name_len = new_name.len();
+                file.name[..new_name.len()].copy_from_slice(new_name.as_bytes());
+                file.modified_tsc = read_tsc_serialized();
+                return Ok(());
+            }
+        }
+        Err(FsError::FileNotFound)
+    }
+}
+
+// Function: fs_copy
+// Description: Copy a file in LatencyFS.
+// Worst-case execution time: ~1500 ns
+pub fn fs_copy(src_name: &str, dst_name: &str) -> Result<(), FsError> {
+    if let Some(data) = fs_read(src_name) {
+        fs_write(dst_name, data)
+    } else {
         Err(FsError::FileNotFound)
     }
 }
