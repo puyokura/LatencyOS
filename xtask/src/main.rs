@@ -175,7 +175,7 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             loop {
                 if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
                     println!("{}", line);
-                    let is_complete = line.contains("Interactive Control Shell") || line.contains("Control Shell Ready") || line.contains("initialization complete");
+                    let is_complete = line.contains("LatencyOS 0.0.4") || line.contains("latencyos$") || line.contains("Interactive Control Shell") || line.contains("initialization complete");
                     output_lines.push(line);
                     if is_complete {
                         // Small delay to allow prompt to output

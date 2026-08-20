@@ -210,15 +210,8 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
         CONGESTION_RATE_PCT.load(Ordering::Relaxed)
     );
 
-    // 12. Initialize LatencyFS in-memory filesystem & verify PulseLang runtime
+    // 12. Initialize LatencyFS in-memory filesystem
     fs::fs_init();
-    serial_println!("[FS] LatencyFS initialized with default PulseLang scripts.");
-    if let Some(bench_data) = fs::fs_read("bench.flow") {
-        match lang::run_pulse_script(bench_data, tsc_freq_hz) {
-            Ok(()) => serial_println!("[LANG] PulseLang Time-Native VM Self-Test (bench.flow): PASSED"),
-            Err(e) => serial_println!("[LANG] PulseLang VM Self-Test FAILED: {}", e),
-        }
-    }
 
     // 13. Initialize and start Core 0 interactive control shell
     shell::init_shell();
