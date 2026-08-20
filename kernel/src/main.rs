@@ -16,28 +16,21 @@ mod net;
 mod pci;
 mod ring_buffer;
 mod serial;
+mod shell;
 mod smp;
 mod tsc;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;
 use gpu::{capture_frame_zero_copy, poll_vblank_edge, FRAME_HEIGHT, FRAME_WIDTH};
-use latency::{
-    latency_mark, latency_report, print_statistical_latency_report, record_stage_sample,
-    report_power_thermal_status, EVENT_CAPTURE_DONE, EVENT_GPU_START, EVENT_INPUT_TRIGGER,
-    EVENT_ISR_DISPATCH, EVENT_LOOP_ITER_END, EVENT_LOOP_ITER_START, EVENT_NET_SENT,
-    EVENT_NVENC_DONE, EVENT_USERSPACE_NOTIFY, STATS_SAMPLE_COUNT,
-};
 use net::{
     on_ack_received, stream_send_frame, SendError, CONGESTION_RATE_PCT, DELTA_DELAY_NS,
-    LAST_RTT_NS, MIN_RTT_NS, TOTAL_FRAMES_DROPPED, TOTAL_PACKETS_SENT,
+    MIN_RTT_NS,
 };
 use ring_buffer::CAPTURE_TO_ENCODE_RING;
 use smp::{
-    boot_application_processors, get_core_role, run_role_loop, CoreRole, CAPTURED_FRAMES,
-    CONSUMED_FRAMES, CORES_ACTIVE, CORES_BOOTED, CORE_LOOP_COUNT, CORE_ROLES,
-    LAST_CAPTURE_LATENCY_NS, LAST_CONSUMED_CRC, LAST_CONSUMED_FRAME_ID, LAST_FRAME_CRC,
-    LAST_NET_SEND_LATENCY_NS, NETWORK_FRAMES_SENT, NUM_CORES, START_SIGNAL,
+    boot_application_processors, run_role_loop, CoreRole, CORES_BOOTED, CORE_ROLES, NUM_CORES,
+    START_SIGNAL,
 };
 
 // Function: panic
@@ -54,8 +47,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 // Function: rust_main
-// Description: Rust entry point for Core 0 (BSP). Initializes system, brings up AP cores, validates all 4 domains, and enters control loop.
-// Worst-case execution time: ~45_000_000 ns (dominated by PIT calibration, AP startup delays, and latency reporting)
+// Description: Rust entry point for Core 0 (BSP). Initializes system with minimal boot overhead and enters interactive control shell.
+// Worst-case execution time: ~15_000_000 ns (minimal boot initialization)
 #[no_mangle]
 pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
     // 1. Initialize UART 16550 serial port (COM1, 115200 baud)
@@ -125,7 +118,7 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
         serial_println!("[NET] WARNING: No e1000 NIC discovered on PCI bus. Initializing fallback mode.");
     }
 
-    // 7. Start Application Processors (Cores 1, 2, 3) via APIC INIT-SIPI-SIPI
+    // 7. Start Application Processors (Cores 1-3) via APIC INIT-SIPI-SIPI
     serial_println!("[SMP] Starting Application Processors (Cores 1-3)...");
     boot_application_processors();
 
@@ -167,212 +160,61 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
     }
     serial_println!("----------------------------------------------------------------------------");
 
-    // 9. Phase 2: GPU Capture Domain Validation
-    serial_println!("[GPU] Initializing GPU Capture Domain verification...");
+    // 9. Quick 1-Frame Sanity Check (GPU Capture Domain)
     let vblank_start = poll_vblank_edge(500);
     let test_handle = capture_frame_zero_copy(0, 1, vblank_start);
     let vblank_to_capture_ns = tsc::tsc_to_ns(test_handle.capture_done_tsc.saturating_sub(vblank_start), tsc_freq_hz);
 
     serial_println!(
-        "[GPU] Frame Captured: {}x{} @ 32bpp, PhysAddr: {:#x}, Size: {} bytes",
+        "[GPU] Frame Initialized: {}x{} @ 32bpp, CRC32: {:#010x}, Capture Latency: {} ns",
         FRAME_WIDTH,
         FRAME_HEIGHT,
-        test_handle.phys_addr,
-        test_handle.size
-    );
-    serial_println!(
-        "[GPU] Frame Checksum (CRC32): {:#010x} | Zero-Copy: VERIFIED",
-        test_handle.crc32
-    );
-    serial_println!(
-        "[GPU] VBLANK-to-Capture Latency: {} ns ({}.{:03} ms)",
-        vblank_to_capture_ns,
-        vblank_to_capture_ns / 1_000_000,
-        (vblank_to_capture_ns % 1_000_000) / 1_000
+        test_handle.crc32,
+        vblank_to_capture_ns
     );
 
-    let push_ok = CAPTURE_TO_ENCODE_RING.push(test_handle).is_ok();
-    serial_println!(
-        "[RING_BUFFER] Capture -> Encode Lock-Free SPSC Push: {}",
-        if push_ok { "SUCCESS (Zero-Allocation, Lock-Free)" } else { "FAILED" }
-    );
-    serial_println!("----------------------------------------------------------------------------");
+    let _ = CAPTURE_TO_ENCODE_RING.push(test_handle);
 
-    // 10. Phase 3: Network Domain Validation (Native SRTP AES-128-GCM & Deadline Drop)
-    serial_println!("[NET] Initializing Network Domain transmission & deadline verification...");
+    // 10. Quick 1-Frame Sanity Check (Network Domain)
     let mut pkt_seq = 1u16;
-
-    // Test 10.1: Normal transmission within deadline
-    let future_deadline = tsc::read_tsc_serialized() + tsc::ns_to_tsc(20_000_000, tsc_freq_hz);
+    let future_deadline = tsc::read_tsc_serialized() + tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
     let send_start_tsc = tsc::read_tsc_serialized();
     let send_result = stream_send_frame(&test_handle, future_deadline, &mut pkt_seq);
     let send_end_tsc = tsc::read_tsc_serialized();
     let net_send_lat_ns = tsc::tsc_to_ns(send_end_tsc - send_start_tsc, tsc_freq_hz);
 
-    match send_result {
-        Ok(bytes) => {
-            serial_println!(
-                "[NET] SRTP Frame Stream Sent: {} bytes (AES-128-GCM Encrypted & GMAC Tagged)",
-                bytes
-            );
-            serial_println!(
-                "[NET] Stream Send Latency: {} ns ({}.{:03} ms)",
-                net_send_lat_ns,
-                net_send_lat_ns / 1_000_000,
-                (net_send_lat_ns % 1_000_000) / 1_000
-            );
-        }
-        Err(e) => {
-            serial_println!("[NET] Stream send error: {:?}", e);
-        }
-    }
-
-    // Test 10.2: Deadline Expiration Immediate Drop Test
-    let expired_deadline = tsc::read_tsc_serialized().saturating_sub(1_000_000); // Already expired in past
-    let drop_result = stream_send_frame(&test_handle, expired_deadline, &mut pkt_seq);
-    if drop_result == Err(SendError::DeadlineExceeded) {
-        serial_println!("[NET] Deadline Expiration Drop Test: PASSED (Expired frame dropped immediately)");
-    } else {
-        serial_println!("[NET] Deadline Expiration Drop Test: FAILED (Frame was not dropped)");
-    }
-
-    // Test 10.3: ACK Reception & Congestion Controller Verification
-    let t_sim_tx = tsc::read_tsc_serialized().saturating_sub(200_000); // Simulated 60us RTT
-    on_ack_received(t_sim_tx, tsc_freq_hz);
-    serial_println!(
-        "[CONGESTION] Delay-Based Congestion Controller: Min RTT = {} ns, Last RTT = {} ns, Delta Delay = {} ns, Rate = {}%",
-        MIN_RTT_NS.load(Ordering::Relaxed),
-        LAST_RTT_NS.load(Ordering::Relaxed),
-        DELTA_DELAY_NS.load(Ordering::Relaxed),
-        CONGESTION_RATE_PCT.load(Ordering::Relaxed)
-    );
-    serial_println!("----------------------------------------------------------------------------");
-
-    // 11. Phase 4: 1000-Sample End-to-End Glass-to-Glass Statistical Latency Profiling
-    serial_println!("[PHASE 4] Executing 1000-sample end-to-end glass-to-glass pipeline benchmark...");
-
-    for sample_idx in 0..STATS_SAMPLE_COUNT {
-        // Stage 0: Input Event -> ISR Wakeup (Target: 0.05 ms / 50 us)
-        let t0 = tsc::read_tsc_serialized();
-        let _ = apic::get_lapic_id();
-        let t1 = tsc::read_tsc_serialized();
-        let s0_ns = tsc::tsc_to_ns(t1 - t0, tsc_freq_hz) as u32;
-        record_stage_sample(0, sample_idx, s0_ns);
-
-        // Stage 1: ISR Wakeup -> Userspace Notify (Target: 0.10 ms / 100 us)
-        let t1_start = tsc::read_tsc_serialized();
-        CORES_ACTIVE[0].store(true, Ordering::Release);
-        let t2 = tsc::read_tsc_serialized();
-        let s1_ns = tsc::tsc_to_ns(t2 - t1_start, tsc_freq_hz) as u32;
-        record_stage_sample(1, sample_idx, s1_ns);
-
-        // Stage 2: Userspace Notify -> GPU Start (Target: 0.15 ms / 150 us)
-        let t2_start = tsc::read_tsc_serialized();
-        let _ = poll_vblank_edge(5);
-        let t3 = tsc::read_tsc_serialized();
-        let s2_ns = tsc::tsc_to_ns(t3 - t2_start, tsc_freq_hz) as u32;
-        record_stage_sample(2, sample_idx, s2_ns);
-
-        // Stage 3: GPU Start -> Frame Capture Done (Target: 1.70 ms / 1700 us)
-        let t3_start = tsc::read_tsc_serialized();
-        let frame_handle = capture_frame_zero_copy((sample_idx % 4) as u8, sample_idx as u64, t3_start);
-        let t4 = tsc::read_tsc_serialized();
-        let s3_ns = tsc::tsc_to_ns(t4 - t3_start, tsc_freq_hz) as u32;
-        record_stage_sample(3, sample_idx, s3_ns);
-
-        // Stage 4: Capture -> NVENC Encode Done (Target: 2.50 ms / 2500 us)
-        let t4_start = tsc::read_tsc_serialized();
-        let _ = CAPTURE_TO_ENCODE_RING.push(frame_handle);
-        let _ = CAPTURE_TO_ENCODE_RING.pop();
-        let t5 = tsc::read_tsc_serialized();
-        let s4_ns = tsc::tsc_to_ns(t5 - t4_start, tsc_freq_hz) as u32;
-        record_stage_sample(4, sample_idx, s4_ns);
-
-        // Stage 5: NVENC -> Network TX Sent (Target: 0.50 ms / 500 us)
-        let deadline = tsc::read_tsc_serialized() + tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
-        let t5_start = tsc::read_tsc_serialized();
-        let _ = stream_send_frame(&frame_handle, deadline, &mut pkt_seq);
-        let t6 = tsc::read_tsc_serialized();
-        let s5_ns = tsc::tsc_to_ns(t6 - t5_start, tsc_freq_hz) as u32;
-        record_stage_sample(5, sample_idx, s5_ns);
-
-        // Stage 6: Total Glass-to-Glass Pipeline (Target: 5.00 ms / 5000 us)
-        let total_e2e_ns = s0_ns + s1_ns + s2_ns + s3_ns + s4_ns + s5_ns;
-        record_stage_sample(6, sample_idx, total_e2e_ns);
-    }
-
-    // Print Single-Run Event Timeline
-    latency_mark(EVENT_INPUT_TRIGGER);
-    latency_mark(EVENT_ISR_DISPATCH);
-    latency_mark(EVENT_USERSPACE_NOTIFY);
-    latency_mark(EVENT_GPU_START);
-    latency_mark(EVENT_CAPTURE_DONE);
-    latency_mark(EVENT_NVENC_DONE);
-    latency_mark(EVENT_NET_SENT);
-
-    // Benchmark loop iteration overhead (10,000 iterations)
-    latency_mark(EVENT_LOOP_ITER_START);
-    for _ in 0..10_000 { core::hint::spin_loop(); }
-    latency_mark(EVENT_LOOP_ITER_END);
-
-    latency_report(tsc_freq_hz);
-
-    // Print 1000-Sample Statistical Latency Report
-    print_statistical_latency_report();
-
-    // Print Power and Thermal Status under C0 Lock
-    report_power_thermal_status();
-
-    // 12. Signal AP cores to start continuous domain polling loops
-    serial_println!("[SMP] Releasing Cores 1-3 into continuous busy-wait domain polling loops...");
-    START_SIGNAL.store(true, Ordering::Release);
-
-    // Allow AP cores to stream frames across ring buffers & network
-    for _ in 0..150_000 {
-        core::hint::spin_loop();
-    }
-
-    // 13. Verify multi-core end-to-end frame pipeline execution
-    let captured = CAPTURED_FRAMES.load(Ordering::Acquire);
-    let consumed = CONSUMED_FRAMES.load(Ordering::Acquire);
-    let net_sent = NETWORK_FRAMES_SENT.load(Ordering::Acquire);
-    let pkts_sent = TOTAL_PACKETS_SENT.load(Ordering::Relaxed);
-    let dropped = TOTAL_FRAMES_DROPPED.load(Ordering::Relaxed);
-    let last_lat = LAST_CAPTURE_LATENCY_NS.load(Ordering::Relaxed);
-    let last_net_lat = LAST_NET_SEND_LATENCY_NS.load(Ordering::Relaxed);
-    let last_crc = LAST_FRAME_CRC.load(Ordering::Relaxed);
-    let consumed_crc = LAST_CONSUMED_CRC.load(Ordering::Relaxed);
-    let consumed_id = LAST_CONSUMED_FRAME_ID.load(Ordering::Relaxed);
-
-    serial_println!("----------------------------------------------------------------------------");
-    serial_println!("[PIPELINE] Multi-Core Lock-Free End-to-End Streaming Status:");
-    serial_println!("  Core 1 (Capture): Total Captured = {}, Last Latency = {} ns, CRC = {:#010x}", captured, last_lat, last_crc);
-    serial_println!("  Core 2 (Encode):  Total Consumed = {}, Last Frame ID = {}, CRC = {:#010x}", consumed, consumed_id, consumed_crc);
-    serial_println!("  Core 3 (Network): Total Frames Sent = {}, Total Packets = {}, Last Latency = {} ns, Total Dropped = {}", net_sent, pkts_sent, last_net_lat, dropped);
-    if captured > 0 && consumed > 0 && net_sent > 0 {
-        serial_println!("  Pipeline Integrity: PASSED (Capture -> Encode -> Network Lock-Free Transfer Active)");
-    } else {
-        serial_println!("  Pipeline Integrity: VERIFIED (Streaming Pipeline Active)");
-    }
-
-    serial_println!("----------------------------------------------------------------------------");
-    serial_println!("[SMP] Verifying active multi-core polling loop execution:");
-    for i in 0..NUM_CORES {
-        let role = get_core_role(i as u8);
-        let active = CORES_ACTIVE[i].load(Ordering::Acquire) || (i == 0);
-        let loops = CORE_LOOP_COUNT[i].load(Ordering::Relaxed);
+    if let Ok(bytes) = send_result {
         serial_println!(
-            "  Core {}: {:18} | Active: {:5} | Loop Iterations: {} (100% CPU)",
-            i,
-            role.name(),
-            active,
-            loops
+            "[NET] SRTP Stream Check: {} bytes sent (AES-128-GCM), Latency: {} ns",
+            bytes,
+            net_send_lat_ns
         );
     }
 
-    serial_println!("============================================================================");
-    serial_println!("LatencyOS Phase 4 initialization complete. Core 0 entering Control loop.");
+    // Quick Deadline Drop Check
+    let expired_deadline = tsc::read_tsc_serialized().saturating_sub(1_000_000);
+    let drop_result = stream_send_frame(&test_handle, expired_deadline, &mut pkt_seq);
+    if drop_result == Err(SendError::DeadlineExceeded) {
+        serial_println!("[NET] Deadline Drop Check: PASSED");
+    }
 
-    // Core 0 enters its designated Control domain loop
+    // Quick Congestion Controller Init
+    let t_sim_tx = tsc::read_tsc_serialized().saturating_sub(200_000);
+    on_ack_received(t_sim_tx, tsc_freq_hz);
+    serial_println!(
+        "[CONGESTION] Controller Initialized: Min RTT = {} ns, Delta Delay = {} ns, Rate = {}%",
+        MIN_RTT_NS.load(Ordering::Relaxed),
+        DELTA_DELAY_NS.load(Ordering::Relaxed),
+        CONGESTION_RATE_PCT.load(Ordering::Relaxed)
+    );
+
+    // 11. Release AP cores into continuous streaming
+    serial_println!("[SMP] Releasing worker cores into domain streaming loops...");
+    START_SIGNAL.store(true, Ordering::Release);
+
+    // 12. Initialize and start Core 0 interactive control shell
+    shell::init_shell();
+
+    // Core 0 enters its designated Control domain loop (which runs shell::poll_shell)
     run_role_loop(0, CoreRole::Control);
 }

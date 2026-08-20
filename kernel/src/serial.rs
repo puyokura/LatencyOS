@@ -88,6 +88,26 @@ impl SerialPort {
         }
     }
 
+    // Function: is_data_ready
+    // Description: Check if incoming data is available in the receiver FIFO (LSR bit 0).
+    // Worst-case execution time: ~12 ns
+    #[inline]
+    pub fn is_data_ready(&self) -> bool {
+        unsafe { (inb(self.base + 5) & 0x01) != 0 }
+    }
+
+    // Function: read_byte_nonblocking
+    // Description: Read a single byte from serial port if available, without blocking.
+    // Worst-case execution time: ~20 ns
+    #[inline]
+    pub fn read_byte_nonblocking(&self) -> Option<u8> {
+        if self.is_data_ready() {
+            unsafe { Some(inb(self.base)) }
+        } else {
+            None
+        }
+    }
+
     // Function: send_str
     // Description: Send a string slice over the serial port.
     // Worst-case execution time: ~1000 ns * s.len()

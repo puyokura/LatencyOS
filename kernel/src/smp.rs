@@ -180,11 +180,12 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
 
     match role {
         // Core 0: Control Domain Loop
-        // Worst-case iteration time: ~20 ns
+        // Worst-case iteration time: ~35 ns
         // Latency budget responsibility: 0.15 ms (ISR -> Userspace completion notification)
         CoreRole::Control => {
             loop {
                 CORE_LOOP_COUNT[idx].fetch_add(1, Ordering::Relaxed);
+                crate::shell::poll_shell(3_400_000_000);
                 core::hint::spin_loop();
             }
         }

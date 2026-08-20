@@ -94,7 +94,7 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
         .arg("-no-reboot")
         .arg("-no-shutdown")
         .arg("-m")
-        .arg("256M")
+        .arg("128M")
         .arg("-smp")
         .arg("4")
         .arg("-netdev")
@@ -133,10 +133,10 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
         loop {
             if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
                 println!("{}", line);
-                let is_complete = line.contains("initialization complete");
+                let is_complete = line.contains("Control Shell Ready") || line.contains("initialization complete");
                 output_lines.push(line);
                 if is_complete {
-                    // Small delay to allow trailing output
+                    // Small delay to allow prompt to output
                     std::thread::sleep(Duration::from_millis(300));
                     break;
                 }

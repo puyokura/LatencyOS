@@ -49,6 +49,7 @@ impl AtomicLatencyRecord {
         }
     }
 
+    #[allow(dead_code)]
     fn store(&self, tsc: u64, core_id: u8, event_id: u8) {
         self.tsc.store(tsc, Ordering::Relaxed);
         self.core_id.store(core_id, Ordering::Relaxed);
@@ -56,6 +57,7 @@ impl AtomicLatencyRecord {
         self.valid.store(true, Ordering::Release);
     }
 
+    #[allow(dead_code)]
     fn load(&self) -> LatencyRecord {
         LatencyRecord {
             tsc: self.tsc.load(Ordering::Relaxed),
@@ -92,6 +94,7 @@ static mut STAGE_SAMPLES: [[u32; STATS_SAMPLE_COUNT]; NUM_PIPELINE_STAGES] =
 // Function: latency_mark
 // Description: Record current high-precision timestamp (TSC) for a specific event ID.
 // Worst-case execution time: ~35 ns
+#[allow(dead_code)]
 #[inline]
 pub fn latency_mark(event_id: u8) {
     let tsc = read_tsc_serialized();
