@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "kernel",
+    "xtask",
+]
+resolver = "2"
