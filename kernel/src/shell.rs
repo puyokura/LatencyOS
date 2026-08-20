@@ -553,12 +553,39 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                 }
             }
 
+            let mut norm_dir_buf = [0u8; 64];
+
             let cur_dir = unsafe {
-                if target_dir_len > 0 {
+                let raw = if target_dir_len > 0 {
                     core::str::from_utf8(&target_dir_buf[..target_dir_len]).unwrap_or("/")
                 } else {
                     core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/")
-                }
+                };
+
+                let trimmed = raw.trim_end_matches('/');
+                let norm_dir_len = if trimmed.is_empty() {
+                    norm_dir_buf[0] = b'/';
+                    1
+                } else if trimmed.starts_with('/') {
+                    let t_bytes = trimmed.as_bytes();
+                    norm_dir_buf[..t_bytes.len()].copy_from_slice(t_bytes);
+                    t_bytes.len()
+                } else {
+                    let base = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
+                    let t_bytes = trimmed.as_bytes();
+                    if base == "/" {
+                        norm_dir_buf[0] = b'/';
+                        norm_dir_buf[1..1 + t_bytes.len()].copy_from_slice(t_bytes);
+                        1 + t_bytes.len()
+                    } else {
+                        let b_bytes = base.as_bytes();
+                        norm_dir_buf[..b_bytes.len()].copy_from_slice(b_bytes);
+                        norm_dir_buf[b_bytes.len()] = b'/';
+                        norm_dir_buf[b_bytes.len() + 1..b_bytes.len() + 1 + t_bytes.len()].copy_from_slice(t_bytes);
+                        b_bytes.len() + 1 + t_bytes.len()
+                    }
+                };
+                core::str::from_utf8(&norm_dir_buf[..norm_dir_len]).unwrap_or("/")
             };
 
             unsafe {
@@ -569,6 +596,10 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     }
                     let name = file.name_str();
 
+                    if file.is_dir && name == cur_dir {
+                        continue;
+                    }
+
                     // Check if file is inside cur_dir
                     let (is_match, display_name) = if cur_dir == "/" {
                         if name.starts_with('/') {
@@ -578,7 +609,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             } else {
                                 (false, "")
                             }
-                        } else if !name.contains('/') {
+                        } else if !name.contains('/') && !name.is_empty() {
                             (true, name)
                         } else {
                             (false, "")
@@ -916,28 +947,29 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             } else if target == "." {
                 // No-op
             } else {
+                let trimmed_target = target.trim_end_matches('/');
                 let mut check_buf = [0u8; 64];
-                let check_path = if target.starts_with('/') {
-                    target
+                let check_path = if trimmed_target.starts_with('/') {
+                    trimmed_target
                 } else {
                     unsafe {
                         let cur = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
                         if cur == "/" {
-                            let len = 1 + target.len();
+                            let len = 1 + trimmed_target.len();
                             if len <= 64 {
                                 check_buf[0] = b'/';
-                                check_buf[1..len].copy_from_slice(target.as_bytes());
-                                core::str::from_utf8(&check_buf[..len]).unwrap_or(target)
-                            } else { target }
+                                check_buf[1..len].copy_from_slice(trimmed_target.as_bytes());
+                                core::str::from_utf8(&check_buf[..len]).unwrap_or(trimmed_target)
+                            } else { trimmed_target }
                         } else {
                             let cur_len = CURRENT_DIR_LEN;
-                            let len = cur_len + 1 + target.len();
+                            let len = cur_len + 1 + trimmed_target.len();
                             if len <= 64 {
                                 check_buf[..cur_len].copy_from_slice(&CURRENT_DIR[..cur_len]);
                                 check_buf[cur_len] = b'/';
-                                check_buf[cur_len + 1..len].copy_from_slice(target.as_bytes());
-                                core::str::from_utf8(&check_buf[..len]).unwrap_or(target)
-                            } else { target }
+                                check_buf[cur_len + 1..len].copy_from_slice(trimmed_target.as_bytes());
+                                core::str::from_utf8(&check_buf[..len]).unwrap_or(trimmed_target)
+                            } else { trimmed_target }
                         }
                     }
                 };
@@ -966,10 +998,19 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         "tree" => {
             serial_println!(".");
             unsafe {
-                for file in crate::fs::FS.files.iter() {
-                    if file.used && file.name_str().starts_with('/') {
-                        let type_suffix = if file.is_dir { "/" } else { "" };
-                        serial_println!("├── {}{}", file.name_str(), type_suffix);
+                let dirs = ["/bin", "/pulselang", "/etc", "/var", "/var/log", "/home"];
+                for &dir in dirs.iter() {
+                    serial_println!("|-- {}/", dir);
+                    for file in crate::fs::FS.files.iter() {
+                        if file.used && !file.is_dir {
+                            let name = file.name_str();
+                            if name.starts_with(dir) && name.as_bytes().get(dir.len()) == Some(&b'/') {
+                                let rel = &name[dir.len() + 1..];
+                                if !rel.contains('/') {
+                                    serial_println!("|   |-- {}", rel);
+                                }
+                            }
+                        }
                     }
                 }
             }
