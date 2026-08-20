@@ -1,0 +1,70 @@
+# LatencyOS ドキュメントポータル (日本語)
+
+LatencyOS は、汎用性を完全に排し、**「入力から出力までの最悪実行遅延（WCET）の最小化と決定論性（ジッタの完全排除）」** だけを目的関数としてゼロから設計された専用ハードリアルタイムOSです。
+
+---
+
+## 1. ドキュメント一覧
+
+| ドキュメント | 概要 | 主な内容 |
+|---|---|---|
+| [**アーキテクチャ仕様書**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/architecture.md) | OSの内部構造・コア間パイプライン | 4コア固定割当、SPSC Lock-Free通信、8.0msレイテンシ予算、C-Stateロック |
+| [**PulseLang v2 言語仕様書**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/pulselang.md) | AIネイティブ・時間駆動型DSL仕様 | 形式文法、型システム、線形型 `#handle`、WCETモデル、Bytecode ISA |
+| [**シェル & エディタガイド**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/shell_and_editor.md) | Pulse Shell & PulseEditor 操作手引 | 時間ネイティブプロンプト、`within` ガード、高速一括ペースト、キーバインド |
+| [**スクリプトクックブック**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/scripts_cookbook.md) | 実践スクリプト解説と開発レシピ | `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl` |
+
+---
+
+## 2. LatencyOS の基本設計原則
+
+1. **レイテンシ予算駆動（Latency-Budget Driven Design）**:
+   - 1080p 60fps における Glass-to-Glass（入力から表示・送信まで）8.0ms 予算を死守。
+   - 予算を超過した古いフレームは、後続遅延を悪化させないため即座に破棄（`!drop`）。
+2. **動的スケジューラ・コンテキストスイッチの完全排除**:
+   - CFS（完全公平スケジューラ）や時分割マルチタスクを廃止。
+   - 各 CPU コアを単一のパイプラインステージ（Control / Capture / Encode / Network）にハードウェア固定（Core Affinity）。
+3. **動的メモリ確保（malloc/Box）の禁止**:
+   - ブート後の実行パスにおけるヒープアロケーションをゼロに固定。
+   - すべてのバッファ・リング・ファイルシステムは起動時に静的確保。
+4. **ミューテックス・セマフォの禁止**:
+   - コア間通信は SPSC（Single-Producer Single-Consumer）Lock-Free リングバッファのみ。
+   - アトミックロックによる L3 キャッシュラインバウンスと優先度逆転を構造的に排除。
+
+---
+
+## 3. クイックスタート (Windows 11 Native)
+
+### 3.1 ツールチェーンの確認
+```powershell
+$env:PATH = 'C:\Users\User\scoop\apps\llvm\current\bin;C:\Users\User\scoop\apps\rustup\current\.cargo\bin;C:\Users\User\scoop\apps\QEMU\current;C:\Users\User\scoop\shims;' + $env:PATH
+cargo run --package xtask -- check
+```
+
+### 3.2 対話型モードで起動
+```powershell
+cargo run --package xtask -- interactive --release
+```
+
+### 3.3 基本コマンド例
+```text
+[c0|12ns] % ls -t
+stream.pl        (wcet:  ~3.2us, size:  192 B)
+bench.pl         (wcet:  ~3.2us, size:  310 B)
+filter.pl        (wcet:  ~3.2us, size:  308 B)
+jitter.pl        (wcet:  ~3.2us, size:  285 B)
+telemetry.pl     (wcet:  ~3.2us, size:  342 B)
+
+[c0|18ns] % run bench.pl
+[BENCH] Iterations: 100
+[RESULT] Sum:
+9900
+[LATENCY] Cycles:
+182
+
+[c0|24ns] % edit stream.pl
+[c0|15ns] % within 500us run filter.pl
+[c0|10ns] % timeline
+[c0|14ns] % ring
+[c0|11ns] % cores
+[c0|08ns] % exit
+```
