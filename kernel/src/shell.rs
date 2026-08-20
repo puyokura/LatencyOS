@@ -505,7 +505,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                 if is_timing {
                     for file in crate::fs::FS.files.iter() {
                         if file.used {
-                            let wcet_str = if file.name_str().ends_with(".flow") {
+                            let wcet_str = if file.name_str().ends_with(".pulse") {
                                 "~3.2us"
                             } else {
                                 "N/A"
@@ -558,7 +558,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "edit" => {
-            let filename = if arg.is_empty() { "untitled.flow" } else { arg };
+            let filename = if arg.is_empty() { "untitled.pulse" } else { arg };
             crate::editor::start_editor(filename, tsc_freq_hz);
         }
 

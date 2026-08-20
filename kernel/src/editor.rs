@@ -56,9 +56,9 @@ impl PulseEditor {
 
     pub fn filename_str(&self) -> &str {
         if self.filename_len == 0 {
-            return "untitled.flow";
+            return "untitled.pulse";
         }
-        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.flow")
+        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.pulse")
     }
 
     pub fn set_status(&mut self, msg: &str) {

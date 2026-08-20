@@ -84,23 +84,13 @@ static mut SAVED_IN_MODE: u32 = 0x0187;
 static mut SAVED_OUT_MODE: u32 = 0x0007;
 
 #[cfg(windows)]
-unsafe extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> i32 {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetStdHandle(nStdHandle: u32) -> *mut std::ffi::c_void;
-        fn SetConsoleMode(hConsoleHandle: *mut std::ffi::c_void, dwMode: u32) -> i32;
-        fn FlushConsoleInputBuffer(hConsoleInput: *mut std::ffi::c_void) -> i32;
+unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> i32 {
+    // Return 1 (TRUE) for CTRL_C_EVENT (0) and CTRL_BREAK_EVENT (1) to prevent host from killing QEMU
+    if ctrl_type == 0 || ctrl_type == 1 {
+        1
+    } else {
+        0
     }
-    const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
-    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
-
-    let stdin = GetStdHandle(STD_INPUT_HANDLE);
-    let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
-
-    SetConsoleMode(stdin, SAVED_IN_MODE);
-    SetConsoleMode(stdout, SAVED_OUT_MODE);
-    FlushConsoleInputBuffer(stdin);
-    0
 }
 
 #[cfg(windows)]
@@ -120,6 +110,10 @@ where
         }
         const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
         const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+        const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+        const ENABLE_LINE_INPUT: u32 = 0x0002;
+        const ENABLE_ECHO_INPUT: u32 = 0x0004;
+        const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
         let stdin = GetStdHandle(STD_INPUT_HANDLE);
         let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -137,7 +131,12 @@ where
             SAVED_OUT_MODE = out_mode;
         }
 
+        // Install handler that ignores host Ctrl+C so raw 0x03 reaches guest
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
+
+        // Put stdin in raw mode so Ctrl+C is transmitted as 0x03 byte instead of generating OS interrupt
+        let raw_in_mode = (in_mode & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        SetConsoleMode(stdin, raw_in_mode);
 
         let res = f();
 
