@@ -480,7 +480,7 @@ fn test_compile_error(kernel_elf: &Path) {
     let _ = tcp_stream.set_nodelay(true);
     let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
 
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -513,40 +513,15 @@ fn test_compile_error(kernel_elf: &Path) {
         false
     };
 
-    if !wait_for("[c0|", 10, &mut full_output) {
+    if !wait_for("] % ", 10, &mut full_output) {
         let _ = child.kill();
         panic!("Timeout waiting for shell prompt");
     }
+    std::thread::sleep(Duration::from_millis(100));
 
-    // Create broken script via editor
-    println!("[xtask-test] Opening editor: edit /home/err_syntax.pl");
-    full_output.clear();
-    tcp_stream.write_all(b"edit /home/err_syntax.pl\r\n").unwrap();
-    tcp_stream.flush().unwrap();
-    assert!(wait_for("PulseEditor", 5, &mut full_output), "Timed out waiting for PulseEditor");
-
-    let broken_script = "@contract: @wcet(100us) @budget(500us);\r\n$x := := 42;\r\n";
-    tcp_stream.write_all(broken_script.as_bytes()).unwrap();
-    tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-
-    // Send Save (^S = 0x13)
-    tcp_stream.write_all(&[0x13]).unwrap();
-    tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(150));
-
-    // Send Quit (^Q = 0x11)
-    tcp_stream.write_all(&[0x11]).unwrap();
-    tcp_stream.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Timed out waiting for shell prompt after editor quit");
-
-    // Compile broken script
-    full_output.clear();
-    println!("[xtask-test] Running: compile /home/err_syntax.pl");
-    tcp_stream.write_all(b"compile /home/err_syntax.pl\r\n").unwrap();
-    tcp_stream.flush().unwrap();
-    assert!(wait_for("[ERROR_CODE]:", 5, &mut full_output), "Timed out waiting for compiler error diagnostic. Output:\n{}", full_output);
-    assert!(wait_for("[c0|", 5, &mut full_output), "Timed out waiting for shell prompt after diagnostic");
+    // Compile broken script with syntax error
+    println!("[xtask-test] Running: compile /pulselang/err_syntax.pl /bin/err_syntax.bin");
+    send_test_cmd(&mut tcp_stream, "compile /pulselang/err_syntax.pl /bin/err_syntax.bin", "[ERROR_CODE]:", &rx, &mut full_output);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -1117,13 +1092,8 @@ fn send_test_cmd(
     use std::io::Write;
     std::thread::sleep(Duration::from_millis(50));
     full_out.clear();
-    for chunk in cmd.as_bytes().chunks(4) {
-        stream.write_all(chunk).unwrap();
-        stream.flush().unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    std::thread::sleep(Duration::from_millis(5));
-    stream.write_all(b"\r\n").unwrap();
+    let cmd_line = format!("{}\r\n", cmd);
+    stream.write_all(cmd_line.as_bytes()).unwrap();
     stream.flush().unwrap();
 
     let start = Instant::now();
@@ -1387,9 +1357,14 @@ fn test_standalone_exe() {
     assert!(wait_for("On branch main", 5, &mut full_output), "Failed git status execution");
 
     println!("[xtask-test] 5. Testing compile command: compile /pulselang/echo.pl /bin/my_echo.bin");
+    full_output.clear();
     stdin.write_all(b"compile /pulselang/echo.pl /bin/my_echo.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compile execution");
+    let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    if !res {
+        println!("[DEBUG_OUTPUT for compile]:\n{}", full_output);
+    }
+    assert!(res, "Failed compile execution");
 
     println!("[xtask-test] 6. Testing disasm command: disasm /bin/my_echo.bin");
     stdin.write_all(b"disasm /bin/my_echo.bin\r\n").unwrap();
@@ -1488,7 +1463,350 @@ fn test_standalone_exe() {
     assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 5, &mut full_output), "Failed compile-time static WCET rejection");
     assert!(full_output.contains("Static loop WCET exceeds MAX_VM_STEPS"), "Failed error message check");
 
-    println!("[xtask-test] 16. Sending poweroff command...");
+    println!("[xtask-test] 16. Testing Phase 10-2 fixed-size array operations: compile /pulselang/array_test.pl /bin/array_test.bin");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/array_test.pl /bin/array_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling array_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/array_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("550", 5, &mut full_output), "Failed running array_test.bin: sum != 550");
+    assert!(full_output.contains("[ARRAY_TEST] Assertion passed!"), "Failed finding assertion passed in array_test.bin");
+
+    println!("[xtask-test] 17. Testing Phase 10-2 array out-of-bounds runtime fault: compile & run /pulselang/err_array_oob.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_array_oob.pl /bin/err_array_oob.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_array_oob.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_array_oob.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_ARRAY_OUT_OF_BOUNDS", 5, &mut full_output), "Failed array out-of-bounds runtime error check");
+    assert!(full_output.contains("Fixed-Length Array Boundary Violation"), "Failed finding fault category in diagnostic");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after array oob fault");
+
+    println!("[xtask-test] 18. Testing Phase 10-2 bitwise operations and assertions: compile & run /pulselang/bitwise_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/bitwise_test.pl /bin/bitwise_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bitwise_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/bitwise_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("55", 5, &mut full_output), "Failed bitwise $a output");
+    assert!(full_output.contains("16"), "Failed bitwise $b output");
+    assert!(full_output.contains("85"), "Failed bitwise $c output");
+    assert!(full_output.contains("[BITWISE_TEST] All assertions passed!"), "Failed assertion check in bitwise_test");
+
+    println!("[xtask-test] 19. Testing Phase 10-2 compile-time constant folding optimization: compile & disasm /pulselang/fold_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/fold_test.pl /bin/fold_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fold_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/fold_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("MOV", 5, &mut full_output), "Failed disasm fold_test.bin");
+    println!("[xtask-test] Disassembly for /bin/fold_test.bin (Constant Folded to 115):\n{}", full_output.trim());
+    assert!(full_output.contains("115"), "Failed finding folded constant 115 in disassembly");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/fold_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("115", 5, &mut full_output), "Failed executing fold_test.bin: res != 115");
+
+    println!("[xtask-test] 20. Testing Phase 10-2 @assert(false) runtime failure: compile & run /pulselang/err_assert.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_assert.pl /bin/err_assert.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_assert.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_assert.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_ASSERTION_FAILED", 5, &mut full_output), "Failed runtime assertion failure check");
+    assert!(full_output.contains("Runtime Assertion Contract Failure"), "Failed finding assertion fault category in diagnostic");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after assertion fault");
+
+    println!("[xtask-test] 21. Testing Phase 10-3 static function calls: compile, disasm & run /pulselang/fn_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/fn_test.pl /bin/fn_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fn_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/fn_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("CALL", 5, &mut full_output), "Failed disasm fn_test.bin (missing CALL opcode)");
+    assert!(full_output.contains("RET"), "Failed disasm fn_test.bin (missing RET opcode)");
+    println!("[xtask-test] Disassembly for /bin/fn_test.bin showing CALL/RET opcodes:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/fn_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[FN_TEST] All static function tests passed!", 5, &mut full_output), "Failed running fn_test.bin");
+    assert!(full_output.contains("40"), "Failed finding add(15, 25) result 40");
+    assert!(full_output.contains("100"), "Failed finding clamp upper bound 100");
+    assert!(full_output.contains("50"), "Failed finding clamp in-range 50");
+
+    println!("[xtask-test] 22. Testing Phase 10-3 Tagged Result types & unwrap: compile & run /pulselang/result_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/result_test.pl /bin/result_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling result_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/result_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[RESULT_TEST] Tagged result tests passed!", 5, &mut full_output), "Failed running result_test.bin");
+    assert!(full_output.contains("25"), "Failed finding unwrapped safe_div result 25");
+
+    println!("[xtask-test] 23. Testing Phase 10-3 Call Stack Overflow protection: compile & run /pulselang/err_stack_overflow.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_stack_overflow.pl /bin/err_stack_overflow.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_stack_overflow.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_stack_overflow.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_STACK_OVERFLOW", 5, &mut full_output), "Failed stack overflow check");
+    assert!(full_output.contains("Static Call Stack Overflow Violation"), "Failed finding stack overflow fault category");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after stack overflow fault");
+
+    println!("[xtask-test] 24. Testing Phase 10-3 Tagged Result unwrap fault: compile & run /pulselang/err_unwrap.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_unwrap.pl /bin/err_unwrap.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_unwrap.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_unwrap.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_UNWRAP_FAILED", 5, &mut full_output), "Failed unwrap fault check");
+    assert!(full_output.contains("Tagged Result Unwrap Fault"), "Failed finding unwrap fault category");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after unwrap fault");
+
+    println!("[xtask-test] 25. Testing Phase 10-4 static structs & field access: compile, disasm & run /pulselang/struct_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/struct_test.pl /bin/struct_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling struct_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/struct_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("STRUCT_DEF", 5, &mut full_output), "Failed disasm struct_test.bin (missing STRUCT_DEF)");
+    assert!(full_output.contains("STRUCT_STORE"), "Failed disasm struct_test.bin (missing STRUCT_STORE)");
+    assert!(full_output.contains("STRUCT_LOAD"), "Failed disasm struct_test.bin (missing STRUCT_LOAD)");
+    println!("[xtask-test] Disassembly for /bin/struct_test.bin showing STRUCT opcodes:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/struct_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[STRUCT_TEST] All struct tests passed!", 5, &mut full_output), "Failed running struct_test.bin");
+    assert!(full_output.contains("100"), "Failed finding pt.x = 100");
+    assert!(full_output.contains("200"), "Failed finding pt.y = 200");
+    assert!(full_output.contains("1920"), "Failed finding hdr.width = 1920");
+    assert!(full_output.contains("1080"), "Failed finding hdr.height = 1080");
+    assert!(full_output.contains("2073600"), "Failed finding calculated area = 2073600");
+
+    println!("[xtask-test] 26. Testing Phase 10-4 compile-time non-existent struct field error: compile /pulselang/err_struct_field.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_struct_field.pl /bin/err_struct_field.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_UNKNOWN_STRUCT_FIELD", 5, &mut full_output), "Failed compile-time struct field error check");
+    assert!(full_output.contains("Field does not exist on struct type"), "Failed finding struct field error message");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after compile error");
+
+    println!("[xtask-test] 27. Testing Phase 10-5 constant lookup tables in ROM/pool: compile, disasm & run /pulselang/const_table_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/const_table_test.pl /bin/const_table_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    if !res {
+        println!("[DEBUG_OUTPUT for compile const_table_test]:\n{}", full_output);
+    }
+    assert!(res, "Failed compiling const_table_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/const_table_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("TBL_DEF", 5, &mut full_output), "Failed disasm const_table_test.bin (missing TBL_DEF)");
+    assert!(full_output.contains("TBL_LOAD"), "Failed disasm const_table_test.bin (missing TBL_LOAD)");
+    println!("[xtask-test] Disassembly for /bin/const_table_test.bin showing TBL opcodes:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/const_table_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_run = wait_for("[CONST_TABLE_TEST] All const table tests passed!", 5, &mut full_output);
+    if !res_run {
+        println!("[DEBUG_OUTPUT for run const_table_test]:\n{}", full_output);
+    }
+    assert!(res_run, "Failed running const_table_test.bin");
+    assert!(full_output.contains("0"), "Failed finding table val 0");
+    assert!(full_output.contains("64"), "Failed finding table val 64");
+    assert!(full_output.contains("128"), "Failed finding table val 128");
+    assert!(full_output.contains("255"), "Failed finding table val 255");
+
+    println!("[xtask-test] 28. Testing Phase 10-5 runtime table index out of bounds violation: compile & run /pulselang/err_table_bounds.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_table_bounds.pl /bin/err_table_bounds.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_table_bounds.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_table_bounds.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_TABLE_OUT_OF_BOUNDS", 5, &mut full_output), "Failed table out of bounds check");
+    assert!(full_output.contains("Read-Only Const Table Boundary Violation"), "Failed finding table fault category");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after table fault");
+
+    println!("[xtask-test] 29. Testing Phase 10-6 inline strings & string equality comparison: compile, disasm & run /pulselang/streq_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/streq_test.pl /bin/streq_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling streq_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/streq_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("STREQ", 5, &mut full_output), "Failed disasm streq_test.bin (missing STREQ)");
+    println!("[xtask-test] Disassembly for /bin/streq_test.bin showing STREQ opcode:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/streq_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_streq = wait_for("[STREQ_TEST] All string equality tests passed!", 5, &mut full_output);
+    if !res_streq {
+        println!("[DEBUG_OUTPUT for run streq_test]:\n{}", full_output);
+    }
+    assert!(res_streq, "Failed running streq_test.bin");
+    assert!(full_output.contains("1"), "Failed finding streq eq1 val 1");
+    assert!(full_output.contains("0"), "Failed finding streq eq2 val 0");
+
+    println!("[xtask-test] 30. Testing Phase 10-7 multi-layer constant folding optimization: compile, disasm & run /pulselang/fold_ext_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/fold_ext_test.pl /bin/fold_ext_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_c = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    if !res_c {
+        println!("[DEBUG_OUTPUT for compile fold_ext_test]:\n{}", full_output);
+    }
+    assert!(res_c, "Failed compiling fold_ext_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/fold_ext_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("MOV", 5, &mut full_output), "Failed disasm fold_ext_test.bin");
+    assert!(full_output.contains("31"), "Failed finding folded const 31 in disassembly");
+    println!("[xtask-test] Disassembly for /bin/fold_ext_test.bin (Showing zero runtime ALU instructions):\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/fold_ext_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_fold = wait_for("[FOLD_EXT_TEST] All multi-layer constant folding tests passed!", 5, &mut full_output);
+    if !res_fold {
+        println!("[DEBUG_OUTPUT for run fold_ext_test]:\n{}", full_output);
+    }
+    assert!(res_fold, "Failed running fold_ext_test.bin");
+    assert!(full_output.contains("31"), "Failed finding val 31");
+
+    println!("[xtask-test] 31. Testing Ultra-Strict immutability by default & let mut: compile & run /pulselang/strict_immut_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/strict_immut_test.pl /bin/strict_immut_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling strict_immut_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/strict_immut_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[STRICT_IMMUT_TEST] Immutability and mutability invariants passed!", 5, &mut full_output), "Failed running strict_immut_test.bin");
+    assert!(full_output.contains("100"), "Failed finding val 100");
+    assert!(full_output.contains("150"), "Failed finding val 150");
+
+    println!("[xtask-test] 32. Testing compile-time rejection of immutable variable mutation: compile /pulselang/err_immut_violation.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_immut_violation.pl /bin/err_immut_violation.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_MUTABILITY_VIOLATION", 5, &mut full_output), "Failed catching ERR_MUTABILITY_VIOLATION");
+    println!("[xtask-test] Caught expected ERR_MUTABILITY_VIOLATION diagnostic");
+
+    println!("[xtask-test] 33. Testing Design-by-Contract @requires preconditions: compile & run /pulselang/contracts_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/contracts_test.pl /bin/contracts_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling contracts_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/contracts_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[CONTRACTS_TEST] All contract precondition checks passed!", 5, &mut full_output), "Failed running contracts_test.bin");
+    assert!(full_output.contains("25"), "Failed finding safe_div 25");
+
+    println!("[xtask-test] 34. Testing runtime contract precondition violation: compile & run /pulselang/err_precondition.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_precondition.pl /bin/err_precondition.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_precondition.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/err_precondition.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_PX64_ASSERTION_FAILED", 5, &mut full_output), "Failed catching ERR_PX64_ASSERTION_FAILED for contract violation");
+    println!("[xtask-test] Caught expected runtime contract assertion failure");
+
+    println!("[xtask-test] 35. Testing Exhaustive Pattern Matching on Results and Values: compile, disasm & run /pulselang/match_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/match_test.pl /bin/match_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling match_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/match_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("JNZ", 5, &mut full_output), "Failed disasm match_test.bin");
+    println!("[xtask-test] Disassembly for /bin/match_test.bin:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/match_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[MATCH_TEST] All exhaustive pattern matching tests passed!", 5, &mut full_output), "Failed running match_test.bin");
+    assert!(full_output.contains("42"), "Failed finding match val 42");
+    assert!(full_output.contains("105"), "Failed finding match err 105");
+    assert!(full_output.contains("300"), "Failed finding match state 300");
+
+    println!("[xtask-test] 36. Testing compile-time rejection of non-exhaustive match: compile /pulselang/err_non_exhaustive.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_non_exhaustive.pl /bin/err_non_exhaustive.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_NON_EXHAUSTIVE_MATCH", 5, &mut full_output), "Failed catching ERR_NON_EXHAUSTIVE_MATCH");
+    println!("[xtask-test] Caught expected ERR_NON_EXHAUSTIVE_MATCH diagnostic");
+
+    println!("[xtask-test] 37. Testing pulse-bench instruction microbenchmark...");
+    full_output.clear();
+    stdin.write_all(b"pulse-bench\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res = wait_for("Decode & Dispatch", 60, &mut full_output);
+    if !res {
+        println!("[DEBUG_OUTPUT for pulse-bench]:\n{}", full_output);
+    }
+    assert!(res, "Failed pulse-bench output");
+    assert!(full_output.contains("AND/XOR"), "Failed finding bitwise ALU benchmark");
+    assert!(full_output.contains("ARR_LOAD"), "Failed finding array load benchmark");
+    assert!(full_output.contains("STRUCT"), "Failed finding struct benchmark");
+    assert!(full_output.contains("TBL_LOAD"), "Failed finding table load benchmark");
+    assert!(full_output.contains("STREQ"), "Failed finding STREQ benchmark");
+    assert!(full_output.contains("ASSERT"), "Failed finding assert benchmark");
+    assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
+    println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
+
+    println!("[xtask-test] 38. Sending poweroff command...");
     stdin.write_all(b"poweroff\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(500));

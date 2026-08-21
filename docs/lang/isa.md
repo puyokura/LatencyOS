@@ -87,6 +87,26 @@ All `px64` instructions are 4 bytes aligned:
 | `0x14` | `WITHIN_END` | None | `14 00 00 00` | Pop deadline stack | ~2 ns |
 | `0x15` | `DROP` | None | `15 00 00 00` | If `TSC > deadline`, drop overdue frame | ~10 ns |
 | `0x16` | `HALT` | None | `16 00 00 00` | Terminate VM execution | ~1 ns |
+| `0x17` | `LDC` | `Rd, ConstIdx16` | `17 Rd Ch Cl` | `Rd = const_pool[(Ch << 8) \| Cl]` | ~2 ns |
+| `0x18` | `ADDI` | `Rd, Rs1, Imm8` | `18 Rd Rs Im` | `Rd = Rs1.wrapping_add(Im as i64)` | ~2 ns |
+| `0x19` | `SUBI` | `Rd, Rs1, Imm8` | `19 Rd Rs Im` | `Rd = Rs1.wrapping_sub(Im as i64)` | ~2 ns |
+| `0x1A` | `AND` | `Rd, Rs1, Rs2` | `1a Rd S1 S2` | `Rd = Rs1 & Rs2` (64-bit bitwise AND) | ~2 ns |
+| `0x1B` | `OR` | `Rd, Rs1, Rs2` | `1b Rd S1 S2` | `Rd = Rs1 \| Rs2` (64-bit bitwise OR) | ~2 ns |
+| `0x1C` | `XOR` | `Rd, Rs1, Rs2` | `1c Rd S1 S2` | `Rd = Rs1 ^ Rs2` (64-bit bitwise XOR) | ~2 ns |
+| `0x1D` | `SHL` | `Rd, Rs1, Rs2` | `1d Rd S1 S2` | `Rd = Rs1 << (Rs2 & 63)` (64-bit shift left) | ~2 ns |
+| `0x1E` | `SHR` | `Rd, Rs1, Rs2` | `1e Rd S1 S2` | `Rd = (Rs1 as u64 >> (Rs2 & 63)) as i64` (logical shift right) | ~2 ns |
+| `0x1F` | `ARR_DEF` | `ArrId, Len16` | `1f Ar Lh Ll` | `array_lens[Ar] = (Lh << 8) \| Ll` | ~3 ns |
+| `0x20` | `ARR_LOAD` | `Rd, ArrId, Rs_idx` | `20 Rd Ar Rs` | `Rd = array_slots[base + Rs_idx]` (bounds checked: `[0..N-1]`) | ~4 ns |
+| `0x21` | `ARR_STORE` | `ArrId, Rs_idx, Rs_val` | `21 Ar R1 R2` | `array_slots[base + R1] = R2` (bounds checked: `[0..N-1]`) | ~4 ns |
+| `0x22` | `ASSERT` | `Rs1` | `22 Rs 00 00` | If `Rs1 == 0`, halt with `ERR_PX64_ASSERTION_FAILED` | ~2 ns |
+| `0x23` | `CALL` | `Target16` | `23 00 Th Tl` | Push return IP + frame, `IP = (Th << 8) \| Tl` (depth <= 8) | ~4 ns |
+| `0x24` | `RET` | None | `24 00 00 00` | Pop return IP + restore frame, return to caller with `$rax` | ~4 ns |
+| `0x25` | `STRUCT_DEF` | `InstId, FieldCount` | `25 In Fc 00` | `struct_field_counts[In] = Fc` | ~2 ns |
+| `0x26` | `STRUCT_LOAD` | `Rd, InstId, FieldOffset` | `26 Rd In Of` | `Rd = struct_slots[base + Of]` (bounds checked: `[0..F-1]`) | ~3 ns |
+| `0x27` | `STRUCT_STORE` | `InstId, FieldOffset, Rs_val` | `27 In Of Rs` | `struct_slots[base + Of] = Rs` (bounds checked: `[0..F-1]`) | ~3 ns |
+| `0x28` | `TBL_DEF` | `TblId, Base8, Len8` | `28 Tb Ba Le` | `table_bases[Tb] = Ba, table_lens[Tb] = Le` | ~2 ns |
+| `0x29` | `TBL_LOAD` | `Rd, TblId, Rs_idx` | `29 Rd Tb Rs` | `Rd = const_pool[table_base + Rs_idx]` (bounds checked: `[0..N-1]`) | ~3 ns |
+| `0x2A` | `STREQ` | `Rd, Rs1, Rs2` | `2a Rd S1 S2` | `Rd = (str_equal(Rs1, Rs2)) ? 1 : 0` (bounded O(1) comparison) | ~5 ns |
 
 ---
 
@@ -103,6 +123,12 @@ All `px64` instructions are 4 bytes aligned:
 | `7` | `@send` | `(slot: i64) -> 1` | Transmit frame via kernel-bypass Intel e1000 PMD driver with SRTP/AES-GCM encryption. |
 | `8` | `@argc` | `() -> i64` | Return number of CLI arguments passed to script (0..8). |
 | `9` | `@arg` | `(idx: i64) -> Tagged` | Return tagged pointer reference to CLI argument at index `idx`. |
+| `10` | `@ok` | `(val: i64) -> Tagged` | Construct and return a tagged OK Result with value `val`. |
+| `11` | `@err` | `(code: i64) -> Tagged` | Construct and return a tagged Err Result with error code `code`. |
+| `12` | `@is_ok` | `(res: Tagged) -> i64`| Return `1` if result is OK, `0` if Err. |
+| `13` | `@is_err` | `(res: Tagged) -> i64`| Return `1` if result is Err, `0` if OK. |
+| `14` | `@unwrap` | `(res: Tagged) -> i64`| Extract payload from OK Result, or fail with runtime fault if Err. |
+| `15` | `@streq` | `(s1: str, s2: str) -> i64` | Compare two strings or CLI arguments for byte equality with bounded execution time. |
 
 ---
 

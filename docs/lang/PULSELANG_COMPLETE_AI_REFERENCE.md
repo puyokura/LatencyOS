@@ -45,6 +45,18 @@ PipelineDecl    ::= "@pipeline:" Identifier ("@budget(" TimeLiteral ")")? (";" |
 OnVblankDecl    ::= "@on_vblank:" Block ";"?
 
 Statement       ::= AssignStmt
+                  | LetDeclStmt
+                  | MatchStmt
+                  | PipelineDecl
+                  | ArrayDeclStmt
+                  | ArrayAssignStmt
+                  | StructDefStmt
+                  | StructDeclStmt
+                  | StructAssignStmt
+                  | ConstTableStmt
+                  | AssertStmt
+                  | FnDeclStmt
+                  | ReturnStmt
                   | CompoundAssign
                   | WithinStmt
                   | WhileStmt
@@ -53,6 +65,26 @@ Statement       ::= AssignStmt
                   | ExprStmt
                   | Block
 
+LetDeclStmt     ::= "let" "mut"? VarIdent ( ":" Identifier )? ( "=" Expression )? ";"
+MatchStmt       ::= "match" Expression "{" MatchArm+ "}"
+MatchArm        ::= Pattern "=>" ( Block | Statement ) ","?
+Pattern         ::= "Ok(" VarIdent ")"
+                  | "Err(" VarIdent ")"
+                  | "_"
+                  | Expression
+
+ConstTableStmt  ::= "const" Identifier ":" "[" "i64" ";" IntegerLiteral "]" "=" "[" ConstElemList? "]" ";"
+ConstElemList   ::= ( IntegerLiteral | TimeLiteral ) ( "," ( IntegerLiteral | TimeLiteral ) )*
+StructDefStmt   ::= "struct" Identifier "{" StructFieldList? "}" ";"?
+StructFieldList ::= Identifier ( ":" Identifier )? ( "," Identifier ( ":" Identifier )? )*
+StructDeclStmt  ::= "let" VarIdent ":" Identifier ";"
+StructAssignStmt::= VarIdent "." Identifier ( ":=" | "=" ) Expression ";"
+FnDeclStmt      ::= "fn" Identifier "(" ParamList? ")" ( "->" Identifier )? ( "@requires(" Expression ")" )* Block
+ParamList       ::= VarIdent ( "," VarIdent )*
+ReturnStmt      ::= "return" Expression? ";"
+ArrayDeclStmt   ::= "let" VarIdent ":" "[" "i64" ";" IntegerLiteral "]" ";"
+ArrayAssignStmt ::= VarIdent "[" Expression "]" ":=" Expression ";"
+AssertStmt      ::= "@assert(" Expression ")" ";"
 AssignStmt      ::= (VarIdent | HardwareIdent) ":=" Expression ";"
 CompoundAssign  ::= (VarIdent | HardwareIdent) ( "+=" | "-=" ) Expression ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
@@ -69,7 +101,11 @@ TernaryExpr     ::= LogicOrExpr ( "?" ( Block | Expression ) ":" ( Block | Expre
 LogicOrExpr     ::= LogicAndExpr ( "||" LogicAndExpr )*
 LogicAndExpr    ::= EqualityExpr ( "&&" EqualityExpr )*
 EqualityExpr    ::= RelationalExpr ( ( "==" | "!=" ) RelationalExpr )*
-RelationalExpr  ::= AdditiveExpr ( ( "<" | "<=" | ">" | ">=" ) AdditiveExpr )*
+RelationalExpr  ::= BitwiseOrExpr ( ( "<" | "<=" | ">" | ">=" ) BitwiseOrExpr )*
+BitwiseOrExpr   ::= BitwiseXorExpr ( "|" BitwiseXorExpr )*
+BitwiseXorExpr  ::= BitwiseAndExpr ( "^" BitwiseAndExpr )*
+BitwiseAndExpr  ::= ShiftExpr ( "&" ShiftExpr )*
+ShiftExpr       ::= AdditiveExpr ( ( "<<" | ">>" ) AdditiveExpr )*
 AdditiveExpr    ::= Multiplicative ( ( "+" | "-" ) Multiplicative )*
 Multiplicative  ::= UnaryExpr ( ( "*" | "/" | "%" ) UnaryExpr )*
 UnaryExpr       ::= ( "!" | "-" )? PrimaryExpr
@@ -77,12 +113,16 @@ UnaryExpr       ::= ( "!" | "-" )? PrimaryExpr
 PrimaryExpr     ::= IntegerLiteral
                   | TimeLiteral
                   | StringLiteral
+                  | VarIdent "[" Expression "]"
+                  | Identifier "[" Expression "]"
+                  | VarIdent "." Identifier
                   | VarIdent
                   | HardwareIdent
+                  | Identifier "(" ArgList? ")"
                   | IntrinsicCall
                   | "(" Expression ")"
 
-IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@print" | "@println" ) "(" ArgList? ")"
+IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@print" | "@println" | "@argc" | "@arg" | "@ok" | "@err" | "@is_ok" | "@is_err" | "@unwrap" | "@streq" ) "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
 IntegerLiteral  ::= [0-9]+

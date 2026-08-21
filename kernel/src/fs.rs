@@ -5,7 +5,7 @@
 use crate::tsc::read_tsc_serialized;
 use crate::serial_println;
 
-pub const MAX_FILES: usize = 64;
+pub const MAX_FILES: usize = 128;
 pub const MAX_FILENAME_LEN: usize = 64;
 pub const MAX_FILE_SIZE: usize = 4096;
 
@@ -353,6 +353,451 @@ for $i in 0..3000 {
 @println($sum);
 "#;
         let _ = fs_create_internal("/pulselang/err_for_wcet.pl", err_for_wcet_src, false);
+
+        let array_test_src = br#"// array_test.pl - Fixed-Size Array and Assertion Verification
+@contract: @wcet(20us) @budget(100us);
+let $buf: [i64; 10];
+for $i in 0..10 {
+    $buf[$i] := ($i + 1) * 10;
+}
+let mut $sum = 0;
+for $j in 0..10 {
+    $sum += $buf[$j];
+}
+@println("[ARRAY_TEST] Sum elements (10..100):");
+@println($sum);
+@assert($sum == 550);
+@println("[ARRAY_TEST] Assertion passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/array_test.pl", array_test_src, false);
+
+        let err_array_oob_src = br#"// err_array_oob.pl - Intentional Array Out-Of-Bounds Fault
+@contract: @wcet(10us) @budget(50us);
+let $buf: [i64; 4];
+$buf[0] := 10;
+$buf[1] := 20;
+$buf[4] := 99;
+@println($buf[0]);
+"#;
+        let _ = fs_create_internal("/pulselang/err_array_oob.pl", err_array_oob_src, false);
+
+        let bitwise_test_src = br#"// bitwise_test.pl - Bitwise ALU and Constant Folding Verification
+@contract: @wcet(15us) @budget(60us);
+let $a = (15 & 7) | 48;
+let $b = 1 << 4;
+let $c = 255 ^ 170;
+@println("[BITWISE_TEST] $a (55):");
+@println($a);
+@println("[BITWISE_TEST] $b (16):");
+@println($b);
+@println("[BITWISE_TEST] $c (85):");
+@println($c);
+@assert($a == 55);
+@assert($b == 16);
+@assert($c == 85);
+@println("[BITWISE_TEST] All assertions passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/bitwise_test.pl", bitwise_test_src, false);
+
+        let err_assert_src = br#"// err_assert.pl - Intentional Runtime Assertion Failure
+@contract: @wcet(10us) @budget(500us);
+let $val = 100;
+@println("[ASSERT_TEST] Testing failing assertion @assert($val == 200)...");
+@assert($val == 200);
+@println("Should not reach here");
+"#;
+        let _ = fs_create_internal("/pulselang/err_assert.pl", err_assert_src, false);
+
+        let err_syntax_src = br#"// err_syntax.pl - Syntax Error Test
+@contract: @wcet(100us) @budget(500us);
+$x := := 42;
+"#;
+        let _ = fs_create_internal("/pulselang/err_syntax.pl", err_syntax_src, false);
+
+        let fold_test_src = br#"// fold_test.pl - Constant Folding Disassembly Demo
+@contract: @wcet(10us) @budget(50us);
+let $res = (10 + 20) * 3 + (100 >> 2);
+@println("[FOLD_TEST] Computed 30*3 + 25 = 115:");
+@println($res);
+@assert($res == 115);
+"#;
+        let _ = fs_create_internal("/pulselang/fold_test.pl", fold_test_src, false);
+
+        let fn_test_src = br#"// fn_test.pl - Static Function Calls and Deterministic Execution
+@contract: @wcet(20us) @budget(80us);
+
+fn add($a, $b) -> i64 {
+    return $a + $b;
+}
+
+fn clamp($val, $min_val, $max_val) -> i64 {
+    if ($val < $min_val) {
+        return $min_val;
+    }
+    if ($val > $max_val) {
+        return $max_val;
+    }
+    return $val;
+}
+
+let $sum = add(15, 25);
+@println("[FN_TEST] add(15, 25) (40):");
+@println($sum);
+@assert($sum == 40);
+
+let $c1 = clamp(150, 0, 100);
+let $c2 = clamp(-20, 0, 100);
+let $c3 = clamp(50, 0, 100);
+@println("[FN_TEST] clamp results (100, 0, 50):");
+@println($c1);
+@println($c2);
+@println($c3);
+@assert($c1 == 100);
+@assert($c2 == 0);
+@assert($c3 == 50);
+
+@println("[FN_TEST] All static function tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/fn_test.pl", fn_test_src, false);
+
+        let result_test_src = br#"// result_test.pl - Tagged Result Returns and Unwrap Intrinsics
+@contract: @wcet(20us) @budget(80us);
+
+fn safe_div($num, $denom) -> i64 {
+    if ($denom == 0) {
+        return @err(101);
+    }
+    return @ok($num / $denom);
+}
+
+let $ok_res = safe_div(100, 4);
+@println("[RESULT_TEST] Testing safe_div(100, 4)...");
+@assert(@is_ok($ok_res));
+@assert(!@is_err($ok_res));
+let $val = @unwrap($ok_res);
+@println("[RESULT_TEST] unwrapped val (25):");
+@println($val);
+@assert($val == 25);
+
+let $err_res = safe_div(100, 0);
+@println("[RESULT_TEST] Testing safe_div(100, 0)...");
+@assert(@is_err($err_res));
+@assert(!@is_ok($err_res));
+@println("[RESULT_TEST] Tagged result tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/result_test.pl", result_test_src, false);
+
+        let err_stack_overflow_src = br#"// err_stack_overflow.pl - Intentional Recursion Exceeding Call Stack
+@contract: @wcet(20us) @budget(80us);
+
+fn recurse($n) -> i64 {
+    return recurse($n + 1);
+}
+
+@println("[RECURSION_TEST] Starting infinite recursive call...");
+let $res = recurse(0);
+@println("Should not reach here");
+"#;
+        let _ = fs_create_internal("/pulselang/err_stack_overflow.pl", err_stack_overflow_src, false);
+
+        let err_unwrap_src = br#"// err_unwrap.pl - Intentional Unwrap Failure on Err Result
+@contract: @wcet(10us) @budget(50us);
+
+fn fail_op() -> i64 {
+    return @err(404);
+}
+
+let $res = fail_op();
+@println("[UNWRAP_ERR_TEST] Attempting @unwrap() on Err value...");
+let $val = @unwrap($res);
+@println("Should not reach here");
+"#;
+        let _ = fs_create_internal("/pulselang/err_unwrap.pl", err_unwrap_src, false);
+
+        let struct_test_src = br#"// struct_test.pl - Static Structs and Field Access
+@contract: @wcet(20us) @budget(80us);
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct FrameHeader {
+    width: i64,
+    height: i64,
+    stride: i64,
+    crc: i64,
+}
+
+fn calc_area($w, $h) -> i64 {
+    return $w * $h;
+}
+
+let $pt: Point;
+$pt.x := 100;
+$pt.y := 200;
+
+@println("[STRUCT_TEST] Point coordinates (100, 200):");
+@println($pt.x);
+@println($pt.y);
+@assert($pt.x == 100);
+@assert($pt.y == 200);
+
+let $hdr: FrameHeader;
+$hdr.width := 1920;
+$hdr.height := 1080;
+$hdr.stride := 7680;
+$hdr.crc := 123456;
+
+@println("[STRUCT_TEST] FrameHeader dimensions (1920, 1080):");
+@println($hdr.width);
+@println($hdr.height);
+@assert($hdr.width == 1920);
+@assert($hdr.height == 1080);
+@assert($hdr.stride == 7680);
+@assert($hdr.crc == 123456);
+
+let $area = calc_area($hdr.width, $hdr.height);
+@println("[STRUCT_TEST] Calculated area (2073600):");
+@println($area);
+@assert($area == 2073600);
+
+@println("[STRUCT_TEST] All struct tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/struct_test.pl", struct_test_src, false);
+
+        let err_struct_field_src = br#"// err_struct_field.pl - Compile-Time Non-Existent Field Access Error
+@contract: @wcet(10us) @budget(50us);
+
+struct Vector {
+    x: i64,
+    y: i64,
+}
+
+let $v: Vector;
+$v.z := 42;
+"#;
+        let _ = fs_create_internal("/pulselang/err_struct_field.pl", err_struct_field_src, false);
+
+        let const_table_test_src = br#"// const_table_test.pl - Constant Lookup Tables in ROM/Pool
+@contract: @wcet(20us) @budget(80us);
+
+const GAMMA_LUT: [i64; 4] = [0, 64, 128, 255];
+const SINE_APPROX: [i64; 5] = [0, 707, 1000, 707, 0];
+
+@println("[CONST_TABLE_TEST] Reading GAMMA_LUT elements:");
+for $i in 0..4 {
+    let $val = GAMMA_LUT[$i];
+    @println($val);
+}
+
+@assert(GAMMA_LUT[0] == 0);
+@assert(GAMMA_LUT[1] == 64);
+@assert(GAMMA_LUT[2] == 128);
+@assert(GAMMA_LUT[3] == 255);
+
+@println("[CONST_TABLE_TEST] Reading SINE_APPROX elements:");
+@assert(SINE_APPROX[0] == 0);
+@assert(SINE_APPROX[1] == 707);
+@assert(SINE_APPROX[2] == 1000);
+@assert(SINE_APPROX[3] == 707);
+@assert(SINE_APPROX[4] == 0);
+
+@println("[CONST_TABLE_TEST] All const table tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/const_table_test.pl", const_table_test_src, false);
+
+        let err_table_bounds_src = br#"// err_table_bounds.pl - Runtime Const Table Out of Bounds Violation
+@contract: @wcet(10us) @budget(50us);
+
+const LUT: [i64; 3] = [10, 20, 30];
+
+let $idx = 10;
+@println("[TABLE_BOUNDS_TEST] Accessing out-of-bounds table index...");
+let $val = LUT[$idx];
+@println("Should not reach here");
+"#;
+        let _ = fs_create_internal("/pulselang/err_table_bounds.pl", err_table_bounds_src, false);
+
+        let streq_test_src = br#"// streq_test.pl - Inline Fixed-Size Strings and String Equality Comparison
+@contract: @wcet(20us) @budget(80us);
+
+let $s1 = "hello";
+let $s2 = "hello";
+let $s3 = "world";
+
+@println("[STREQ_TEST] Testing string equality with @streq intrinsic:");
+let $eq1 = @streq($s1, $s2);
+let $eq2 = @streq($s1, $s3);
+
+@println($eq1);
+@println($eq2);
+
+@assert($eq1 == 1);
+@assert($eq2 == 0);
+
+@println("[STREQ_TEST] Testing string equality with == and != operators:");
+@assert($s1 == "hello");
+@assert($s1 == $s2);
+@assert($s1 != $s3);
+@assert($s1 != "world");
+
+@println("[STREQ_TEST] All string equality tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/streq_test.pl", streq_test_src, false);
+
+        let fold_ext_test_src = br#"// fold_ext_test.pl - Advanced Multi-Layer Constant Folding Test
+@contract: @wcet(15us) @budget(60us);
+
+let $v1 = (0xFF & 0x0F) | (1 << 4) ^ 0x05;
+let $v2 = (10 < 20) && (30 >= 30) || (100 == 0);
+let $v3 = !0 && !(10 == 20);
+
+@println("[FOLD_EXT_TEST] Evaluated constant expressions:");
+@println($v1);
+@println($v2);
+@println($v3);
+
+@assert($v1 == 31);
+@assert($v2 == 1);
+@assert($v3 == 1);
+@println("[FOLD_EXT_TEST] All multi-layer constant folding tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/fold_ext_test.pl", fold_ext_test_src, false);
+
+        let strict_immut_src = br#"// strict_immut_test.pl - Immutability by Default & let mut Verification
+@contract: @wcet(10us) @budget(50us);
+
+let $x: i64 = 100;
+let mut $y: i64 = 50;
+
+$y += 25;
+$y := $y * 2;
+
+@println("[STRICT_IMMUT_TEST] Immutable x and mutated y:");
+@println($x);
+@println($y);
+
+@assert($x == 100);
+@assert($y == 150);
+@println("[STRICT_IMMUT_TEST] Immutability and mutability invariants passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/strict_immut_test.pl", strict_immut_src, false);
+
+        let err_immut_src = br#"// err_immut_violation.pl - Compile-Time Rejection of Immutable Mutation
+@contract: @wcet(5us) @budget(20us);
+
+let $val = 10;
+$val := 20;
+"#;
+        let _ = fs_create_internal("/pulselang/err_immut_violation.pl", err_immut_src, false);
+
+        let contracts_test_src = br#"// contracts_test.pl - Design-by-Contract @requires Verification
+@contract: @wcet(25us) @budget(100us);
+
+fn safe_div($a, $b) -> i64 @requires($b != 0) {
+    return $a / $b;
+}
+
+fn clamp_val($val, $min_v, $max_v) -> i64 @requires($min_v <= $max_v) {
+    if ($val < $min_v) {
+        return $min_v;
+    }
+    if ($val > $max_v) {
+        return $max_v;
+    }
+    return $val;
+}
+
+let $d = safe_div(100, 4);
+let $c1 = clamp_val(15, 0, 10);
+let $c2 = clamp_val(-5, 0, 10);
+let $c3 = clamp_val(5, 0, 10);
+
+@println("[CONTRACTS_TEST] Computed safe_div and clamp_val results:");
+@println($d);
+@println($c1);
+@println($c2);
+@println($c3);
+
+@assert($d == 25);
+@assert($c1 == 10);
+@assert($c2 == 0);
+@assert($c3 == 5);
+@println("[CONTRACTS_TEST] All contract precondition checks passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/contracts_test.pl", contracts_test_src, false);
+
+        let err_precond_src = br#"// err_precondition.pl - Runtime Rejection on Violated Precondition
+@contract: @wcet(10us) @budget(40us);
+
+fn safe_div($a, $b) -> i64 @requires($b != 0) {
+    return $a / $b;
+}
+
+let $res = safe_div(100, 0);
+"#;
+        let _ = fs_create_internal("/pulselang/err_precondition.pl", err_precond_src, false);
+
+        let match_test_src = br#"// match_test.pl - Exhaustive Pattern Matching on Results and Values
+@contract: @wcet(30us) @budget(120us);
+
+let $r_ok = @ok(42);
+let $r_err = @err(105);
+
+let mut $unwrapped_val = 0;
+let mut $unwrapped_err = 0;
+
+match $r_ok {
+    Ok($v) => {
+        $unwrapped_val := $v;
+    },
+    Err($e) => {
+        $unwrapped_val := 0;
+    },
+}
+
+match $r_err {
+    Ok($v) => {
+        $unwrapped_err := 0;
+    },
+    Err($e) => {
+        $unwrapped_err := $e;
+    },
+}
+
+let $state = 2;
+let mut $state_result = 0;
+match $state {
+    0 => { $state_result := 100; },
+    1 => { $state_result := 200; },
+    2 => { $state_result := 300; },
+    _ => { $state_result := 999; },
+}
+
+@println("[MATCH_TEST] Pattern matching outcomes:");
+@println($unwrapped_val);
+@println($unwrapped_err);
+@println($state_result);
+
+@assert($unwrapped_val == 42);
+@assert($unwrapped_err == 105);
+@assert($state_result == 300);
+@println("[MATCH_TEST] All exhaustive pattern matching tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/match_test.pl", match_test_src, false);
+
+        let err_non_exh_src = br#"// err_non_exhaustive.pl - Compile-Time Rejection of Non-Exhaustive Match
+@contract: @wcet(5us) @budget(20us);
+
+let $res = @ok(10);
+match $res {
+    Ok($v) => {
+        @println($v);
+    },
+}
+"#;
+        let _ = fs_create_internal("/pulselang/err_non_exhaustive.pl", err_non_exh_src, false);
 
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
         let _ = fs_create_internal("/etc/config.json", config_json, false);

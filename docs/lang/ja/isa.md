@@ -82,6 +82,26 @@
 | `0x14` | `WITHIN_END` | なし | `14 00 00 00` | デッドラインスタックをポップ | ~2 ns |
 | `0x15` | `DROP` | なし | `15 00 00 00` | デッドライン超過時にフレーム破棄 | ~10 ns |
 | `0x16` | `HALT` | なし | `16 00 00 00` | 実行を正常終了 | ~1 ns |
+| `0x17` | `LDC` | `Rd, ConstIdx16` | `17 Rd Ch Cl` | `Rd = const_pool[(Ch << 8) \| Cl]` (64-bit定数ロード) | ~2 ns |
+| `0x18` | `ADDI` | `Rd, Rs1, Imm8` | `18 Rd Rs Im` | `Rd = Rs1.wrapping_add(Im as i64)` (8-bit即値加算) | ~2 ns |
+| `0x19` | `SUBI` | `Rd, Rs1, Imm8` | `19 Rd Rs Im` | `Rd = Rs1.wrapping_sub(Im as i64)` (8-bit即値減算) | ~2 ns |
+| `0x1A` | `AND` | `Rd, Rs1, Rs2` | `1a Rd S1 S2` | `Rd = Rs1 & Rs2` (64-bitビット単位AND) | ~2 ns |
+| `0x1B` | `OR` | `Rd, Rs1, Rs2` | `1b Rd S1 S2` | `Rd = Rs1 \| Rs2` (64-bitビット単位OR) | ~2 ns |
+| `0x1C` | `XOR` | `Rd, Rs1, Rs2` | `1c Rd S1 S2` | `Rd = Rs1 ^ Rs2` (64-bitビット単位XOR) | ~2 ns |
+| `0x1D` | `SHL` | `Rd, Rs1, Rs2` | `1d Rd S1 S2` | `Rd = Rs1 << (Rs2 & 63)` (64-bit左シフト) | ~2 ns |
+| `0x1E` | `SHR` | `Rd, Rs1, Rs2` | `1e Rd S1 S2` | `Rd = (Rs1 as u64 >> (Rs2 & 63)) as i64` (論理右シフト) | ~2 ns |
+| `0x1F` | `ARR_DEF` | `ArrId, Len16` | `1f Ar Lh Ll` | 静的配列定義 `array_lens[Ar] = (Lh << 8) \| Ll` | ~3 ns |
+| `0x20` | `ARR_LOAD` | `Rd, ArrId, Rs_idx` | `20 Rd Ar Rs` | 境界チェック付き配列読出 `Rd = array[Rs]` | ~4 ns |
+| `0x21` | `ARR_STORE` | `ArrId, Rs_idx, Rs_val` | `21 Ar R1 R2` | 境界チェック付き配列書込 `array[R1] = R2` | ~4 ns |
+| `0x22` | `ASSERT` | `Rs1` | `22 Rs 00 00` | アサーション検証（偽なら `ERR_PX64_ASSERTION_FAILED`） | ~2 ns |
+| `0x23` | `CALL` | `Target16` | `23 00 Th Tl` | 戻り先IP+フレーム退避、`IP = Target` (コール深度 <= 8) | ~4 ns |
+| `0x24` | `RET` | None | `24 00 00 00` | 戻り先IP復元+フレーム復元、呼び出し元へ `$rax` で復帰 | ~4 ns |
+| `0x25` | `STRUCT_DEF` | `InstId, FieldCount` | `25 In Fc 00` | 構造体インスタンス定義 `struct_field_counts[In] = Fc` | ~2 ns |
+| `0x26` | `STRUCT_LOAD` | `Rd, InstId, FieldOffset` | `26 Rd In Of` | 構造体フィールド読出 `Rd = struct_slots[base + Of]` | ~3 ns |
+| `0x27` | `STRUCT_STORE` | `InstId, FieldOffset, Rs_val` | `27 In Of Rs` | 構造体フィールド書込 `struct_slots[base + Of] = Rs` | ~3 ns |
+| `0x28` | `TBL_DEF` | `TblId, Base8, Len8` | `28 Tb Ba Le` | 定数テーブル定義 `table_bases[Tb] = Ba, table_lens[Tb] = Le` | ~2 ns |
+| `0x29` | `TBL_LOAD` | `Rd, TblId, Rs_idx` | `29 Rd Tb Rs` | 定数テーブル読出 `Rd = const_pool[base + Rs]` | ~3 ns |
+| `0x2A` | `STREQ` | `Rd, Rs1, Rs2` | `2a Rd S1 S2` | 有界 $O(1)$ 文字列等値比較 `Rd = (str_equal(Rs1, Rs2)) ? 1 : 0` | ~5 ns |
 
 ---
 
@@ -98,6 +118,12 @@
 | `7` | `@send` | `(slot: i64) -> 1` | Intel e1000 PMD 経由で暗号化 SRTP 送信 |
 | `8` | `@argc` | `() -> i64` | スクリプトに渡された引数の個数を取得 (0..8) |
 | `9` | `@arg` | `(idx: i64) -> Tagged` | 指定インデックスの引数参照を取得 |
+| `10` | `@ok` | `(val: i64) -> Tagged` | 成功値を持つタグ付き Result を生成 |
+| `11` | `@err` | `(code: i64) -> Tagged` | エラーコードを持つタグ付き Result を生成 |
+| `12` | `@is_ok` | `(res: Tagged) -> 1/0` | Result が成功タグ付きか判定 (1/0) |
+| `13` | `@is_err` | `(res: Tagged) -> 1/0` | Result がエラータグ付きか判定 (1/0) |
+| `14` | `@unwrap` | `(res: Tagged) -> i64` | 成功値を取り出す（Err の場合は `ERR_PX64_UNWRAP_FAILED` で停止） |
+| `15` | `@streq` | `(s1: str, s2: str) -> 1/0` | 2つの文字列または引数の等値性を比較 (1/0) |
 
 ---
 

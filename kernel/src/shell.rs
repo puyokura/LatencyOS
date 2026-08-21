@@ -866,7 +866,6 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             else if src_name == "telemetry.pl" { "telemetry.bin" }
                             else { "out.bin" }
                         };
-                        serial_println!("[COMPILE_DBG] src='{}' target='{}'", src_name, target_name);
                         match crate::fs::fs_write(target_name, &bin_buf[..bin_size]) {
                             Ok(()) => {
                                 serial_println!(
@@ -1031,6 +1030,57 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             }
                             crate::lang::PX64_OP_SUBI => {
                                 serial_println!("{:04x}:   19 {:02x} {:02x} {:02x}  SUBI         {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2);
+                            }
+                            crate::lang::PX64_OP_AND => {
+                                serial_println!("{:04x}:   1a {:02x} {:02x} {:02x}  AND          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_OR => {
+                                serial_println!("{:04x}:   1b {:02x} {:02x} {:02x}  OR           {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_XOR => {
+                                serial_println!("{:04x}:   1c {:02x} {:02x} {:02x}  XOR          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_SHL => {
+                                serial_println!("{:04x}:   1d {:02x} {:02x} {:02x}  SHL          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_SHR => {
+                                serial_println!("{:04x}:   1e {:02x} {:02x} {:02x}  SHR          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_ARR_DEF => {
+                                serial_println!("{:04x}:   1f {:02x} {:02x} {:02x}  ARR_DEF      arr[{}], len: {}", op_ip, rd, rs1, rs2, rd, imm16);
+                            }
+                            crate::lang::PX64_OP_ARR_LOAD => {
+                                serial_println!("{:04x}:   20 {:02x} {:02x} {:02x}  ARR_LOAD     {}, arr[{}][{}]", op_ip, rd, rs1, rs2, rd_str, rs1, rs2_str);
+                            }
+                            crate::lang::PX64_OP_ARR_STORE => {
+                                serial_println!("{:04x}:   21 {:02x} {:02x} {:02x}  ARR_STORE    arr[{}][{}], {}", op_ip, rd, rs1, rs2, rd, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_ASSERT => {
+                                serial_println!("{:04x}:   22 {:02x} 00 00  ASSERT       {}", op_ip, rd, rd_str);
+                            }
+                            crate::lang::PX64_OP_CALL => {
+                                serial_println!("{:04x}:   23 00 {:02x} {:02x}  CALL         0x{:04x}", op_ip, rs1, rs2, imm16);
+                            }
+                            crate::lang::PX64_OP_RET => {
+                                serial_println!("{:04x}:   24 00 00 00  RET", op_ip);
+                            }
+                            crate::lang::PX64_OP_STRUCT_DEF => {
+                                serial_println!("{:04x}:   25 {:02x} {:02x} 00  STRUCT_DEF   inst[{}], fields: {}", op_ip, rd, rs1, rd, rs1);
+                            }
+                            crate::lang::PX64_OP_STRUCT_LOAD => {
+                                serial_println!("{:04x}:   26 {:02x} {:02x} {:02x}  STRUCT_LOAD  {}, inst[{}].f[{}]", op_ip, rd, rs1, rs2, rd_str, rs1, rs2);
+                            }
+                            crate::lang::PX64_OP_STRUCT_STORE => {
+                                serial_println!("{:04x}:   27 {:02x} {:02x} {:02x}  STRUCT_STORE inst[{}].f[{}], {}", op_ip, rd, rs1, rs2, rd, rs1, rs2_str);
+                            }
+                            crate::lang::PX64_OP_TBL_DEF => {
+                                serial_println!("{:04x}:   28 {:02x} {:02x} {:02x}  TBL_DEF      table[{}], base: {}, len: {}", op_ip, rd, rs1, rs2, rd, rs1, rs2);
+                            }
+                            crate::lang::PX64_OP_TBL_LOAD => {
+                                serial_println!("{:04x}:   29 {:02x} {:02x} {:02x}  TBL_LOAD     {}, table[{}][{}]", op_ip, rd, rs1, rs2, rd_str, rs1, rs2_str);
+                            }
+                            crate::lang::PX64_OP_STREQ => {
+                                serial_println!("{:04x}:   2a {:02x} {:02x} {:02x}  STREQ        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
                             }
                             _ => {
                                 serial_println!("{:04x}:   {:02x} {:02x} {:02x} {:02x}  UNKNOWN_OP_0x{:02x}", op_ip, op, rd, rs1, rs2, op);
@@ -1302,9 +1352,9 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     for i in 0..chunk_len {
                         let b = data[offset + i];
                         if (0x20..=0x7E).contains(&b) {
-                            serial_print!("{}", b as char);
+                            crate::serial::SERIAL.send_byte(b);
                         } else {
-                            serial_print!(".");
+                            crate::serial::SERIAL.send_byte(b'.');
                         }
                     }
                     serial_println!("|");
@@ -1419,7 +1469,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             latency_report(tsc_freq_hz);
         }
 
-        "benchmark" => {
+        "benchmark" | "pulse-bench" => {
             serial_println!("benchmark: running 1000-sample pipeline benchmark...");
             let mut pkt_seq = 1u16;
 
@@ -1468,12 +1518,20 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
 
             print_statistical_latency_report();
 
-            let (ldc_ns, addi_ns, decode_ns) = crate::lang::benchmark_px64_instructions(tsc_freq_hz);
+            let (ldc_ns, addi_ns, and_ns, xor_ns, shl_ns, arr_load_ns, struct_load_ns, tbl_load_ns, streq_ns, assert_ns, call_ret_ns, decode_ns) = crate::lang::benchmark_px64_instructions(tsc_freq_hz);
             serial_println!("----------------------------------------------------------------------------");
             serial_println!("[PX64_VM_MICROBENCHMARK]");
-            serial_println!("  LDC  (64-bit const pool load)     : {} ns / instruction", ldc_ns);
-            serial_println!("  ADDI (8-bit immediate arithmetic) : {} ns / instruction", addi_ns);
-            serial_println!("  Decode & Dispatch Loop Overhead  : {} ns / instruction", decode_ns);
+            serial_println!("  LDC      (64-bit const load)        : {} ns / instruction", ldc_ns);
+            serial_println!("  ADDI     (8-bit immediate add)      : {} ns / instruction", addi_ns);
+            serial_println!("  AND/XOR  (64-bit bitwise ALU)       : {} / {} ns / instruction", and_ns, xor_ns);
+            serial_println!("  SHL/SHR  (64-bit barrel shifter)    : {} ns / instruction", shl_ns);
+            serial_println!("  ARR_LOAD (bounds-checked array read): {} ns / instruction", arr_load_ns);
+            serial_println!("  STRUCT   (static struct field read) : {} ns / instruction", struct_load_ns);
+            serial_println!("  TBL_LOAD (const lookup table read)  : {} ns / instruction", tbl_load_ns);
+            serial_println!("  STREQ    (bounded string compare)   : {} ns / instruction", streq_ns);
+            serial_println!("  ASSERT   (assertion invariant guard): {} ns / instruction", assert_ns);
+            serial_println!("  CALL/RET (static func roundtrip)    : {} ns / call-ret pair", call_ret_ns);
+            serial_println!("  Decode & Dispatch Loop Overhead     : {} ns / instruction", decode_ns);
             serial_println!("----------------------------------------------------------------------------");
         }
 
