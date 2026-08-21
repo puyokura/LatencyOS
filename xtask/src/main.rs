@@ -442,6 +442,255 @@ fn test_paste(kernel_elf: &Path) {
     }
 }
 
+fn test_compile_error(kernel_elf: &Path) {
+    let qemu = find_tool("qemu-system-x86_64");
+    println!("[xtask] Running automated compiler error diagnostic test with kernel: {}", kernel_elf.display());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
+    let mut cmd = Command::new(&qemu);
+    cmd.arg("-kernel")
+        .arg(kernel_elf)
+        .arg("-cpu")
+        .arg("max")
+        .arg("-chardev")
+        .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
+        .arg("-serial")
+        .arg("chardev:ser0")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-m")
+        .arg("128M")
+        .arg("-smp")
+        .arg("4")
+        .arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("e1000,netdev=net0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("PATH", get_augmented_path());
+
+    let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+
+    let (mut tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+    let _ = tcp_stream.set_nodelay(true);
+    let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
+
+    use std::io::{Read, Write};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match tcp_read.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    };
+
+    if !wait_for("[c0|", 10, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for shell prompt");
+    }
+
+    // Create broken script via editor
+    full_output.clear();
+    tcp_stream.write_all(b"edit /home/err_syntax.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    wait_for("PulseEditor", 5, &mut full_output);
+
+    let broken_script = "@contract: @wcet(100us) @budget(500us);\r\n$x := := 42;\r\n";
+    tcp_stream.write_all(broken_script.as_bytes()).unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Save and Quit
+    tcp_stream.write_all(&[0x13]).unwrap(); // ^S
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    tcp_stream.write_all(&[0x11]).unwrap(); // ^Q
+    tcp_stream.flush().unwrap();
+    wait_for("[c0|", 5, &mut full_output);
+
+    // Compile broken script
+    full_output.clear();
+    println!("[xtask-test] Running: compile /home/err_syntax.pl");
+    tcp_stream.write_all(b"compile /home/err_syntax.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] Diagnostic Output Received:\n{}", full_output);
+
+    assert!(full_output.contains("[ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN"), "Missing ERROR_CODE");
+    assert!(full_output.contains("[LOCATION]: Line "), "Missing line in location");
+    assert!(full_output.contains("Column "), "Missing column in location");
+    assert!(full_output.contains("[TOKEN_FOUND]:"), "Missing token kind");
+    assert!(full_output.contains("[EXPECTED]:"), "Missing expected tokens specification");
+    assert!(full_output.contains("[PARSER_STAGE]:"), "Missing parser stage");
+    assert!(full_output.contains("$x := := 42;"), "Missing highlighted source line");
+    assert!(full_output.contains("[Syntax Error Here]"), "Missing visual error pointer");
+    assert!(full_output.contains("[HEX_DUMP"), "Missing hex dump block");
+    assert!(full_output.contains("[AI_REPAIR_HINT]:"), "Missing AI repair suggestion");
+
+    println!("[xtask-test] === TEST PASSED: AI-actionable machine-readable diagnostic log verified successfully! ===");
+}
+
+fn test_editor_delete(kernel_elf: &Path) {
+    let qemu = find_tool("qemu-system-x86_64");
+    println!("[xtask] Running automated editor delete & screen clean test with kernel: {}", kernel_elf.display());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
+    let mut cmd = Command::new(&qemu);
+    cmd.arg("-kernel")
+        .arg(kernel_elf)
+        .arg("-cpu")
+        .arg("max")
+        .arg("-chardev")
+        .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
+        .arg("-serial")
+        .arg("chardev:ser0")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-m")
+        .arg("128M")
+        .arg("-smp")
+        .arg("4")
+        .arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("e1000,netdev=net0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("PATH", get_augmented_path());
+
+    let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+
+    let (mut tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+    let _ = tcp_stream.set_nodelay(true);
+    let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
+
+    use std::io::{Read, Write};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match tcp_read.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    };
+
+    if !wait_for("[c0|", 10, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for shell prompt");
+    }
+
+    // Open editor
+    full_output.clear();
+    tcp_stream.write_all(b"edit /home/delete_clean.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    wait_for("PulseEditor", 5, &mut full_output);
+
+    // Paste 4 lines
+    let four_lines = "Line 1 Alpha\r\nLine 2 Beta\r\nLine 3 Gamma\r\nLine 4 Delta\r\n";
+    tcp_stream.write_all(four_lines.as_bytes()).unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Send 30 backspaces to delete line 4 and line 3
+    for _ in 0..30 {
+        tcp_stream.write_all(&[0x08]).unwrap();
+    }
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Save and Quit
+    tcp_stream.write_all(&[0x13]).unwrap(); // ^S
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    tcp_stream.write_all(&[0x11]).unwrap(); // ^Q
+    tcp_stream.flush().unwrap();
+    wait_for("[c0|", 5, &mut full_output);
+
+    // Inspect content
+    full_output.clear();
+    println!("[xtask-test] Running: cat /home/delete_clean.pl");
+    tcp_stream.write_all(b"cat /home/delete_clean.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] Result file content:\n{}", full_output);
+
+    assert!(full_output.contains("Line 1 Alpha"), "Missing Line 1 Alpha");
+    assert!(!full_output.contains("Gamma"), "Ghost character 'Gamma' was not cleanly deleted!");
+    assert!(!full_output.contains("Delta"), "Ghost character 'Delta' was not cleanly deleted!");
+
+    println!("[xtask-test] === TEST PASSED: Editor delete cleans all lines with 0 leftover ghost characters! ===");
+}
+
 fn check_versions() {
     let tools = [
         ("rustup", "rustup --version"),
@@ -502,11 +751,19 @@ fn main() {
             let kernel_path = run_cargo_build(release);
             test_paste(&kernel_path);
         }
+        "test-compile-error" => {
+            let kernel_path = run_cargo_build(release);
+            test_compile_error(&kernel_path);
+        }
+        "test-editor-delete" => {
+            let kernel_path = run_cargo_build(release);
+            test_editor_delete(&kernel_path);
+        }
         "check" => {
             check_versions();
         }
         _ => {
-            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-boot|check] [--release]");
+            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-boot|check] [--release]");
             std::process::exit(1);
         }
     }

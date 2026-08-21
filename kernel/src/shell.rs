@@ -732,8 +732,8 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             } else if let Some(data) = crate::fs::fs_read(arg) {
                 match crate::lang::run_pulse_auto(data, tsc_freq_hz) {
                     Ok(()) => {}
-                    Err(e) => {
-                        serial_println!("pulse: {}: runtime error: {}", arg, e);
+                    Err(err) => {
+                        crate::lang::print_compile_diagnostic(data, arg, &err);
                     }
                 }
             } else {
@@ -777,8 +777,8 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             }
                         }
                     }
-                    Err(e) => {
-                        serial_println!("compile: {}: compile error: {}", src_name, e);
+                    Err(err) => {
+                        crate::lang::print_compile_diagnostic(data, src_name, &err);
                     }
                 }
             } else {

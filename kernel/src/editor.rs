@@ -658,10 +658,9 @@ impl PulseEditor {
                 serial_println!("==================== [Execution Success: 0 Errors] ====================");
                 self.set_status("Code executed successfully.");
             }
-            Err(e) => {
-                serial_println!("[ERROR] PulseLang Compile/Runtime Error: {}", e);
-                serial_println!("==================== [Execution Failed] ====================");
-                self.set_status("Compile/Runtime error!");
+            Err(err) => {
+                crate::lang::print_compile_diagnostic(&self.buffer[..self.buf_len], self.filename_str(), &err);
+                self.set_status("Compile/Runtime error! (Diagnostic displayed)");
             }
         }
         serial_println!("=======================================================================");
@@ -745,7 +744,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                             // Backspace
                             0x08 | 0x7F => {
                                 EDITOR.delete_char_backspace();
-                                line_changed = true;
+                                structure_changed = true;
                                 last_was_cr = false;
                             }
 
@@ -940,7 +939,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     break;
                                 } else if params[0] == 3 {
                                     EDITOR.delete_char_under_cursor();
-                                    line_changed = true;
+                                    structure_changed = true;
                                 } else if params[0] == 1 || params[0] == 7 {
                                     let (start, _) = EDITOR.get_current_line_start_and_col();
                                     EDITOR.cursor = start;

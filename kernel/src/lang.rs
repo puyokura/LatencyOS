@@ -85,13 +85,13 @@ pub enum TokenKind {
     Eof,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub start: usize,
     pub len: usize,
-    #[allow(dead_code)]
     pub line: usize,
+    pub col: usize,
 }
 
 impl Token {
@@ -101,7 +101,150 @@ impl Token {
             start: 0,
             len: 0,
             line: 1,
+            col: 1,
         }
+    }
+}
+
+// Function: get_line_and_col
+// Description: Calculate 1-indexed line and column from source byte position.
+// Worst-case execution time: ~1000 ns
+pub fn get_line_and_col(src: &[u8], pos: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut line_start = 0;
+    let limit = core::cmp::min(pos, src.len());
+    for i in 0..limit {
+        if src[i] == b'\n' {
+            line += 1;
+            line_start = i + 1;
+        }
+    }
+    (line, limit.saturating_sub(line_start) + 1)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompileError {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub line: usize,
+    pub col: usize,
+    pub byte_offset: usize,
+    pub token_kind: TokenKind,
+    pub token_len: usize,
+    pub expected: &'static str,
+    pub stage: &'static str,
+    pub suggestion: &'static str,
+}
+
+impl CompileError {
+    pub const fn simple(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code,
+            message,
+            line: 1,
+            col: 1,
+            byte_offset: 0,
+            token_kind: TokenKind::Eof,
+            token_len: 0,
+            expected: "Valid bytecode or script syntax",
+            stage: "Execution / Validation",
+            suggestion: "Check file format and integrity",
+        }
+    }
+}
+
+// Function: print_compile_diagnostic
+// Description: Emit comprehensive, structured, AI-actionable compiler diagnostic log.
+// Worst-case execution time: ~20_000 ns
+pub fn print_compile_diagnostic(src: &[u8], filename: &str, err: &CompileError) {
+    serial_println!("==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================");
+    serial_println!("[ERROR_CODE]: {}", err.code);
+    serial_println!("[MESSAGE]: {}", err.message);
+    serial_println!("[FILE]: {}", filename);
+    serial_println!("[LOCATION]: Line {}, Column {} (ByteOffset: {})", err.line, err.col, err.byte_offset);
+    serial_print!("[TOKEN_FOUND]: Kind: {:?}, Value: \"", err.token_kind);
+    if err.byte_offset + err.token_len <= src.len() && err.token_len > 0 {
+        if let Ok(tok_str) = core::str::from_utf8(&src[err.byte_offset..err.byte_offset + err.token_len]) {
+            serial_print!("{}", tok_str);
+        }
+    }
+    serial_println!("\"");
+    serial_println!("[EXPECTED]: {}", err.expected);
+    serial_println!("[PARSER_STAGE]: {}", err.stage);
+    serial_println!("[SOURCE_CONTEXT]:");
+
+    // Print source context with 3-line window and pointer caret
+    print_source_context_lines(src, err.line, err.col, err.token_len);
+
+    let hex_start = (err.byte_offset.saturating_sub(16) / 16) * 16;
+    let hex_end = core::cmp::min(hex_start + 32, src.len());
+    serial_println!("[HEX_DUMP (offset 0x{:04x}..0x{:04x})]:", hex_start, hex_end);
+    print_byte_hex_dump(src, hex_start, hex_end);
+
+    serial_println!("[AI_REPAIR_HINT]: {}", err.suggestion);
+    serial_println!("=============================================================================================");
+}
+
+fn print_source_context_lines(src: &[u8], error_line: usize, error_col: usize, tok_len: usize) {
+    let mut cur_line = 1;
+    let mut line_start = 0;
+    let mut i = 0;
+
+    while i <= src.len() {
+        if i == src.len() || src[i] == b'\n' {
+            let line_end = i;
+            if cur_line + 1 >= error_line && cur_line <= error_line + 1 {
+                let line_bytes = &src[line_start..line_end];
+                let line_str = core::str::from_utf8(line_bytes).unwrap_or("");
+                if cur_line == error_line {
+                    serial_println!("> Line {:3}: {}", cur_line, line_str);
+                    serial_print!("         ");
+                    let caret_col = error_col.saturating_sub(1);
+                    for _ in 0..caret_col {
+                        serial_print!(" ");
+                    }
+                    let caret_len = core::cmp::max(tok_len, 1);
+                    for _ in 0..caret_len {
+                        serial_print!("^");
+                    }
+                    serial_println!(" [Syntax Error Here]");
+                } else {
+                    serial_println!("  Line {:3}: {}", cur_line, line_str);
+                }
+            }
+            cur_line += 1;
+            line_start = i + 1;
+        }
+        i += 1;
+    }
+}
+
+fn print_byte_hex_dump(src: &[u8], start: usize, end: usize) {
+    let mut row_start = start;
+    while row_start < end {
+        let row_end = core::cmp::min(row_start + 16, src.len());
+        serial_print!("  {:08x}: ", row_start);
+
+        for j in 0..16 {
+            if row_start + j < row_end {
+                serial_print!("{:02x} ", src[row_start + j]);
+            } else {
+                serial_print!("   ");
+            }
+        }
+        serial_print!(" |");
+        for j in 0..16 {
+            if row_start + j < row_end {
+                let b = src[row_start + j];
+                if (0x20..=0x7E).contains(&b) {
+                    serial_print!("{}", b as char);
+                } else {
+                    serial_print!(".");
+                }
+            }
+        }
+        serial_println!("|");
+        row_start += 16;
     }
 }
 
@@ -123,7 +266,7 @@ impl<'a> Lexer<'a> {
     // Function: tokenize
     // Description: Tokenize input source into static token array without dynamic allocation.
     // Worst-case execution time: ~25_000 ns
-    pub fn tokenize(&mut self, tokens: &mut [Token; MAX_TOKENS]) -> Result<usize, &'static str> {
+    pub fn tokenize(&mut self, tokens: &mut [Token; MAX_TOKENS]) -> Result<usize, CompileError> {
         let mut count = 0;
 
         while self.pos < self.src.len() && count < MAX_TOKENS - 1 {
@@ -133,7 +276,7 @@ impl<'a> Lexer<'a> {
             }
 
             let start = self.pos;
-            let line = self.line;
+            let (line, col) = get_line_and_col(self.src, start);
             let b = self.src[self.pos];
 
             let kind = match b {
@@ -188,7 +331,18 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                         TokenKind::OrOp
                     } else {
-                        return Err("Unexpected single '|'");
+                        return Err(CompileError {
+                            code: "ERR_LEX_UNEXPECTED_PIPE",
+                            message: "Unexpected single '|' operator",
+                            line,
+                            col,
+                            byte_offset: start,
+                            token_kind: TokenKind::Eof,
+                            token_len: 1,
+                            expected: "Pipe operator '|>' or logical OR '||'",
+                            stage: "Lexical Analysis",
+                            suggestion: "Use '|>' for pipeline dataflow or '||' for logical OR",
+                        });
                     }
                 }
 
@@ -237,7 +391,18 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                         TokenKind::And
                     } else {
-                        return Err("Single '&' not supported");
+                        return Err(CompileError {
+                            code: "ERR_LEX_UNEXPECTED_AMP",
+                            message: "Single '&' not supported in PulseLang",
+                            line,
+                            col,
+                            byte_offset: start,
+                            token_kind: TokenKind::Eof,
+                            token_len: 1,
+                            expected: "Logical AND '&&'",
+                            stage: "Lexical Analysis",
+                            suggestion: "Use '&&' for logical conditions",
+                        });
                     }
                 }
 
@@ -358,15 +523,18 @@ impl<'a> Lexer<'a> {
                 start,
                 len: self.pos - start,
                 line,
+                col,
             };
             count += 1;
         }
 
+        let (line, col) = get_line_and_col(self.src, self.pos);
         tokens[count] = Token {
             kind: TokenKind::Eof,
             start: self.pos,
             len: 0,
-            line: self.line,
+            line,
+            col,
         };
 
         Ok(count)
@@ -506,9 +674,38 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn emit_byte(&mut self, b: u8) -> Result<usize, &'static str> {
+    fn error(
+        &self,
+        code: &'static str,
+        message: &'static str,
+        expected: &'static str,
+        stage: &'static str,
+        suggestion: &'static str,
+    ) -> CompileError {
+        let tok = self.peek();
+        CompileError {
+            code,
+            message,
+            line: tok.line,
+            col: tok.col,
+            byte_offset: tok.start,
+            token_kind: tok.kind,
+            token_len: tok.len,
+            expected,
+            stage,
+            suggestion,
+        }
+    }
+
+    fn emit_byte(&mut self, b: u8) -> Result<usize, CompileError> {
         if self.code_len >= MAX_BYTECODE_SIZE {
-            return Err("Bytecode buffer full");
+            return Err(self.error(
+                "ERR_BYTECODE_OVERFLOW",
+                "Bytecode buffer overflow (1024 bytes limit reached)",
+                "Smaller script size or split into modules",
+                "Code Generation",
+                "Reduce script length or simplify loop expressions",
+            ));
         }
         let pos = self.code_len;
         self.code[self.code_len] = b;
@@ -516,13 +713,13 @@ impl<'a> Compiler<'a> {
         Ok(pos)
     }
 
-    fn emit_u16(&mut self, val: u16) -> Result<usize, &'static str> {
+    fn emit_u16(&mut self, val: u16) -> Result<usize, CompileError> {
         let pos = self.emit_byte((val >> 8) as u8)?;
         self.emit_byte((val & 0xFF) as u8)?;
         Ok(pos)
     }
 
-    fn emit_i64(&mut self, val: i64) -> Result<usize, &'static str> {
+    fn emit_i64(&mut self, val: i64) -> Result<usize, CompileError> {
         let pos = self.code_len;
         let bytes = val.to_be_bytes();
         for &b in &bytes {
@@ -536,7 +733,7 @@ impl<'a> Compiler<'a> {
         self.code[pos + 1] = (val & 0xFF) as u8;
     }
 
-    fn resolve_var(&mut self, tok: Token) -> Result<u8, &'static str> {
+    fn resolve_var(&mut self, tok: Token) -> Result<u8, CompileError> {
         let name = &self.src[tok.start..tok.start + tok.len];
         for i in 0..self.var_count {
             if self.var_lens[i] == name.len() && &self.var_names[i][..self.var_lens[i]] == name {
@@ -544,7 +741,13 @@ impl<'a> Compiler<'a> {
             }
         }
         if self.var_count >= MAX_VARS {
-            return Err("Maximum variables limit reached");
+            return Err(self.error(
+                "ERR_MAX_VARS_EXCEEDED",
+                "Maximum distinct variables limit reached (32 vars)",
+                "Reuse existing $variables",
+                "Symbol Table Allocation",
+                "Reduce the number of distinct variable names in the script",
+            ));
         }
         let idx = self.var_count;
         let len = core::cmp::min(name.len(), 16);
@@ -557,7 +760,7 @@ impl<'a> Compiler<'a> {
     // Function: compile
     // Description: Single-pass compilation from tokens into bytecode.
     // Worst-case execution time: ~50_000 ns
-    pub fn compile(&mut self) -> Result<usize, &'static str> {
+    pub fn compile(&mut self) -> Result<usize, CompileError> {
         while self.peek().kind != TokenKind::Eof {
             self.statement()?;
         }
@@ -565,7 +768,7 @@ impl<'a> Compiler<'a> {
         Ok(self.code_len)
     }
 
-    fn statement(&mut self) -> Result<(), &'static str> {
+    fn statement(&mut self) -> Result<(), CompileError> {
         let tok = self.peek();
 
         match tok.kind {
@@ -576,7 +779,15 @@ impl<'a> Compiler<'a> {
                 while self.peek().kind != TokenKind::Semi && self.peek().kind != TokenKind::Eof {
                     self.advance();
                 }
-                self.match_token(TokenKind::Semi);
+                if !self.match_token(TokenKind::Semi) {
+                    return Err(self.error(
+                        "ERR_MISSING_SEMICOLON",
+                        "Missing semicolon ';' after @contract directive",
+                        "Semicolon ';'",
+                        "Statement -> @contract Directive",
+                        "Add ';' at end of @contract: ...;",
+                    ));
+                }
             }
 
             TokenKind::AtPipeline | TokenKind::Pipeline => {
@@ -633,14 +844,28 @@ impl<'a> Compiler<'a> {
                 let deadline_ns = match time_tok.kind {
                     TokenKind::TimeLiteral(ns) => ns,
                     TokenKind::Number(n) => n as u64,
-                    _ => return Err("Expected time literal (e.g. 500us)"),
+                    _ => {
+                        return Err(self.error(
+                            "ERR_EXPECTED_TIME_LITERAL",
+                            "Expected time duration literal after @within (e.g. 500us, 10ms, 100ns)",
+                            "Time literal with unit suffix (e.g. 500us, 5ms, 100ns)",
+                            "Statement -> @within Block",
+                            "Specify duration like @within(500us) { ... }",
+                        ));
+                    }
                 };
 
                 self.emit_byte(OP_WITHIN_START)?;
                 self.emit_i64(deadline_ns as i64)?;
 
                 if !self.match_token(TokenKind::LBrace) {
-                    return Err("Expected '{' in within block");
+                    return Err(self.error(
+                        "ERR_EXPECTED_LBRACE",
+                        "Missing opening brace '{' to begin within block",
+                        "Left brace '{'",
+                        "Statement -> @within Block",
+                        "Add opening brace '{' after @within(...)",
+                    ));
                 }
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     self.statement()?;
@@ -667,7 +892,13 @@ impl<'a> Compiler<'a> {
                 let exit_jump = self.emit_u16(0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
-                    return Err("Expected '{' in while block");
+                    return Err(self.error(
+                        "ERR_EXPECTED_LBRACE",
+                        "Missing opening brace '{' for while block",
+                        "Left brace '{'",
+                        "Statement -> While Loop",
+                        "Add opening brace '{' after while condition",
+                    ));
                 }
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     self.statement()?;
@@ -700,7 +931,13 @@ impl<'a> Compiler<'a> {
                 let jump_false_pos = self.emit_u16(0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
-                    return Err("Expected '{' after if condition");
+                    return Err(self.error(
+                        "ERR_EXPECTED_LBRACE",
+                        "Missing opening brace '{' after if condition",
+                        "Left brace '{'",
+                        "Statement -> If Branch",
+                        "Add opening brace '{' after if (...) condition",
+                    ));
                 }
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     self.statement()?;
@@ -713,7 +950,13 @@ impl<'a> Compiler<'a> {
                     self.patch_u16(jump_false_pos, self.code_len as u16);
 
                     if !self.match_token(TokenKind::LBrace) {
-                        return Err("Expected '{' after else");
+                        return Err(self.error(
+                            "ERR_EXPECTED_LBRACE",
+                            "Missing opening brace '{' after else keyword",
+                            "Left brace '{'",
+                            "Statement -> Else Branch",
+                            "Add opening brace '{' after else",
+                        ));
                     }
                     while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                         self.statement()?;
@@ -732,7 +975,15 @@ impl<'a> Compiler<'a> {
 
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.expression()?;
-                    self.match_token(TokenKind::Semi);
+                    if !self.match_token(TokenKind::Semi) {
+                        return Err(self.error(
+                            "ERR_MISSING_SEMICOLON",
+                            "Missing semicolon ';' at end of assignment",
+                            "Semicolon ';'",
+                            "Statement -> Variable Assignment",
+                            "Append ';' at end of assignment statement",
+                        ));
+                    }
                     self.emit_byte(OP_STORE_VAR)?;
                     self.emit_byte(var_idx)?;
                 } else if self.match_token(TokenKind::PlusEq) {
@@ -741,7 +992,15 @@ impl<'a> Compiler<'a> {
                     self.emit_byte(var_idx)?;
                     self.expression()?;
                     self.emit_byte(OP_ADD)?;
-                    self.match_token(TokenKind::Semi);
+                    if !self.match_token(TokenKind::Semi) {
+                        return Err(self.error(
+                            "ERR_MISSING_SEMICOLON",
+                            "Missing semicolon ';' at end of compound assignment",
+                            "Semicolon ';'",
+                            "Statement -> Compound Addition Assignment",
+                            "Append ';' at end of statement",
+                        ));
+                    }
                     self.emit_byte(OP_STORE_VAR)?;
                     self.emit_byte(var_idx)?;
                 } else if self.match_token(TokenKind::MinusEq) {
@@ -749,7 +1008,15 @@ impl<'a> Compiler<'a> {
                     self.emit_byte(var_idx)?;
                     self.expression()?;
                     self.emit_byte(OP_SUB)?;
-                    self.match_token(TokenKind::Semi);
+                    if !self.match_token(TokenKind::Semi) {
+                        return Err(self.error(
+                            "ERR_MISSING_SEMICOLON",
+                            "Missing semicolon ';' at end of compound assignment",
+                            "Semicolon ';'",
+                            "Statement -> Compound Subtraction Assignment",
+                            "Append ';' at end of statement",
+                        ));
+                    }
                     self.emit_byte(OP_STORE_VAR)?;
                     self.emit_byte(var_idx)?;
                 } else {
@@ -767,13 +1034,21 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn expression_statement(&mut self) -> Result<(), &'static str> {
+    fn expression_statement(&mut self) -> Result<(), CompileError> {
         self.expression()?;
-        self.match_token(TokenKind::Semi);
+        if !self.match_token(TokenKind::Semi) {
+            return Err(self.error(
+                "ERR_MISSING_SEMICOLON",
+                "Missing semicolon ';' at end of expression statement",
+                "Semicolon ';'",
+                "Statement -> Expression Statement",
+                "Append ';' to terminate the statement",
+            ));
+        }
         Ok(())
     }
 
-    fn expression(&mut self) -> Result<(), &'static str> {
+    fn expression(&mut self) -> Result<(), CompileError> {
         self.ternary()?;
         while self.match_token(TokenKind::Pipe) {
             self.ternary()?;
@@ -781,7 +1056,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn ternary(&mut self) -> Result<(), &'static str> {
+    fn ternary(&mut self) -> Result<(), CompileError> {
         self.equality()?;
         if self.match_token(TokenKind::Question) {
             self.emit_byte(OP_JUMP_IF_FALSE)?;
@@ -819,7 +1094,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn equality(&mut self) -> Result<(), &'static str> {
+    fn equality(&mut self) -> Result<(), CompileError> {
         self.comparison()?;
         while self.peek().kind == TokenKind::EqEq || self.peek().kind == TokenKind::NotEq {
             let op = self.advance().kind;
@@ -833,7 +1108,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn comparison(&mut self) -> Result<(), &'static str> {
+    fn comparison(&mut self) -> Result<(), CompileError> {
         self.term()?;
         while matches!(self.peek().kind, TokenKind::Lt | TokenKind::LtEq | TokenKind::Gt | TokenKind::GtEq) {
             let op = self.advance().kind;
@@ -849,7 +1124,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn term(&mut self) -> Result<(), &'static str> {
+    fn term(&mut self) -> Result<(), CompileError> {
         self.factor()?;
         while self.peek().kind == TokenKind::Plus || self.peek().kind == TokenKind::Minus {
             let op = self.advance().kind;
@@ -863,7 +1138,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn factor(&mut self) -> Result<(), &'static str> {
+    fn factor(&mut self) -> Result<(), CompileError> {
         self.primary()?;
         while self.peek().kind == TokenKind::Star || self.peek().kind == TokenKind::Slash || self.peek().kind == TokenKind::Percent {
             let op = self.advance().kind;
@@ -878,7 +1153,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn primary(&mut self) -> Result<(), &'static str> {
+    fn primary(&mut self) -> Result<(), CompileError> {
         let tok = self.advance();
 
         match tok.kind {
@@ -895,7 +1170,13 @@ impl<'a> Compiler<'a> {
             TokenKind::StringLit => {
                 let s = &self.src[tok.start + 1..tok.start + tok.len - 1];
                 if self.str_pool_len + s.len() > MAX_STRING_POOL {
-                    return Err("String pool full");
+                    return Err(self.error(
+                        "ERR_STRING_POOL_FULL",
+                        "String literal pool exhausted (512 bytes limit reached)",
+                        "Shorter string constants",
+                        "String Pool Allocation",
+                        "Reduce the size of string constants or combine print statements",
+                    ));
                 }
                 let offset = self.str_pool_len;
                 self.str_pool[offset..offset + s.len()].copy_from_slice(s);
@@ -926,7 +1207,15 @@ impl<'a> Compiler<'a> {
                             argc += 1;
                         }
                     }
-                    self.match_token(TokenKind::RParen);
+                    if !self.match_token(TokenKind::RParen) {
+                        return Err(self.error(
+                            "ERR_UNCLOSED_PAREN",
+                            "Missing closing parenthesis ')' in function argument list",
+                            "Closing parenthesis ')'",
+                            "Expression -> Intrinsic Function Call",
+                            "Add matching ')' after argument list",
+                        ));
+                    }
 
                     let func_id = match name {
                         b"@print" | b"print" => NATIVE_PRINT,
@@ -936,7 +1225,15 @@ impl<'a> Compiler<'a> {
                         b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
                         b"@capture" | b"gpu.capture" => NATIVE_GPU_CAPTURE,
                         b"@send" | b"net.send" => NATIVE_NET_SEND,
-                        _ => return Err("Unknown intrinsic function"),
+                        _ => {
+                            return Err(self.error(
+                                "ERR_UNKNOWN_INTRINSIC",
+                                "Unknown intrinsic function name",
+                                "One of @print, @println, @tsc, @rtt, @rate, @capture, @send",
+                                "Expression -> Intrinsic Call",
+                                "Verify that the intrinsic name matches supported DSL intrinsics",
+                            ));
+                        }
                     };
 
                     self.emit_byte(OP_CALL_NATIVE)?;
@@ -952,11 +1249,25 @@ impl<'a> Compiler<'a> {
             TokenKind::LParen => {
                 self.expression()?;
                 if !self.match_token(TokenKind::RParen) {
-                    return Err("Expected ')' after expression");
+                    return Err(self.error(
+                        "ERR_UNCLOSED_PAREN",
+                        "Expected closing parenthesis ')' after sub-expression",
+                        "Closing parenthesis ')'",
+                        "Expression -> Grouping",
+                        "Add matching ')' to close the grouped expression",
+                    ));
                 }
             }
 
-            _ => return Err("Unexpected token in expression"),
+            _ => {
+                return Err(self.error(
+                    "ERR_SYNTAX_UNEXPECTED_TOKEN",
+                    "Unexpected token encountered in expression",
+                    "Literal value, variable ($var), hardware handle (#h), or intrinsic call (@fn)",
+                    "Expression -> Primary",
+                    "Replace invalid token with a valid variable name, number, or expression",
+                ));
+            }
         }
 
         Ok(())
@@ -992,18 +1303,24 @@ impl<'a> VM<'a> {
         }
     }
 
-    fn push(&mut self, val: i64) -> Result<(), &'static str> {
+    fn push(&mut self, val: i64) -> Result<(), CompileError> {
         if self.sp >= 64 {
-            return Err("VM Stack overflow");
+            return Err(CompileError::simple(
+                "ERR_VM_STACK_OVERFLOW",
+                "VM Evaluation stack overflow (64 elements limit reached)",
+            ));
         }
         self.stack[self.sp] = val;
         self.sp += 1;
         Ok(())
     }
 
-    fn pop(&mut self) -> Result<i64, &'static str> {
+    fn pop(&mut self) -> Result<i64, CompileError> {
         if self.sp == 0 {
-            return Err("VM Stack underflow");
+            return Err(CompileError::simple(
+                "ERR_VM_STACK_UNDERFLOW",
+                "VM Evaluation stack underflow",
+            ));
         }
         self.sp -= 1;
         Ok(self.stack[self.sp])
@@ -1012,7 +1329,7 @@ impl<'a> VM<'a> {
     // Function: run
     // Description: Execute bytecode under strictly bounded instruction step limit (WCET guarantee).
     // Worst-case execution time: ~100_000 ns (MAX_VM_STEPS * 10 ns)
-    pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), &'static str> {
+    pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
         let mut steps = 0;
 
         while self.ip < self.code.len() && steps < MAX_VM_STEPS {
@@ -1070,7 +1387,10 @@ impl<'a> VM<'a> {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     if b == 0 {
-                        return Err("Division by zero");
+                        return Err(CompileError::simple(
+                            "ERR_VM_DIV_BY_ZERO",
+                            "Division by zero during VM bytecode execution",
+                        ));
                     }
                     self.push(a / b)?;
                 }
@@ -1079,7 +1399,10 @@ impl<'a> VM<'a> {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     if b == 0 {
-                        return Err("Modulo by zero");
+                        return Err(CompileError::simple(
+                            "ERR_VM_MOD_BY_ZERO",
+                            "Modulo by zero during VM bytecode execution",
+                        ));
                     }
                     self.push(a % b)?;
                 }
@@ -1121,12 +1444,12 @@ impl<'a> VM<'a> {
                 }
 
                 OP_JUMP => {
-                    let target = ((self.code[self.ip] as usize) << 8) | (self.code[self.ip + 1] as usize);
+                    let target = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     self.ip = target;
                 }
 
                 OP_JUMP_IF_FALSE => {
-                    let target = ((self.code[self.ip] as usize) << 8) | (self.code[self.ip + 1] as usize);
+                    let target = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     self.ip += 2;
                     let cond = self.pop()?;
                     if cond == 0 {
@@ -1135,25 +1458,25 @@ impl<'a> VM<'a> {
                 }
 
                 OP_PUSH_STR => {
-                    let offset = ((self.code[self.ip] as usize) << 8) | (self.code[self.ip + 1] as usize);
-                    let len = ((self.code[self.ip + 2] as usize) << 8) | (self.code[self.ip + 3] as usize);
+                    let offset = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
+                    let len = u16::from_be_bytes([self.code[self.ip + 2], self.code[self.ip + 3]]) as usize;
                     self.ip += 4;
-                    let tagged = 0x7FFF_0000_0000_0000i64 | ((offset as i64) << 16) | (len as i64);
-                    self.push(tagged)?;
+                    let encoded = ((offset as i64) << 32) | (len as i64);
+                    self.push(encoded)?;
                 }
 
                 OP_CALL_NATIVE => {
                     let func_id = self.code[self.ip];
-                    let argc = self.code[self.ip + 1];
+                    let argc = self.code[self.ip + 1] as usize;
                     self.ip += 2;
 
                     match func_id {
                         NATIVE_PRINT => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val & 0x7FFF_0000_0000_0000i64) == 0x7FFF_0000_0000_0000i64 {
-                                    let offset = ((val >> 16) & 0xFFFF) as usize;
-                                    let len = (val & 0xFFFF) as usize;
+                                if (val >> 32) != 0 && (val as u32) < MAX_STRING_POOL as u32 {
+                                    let offset = (val >> 32) as usize;
+                                    let len = (val & 0xFFFFFFFF) as usize;
                                     if offset + len <= self.str_pool.len() {
                                         if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
                                             serial_print!("{}", s);
@@ -1163,14 +1486,15 @@ impl<'a> VM<'a> {
                                     serial_print!("{}", val);
                                 }
                             }
+                            self.push(0)?;
                         }
 
                         NATIVE_PRINTLN => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val & 0x7FFF_0000_0000_0000i64) == 0x7FFF_0000_0000_0000i64 {
-                                    let offset = ((val >> 16) & 0xFFFF) as usize;
-                                    let len = (val & 0xFFFF) as usize;
+                                if (val >> 32) != 0 && (val as u32) < MAX_STRING_POOL as u32 {
+                                    let offset = (val >> 32) as usize;
+                                    let len = (val & 0xFFFFFFFF) as usize;
                                     if offset + len <= self.str_pool.len() {
                                         if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
                                             serial_println!("{}", s);
@@ -1182,6 +1506,7 @@ impl<'a> VM<'a> {
                             } else {
                                 serial_println!();
                             }
+                            self.push(0)?;
                         }
 
                         NATIVE_SYS_TSC => {
@@ -1196,9 +1521,10 @@ impl<'a> VM<'a> {
 
                         NATIVE_NET_SET_RATE => {
                             if argc > 0 {
-                                let pct = self.pop()? as u8;
-                                CONGESTION_RATE_PCT.store(pct.clamp(10, 100), Ordering::Relaxed);
+                                let rate = self.pop()?;
+                                CONGESTION_RATE_PCT.store(rate as u8, Ordering::Relaxed);
                             }
+                            self.push(0)?;
                         }
 
                         NATIVE_GPU_CAPTURE => {
@@ -1215,9 +1541,10 @@ impl<'a> VM<'a> {
                                 let mut seq = 1u16;
                                 let _ = stream_send_frame(&handle, deadline, &mut seq);
                             }
+                            self.push(1)?;
                         }
 
-                        _ => return Err("Unknown native syscall"),
+                        _ => {}
                     }
                 }
 
@@ -1225,10 +1552,17 @@ impl<'a> VM<'a> {
                     let mut bytes = [0u8; 8];
                     bytes.copy_from_slice(&self.code[self.ip..self.ip + 8]);
                     self.ip += 8;
-                    let deadline_ns = i64::from_be_bytes(bytes) as u64;
-                    let deadline_tsc = read_tsc_serialized() + crate::tsc::ns_to_tsc(deadline_ns, tsc_freq_hz);
+                    let budget_ns = i64::from_be_bytes(bytes) as u64;
+
+                    let tsc_budget = if tsc_freq_hz > 0 {
+                        (budget_ns * tsc_freq_hz) / 1_000_000_000
+                    } else {
+                        budget_ns * 3
+                    };
+                    let deadline = read_tsc_serialized() + tsc_budget;
+
                     if self.dl_sp < 8 {
-                        self.deadline_stack[self.dl_sp] = deadline_tsc;
+                        self.deadline_stack[self.dl_sp] = deadline;
                         self.dl_sp += 1;
                     }
                 }
@@ -1252,12 +1586,20 @@ impl<'a> VM<'a> {
                     break;
                 }
 
-                _ => return Err("Invalid bytecode opcode"),
+                _ => {
+                    return Err(CompileError::simple(
+                        "ERR_VM_INVALID_OPCODE",
+                        "Invalid bytecode opcode encountered in instruction stream",
+                    ));
+                }
             }
         }
 
         if steps >= MAX_VM_STEPS {
-            return Err("Execution exceeded WCET step limit (infinite loop protection)");
+            return Err(CompileError::simple(
+                "ERR_VM_WCET_EXCEEDED",
+                "Execution exceeded WCET instruction step limit (infinite loop protection)",
+            ));
         }
 
         Ok(())
@@ -1267,7 +1609,7 @@ impl<'a> VM<'a> {
 // Function: run_pulse_script
 // Description: Compile and execute a PulseLang script in one shot.
 // Worst-case execution time: ~120_000 ns
-pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str> {
+pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src);
     let _tok_count = lexer.tokenize(&mut tokens)?;
@@ -1286,7 +1628,7 @@ pub const PULSE_HEADER_SIZE: usize = 12;
 // Function: compile_pulse_to_binary
 // Description: Compile PulseLang source code into binary bytecode format.
 // Worst-case execution time: ~60_000 ns
-pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, &'static str> {
+pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, CompileError> {
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src);
     let _tok_count = lexer.tokenize(&mut tokens)?;
@@ -1297,7 +1639,10 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
 
     let total_size = PULSE_HEADER_SIZE + code_len + str_pool_len;
     if total_size > out_buf.len() {
-        return Err("Binary output buffer too small");
+        return Err(CompileError::simple(
+            "ERR_BINARY_BUFFER_OVERFLOW",
+            "Target binary output buffer is too small for compiled bytecode",
+        ));
     }
 
     // Header
@@ -1317,22 +1662,22 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
 // Function: run_pulse_binary
 // Description: Execute pre-compiled PulseLang binary bytecode directly in O(1) zero compilation latency.
 // Worst-case execution time: ~80_000 ns
-pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str> {
+pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
     if bin.len() < PULSE_HEADER_SIZE {
-        return Err("Binary file too small");
+        return Err(CompileError::simple("ERR_BINARY_TOO_SMALL", "Binary file smaller than header size"));
     }
     if &bin[0..4] != &PULSE_BIN_MAGIC {
-        return Err("Invalid PulseLang binary magic");
+        return Err(CompileError::simple("ERR_BINARY_INVALID_MAGIC", "Invalid PulseLang binary magic"));
     }
     let version = u16::from_be_bytes([bin[4], bin[5]]);
     if version != PULSE_BIN_VERSION {
-        return Err("Unsupported PulseLang binary version");
+        return Err(CompileError::simple("ERR_BINARY_VERSION_MISMATCH", "Unsupported PulseLang binary version"));
     }
     let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
     let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
 
     if bin.len() < PULSE_HEADER_SIZE + code_len + str_pool_len {
-        return Err("Truncated binary file");
+        return Err(CompileError::simple("ERR_BINARY_TRUNCATED", "Truncated binary bytecode payload"));
     }
 
     let code = &bin[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len];
@@ -1345,7 +1690,7 @@ pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str
 // Function: run_pulse_auto
 // Description: Automatically detect binary vs source script and execute.
 // Worst-case execution time: ~120_000 ns
-pub fn run_pulse_auto(data: &[u8], tsc_freq_hz: u64) -> Result<(), &'static str> {
+pub fn run_pulse_auto(data: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
     if data.len() >= 4 && &data[0..4] == &PULSE_BIN_MAGIC {
         run_pulse_binary(data, tsc_freq_hz)
     } else {
