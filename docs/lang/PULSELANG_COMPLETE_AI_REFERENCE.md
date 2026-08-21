@@ -184,11 +184,11 @@ If total literal string bytes exceed 512 bytes, the compiler aborts with `String
 ### 23. VM Stack Overflow Protection
 The VM stack is fixed at 64 elements. Attempting to push to a full stack returns `Err("Stack overflow")`.
 
-### 24. Bytecode Verification
+### 24. Bytecode Verification & Format
 Before execution, the VM verifies:
-- File starts with magic `PULS` (`0x50554C53`).
-- Bytecode length matches file header.
-- Jump targets reside within valid instruction boundaries.
+- File starts with magic `PX64` (`0x50583634`) or legacy `PULS` (`0x50554C53`).
+- Bytecode length matches file header (16-byte `PX64` header with register count).
+- Instructions are strictly 4-byte aligned (32-bit fixed instruction encoding).
 
 ### 25. Bytecode Versioning
 Version `2` (`0x0002`) is required in bytes 4-5 of the binary header.
@@ -201,6 +201,9 @@ Version `2` (`0x0002`) is required in bytes 4-5 of the binary header.
 - `5`: `NATIVE_NET_SET_RATE` (`@rate`)
 - `6`: `NATIVE_GPU_CAPTURE` (`@capture`)
 - `7`: `NATIVE_NET_SEND` (`@send`)
+- `8`: `NATIVE_SCRIPT_ARGC` (`@argc`)
+- `9`: `NATIVE_SCRIPT_ARG` (`@arg`)
+
 
 ### 27. Hardware Target Specification
 - CPU: x86_64 with invariant TSC (`CPUID.80000007H:EDX[8] = 1`).

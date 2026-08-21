@@ -84,3 +84,22 @@ $tsc := @tsc();
 @println($rtt);
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 ```
+
+### 1.6 `echo.pl` (コマンドライン引数エコー & 文字列整形)
+```pulse
+// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
+```
+

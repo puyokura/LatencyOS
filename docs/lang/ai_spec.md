@@ -77,19 +77,63 @@ $rtt > 300us ? {
 } : {
     @println("[ACTION] Optimal latency -> Rate: 100%");
     @rate(100);
+### Template 4: Command-Line Argument Echo (`echo.pl`)
+```pulse
+// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
 };
 ```
 
 ---
 
-## 3. Common AI Mistakes to Avoid
+## 3. AI-Actionable Machine-Readable Diagnostic Format
+
+When compilation fails, PulseLang emits structured, deterministic diagnostic logs specifically engineered for autonomous AI agents to repair code without human intervention:
+
+```text
+==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
+[ERROR_CODE]: <Machine readable error identifier: e.g. ERR_SYNTAX_UNEXPECTED_TOKEN>
+[MESSAGE]: <Concise description of the invariant violation>
+[FILE]: <Target file path>
+[LOCATION]: Line <N>, Column <M> (ByteOffset: <B>)
+[TOKEN_FOUND]: Kind: <TokenKind>, Value: "<Literal>"
+[EXPECTED]: <Exact expected token or grammatical construction>
+[PARSER_STAGE]: <Compiler pipeline stage>
+[SOURCE_CONTEXT]:
+  Line   L-1: <Previous line>
+> Line   L:   <Error line>
+              ^^^^ [Syntax Error Here]
+  Line   L+1: <Next line>
+[HEX_DUMP (offset 0x...)]:
+  <Hex and ASCII bytes around error offset>
+[AI_REPAIR_HINT]: <Precise, actionable repair recipe for the AI agent>
+=============================================================================================
+```
+
+---
+
+## 4. Common AI Mistakes to Avoid
 
 | Invalid Pattern | Why it is invalid | Correct Form |
 |---|---|---|
 | `let x = 10;` | PulseLang uses `$var := expr;` | `$x := 10;` |
 | `f := @capture();` | Hardware DMA handles must use `#` | `#f := @capture();` |
 | `while ($i < 10) {}` | Directives require `@` prefix | `@while($i < 10) {}` |
+| `args[0]` | Command-line arguments use `@arg(i)` | `@arg(0)` |
 | `delay(10);` | Unbounded sleeping is forbidden | Use `@within(Time) {}` |
 | `malloc(1024);` | Dynamic heap allocation does not exist | Pre-allocated static slots only |
 | Missing `@send(#f)` | Leaking a `#handle` causes compile error | `#f` must be sent or discarded |
 | `500` (without unit in `@within`) | Time limits require unit suffixes | `@within(500us)` |
+| `if $x > 0 { ... }` | `if` requires parentheses | `if ($x > 0) { ... }` or `$x > 0 ? { ... } : { ... };` |
+

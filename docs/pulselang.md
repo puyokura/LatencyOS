@@ -38,13 +38,15 @@ Unlike traditional human-oriented programming languages that emphasize verbose s
 
 | Intrinsic | Signature | Worst-Case Execution Time | Description |
 |---|---|---|---|
-| `@tsc()` | `() -> i64` | ~12 ns | Reads hardware serialized Time Stamp Counter (`rdtscp` / `lfence; rdtsc`). |
+| `@tsc()` | `() -> i64` | ~12 ns | Reads hardware serialized Time Stamp Counter (`lfence; rdtsc`). |
 | `@rtt()` | `() -> i64` | ~8 ns | Reads minimum measured network Round-Trip Time in nanoseconds. |
 | `@rate(pct)` | `(i64) -> ()` | ~15 ns | Adjusts network congestion throttle percentage (10% - 100%). |
 | `@capture()` | `() -> i64` | ~700 ns | Zero-copy GPU frame capture synchronized with VBLANK edge. Returns hardware slot ID. |
-| `@send(#handle)` | `(i64) -> ()` | ~1200 ns | Transmits frame via kernel-bypass Intel e1000 driver with SRTP/AES-128-GCM encryption. |
-| `@print(val)` | `(any) -> ()` | ~800 ns | Prints string literal or integer value to serial console without heap allocation. |
-| `@println(val)` | `(any) -> ()` | ~900 ns | Prints string/integer followed by CRLF to serial console. |
+| `@send(#handle)` | `(i64) -> ()` | ~1200 ns | Transmits frame via kernel-bypass Intel e1000 driver with SRTP/AES-GCM encryption. |
+| `@argc()` | `() -> i64` | ~5 ns | Returns the count of CLI arguments passed to the script (0..8). |
+| `@arg(idx)` | `(i64) -> Tagged` | ~10 ns | Returns tagged pointer to CLI argument at index `idx`. |
+| `@print(val)` | `(any) -> ()` | ~800 ns | Prints string literal, argument, or integer value to serial console without heap allocation. |
+| `@println(val)` | `(any) -> ()` | ~900 ns | Prints string/argument/integer followed by CRLF to serial console. |
 
 ---
 

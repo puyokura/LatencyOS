@@ -38,6 +38,9 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 ### 3.1 Pulse Shell (Time-Native Unix Minimalist Shell)
 - **Time-First Prompt**: `[c0|18ns] % ` displays the active CPU core and hardware TSC execution latency ($\Delta t$) of the preceding command.
 - **Deadline Guard (`within <time> <cmd>`)**: Evaluates real-time execution against strict hardware budgets (e.g. `within 500us run filter.pl`).
+- **Hierarchical Path Resolution**: Full support for absolute paths (`/pulselang/echo.pl`), CWD relative paths (`echo.pl`), `cd`, and `pwd`.
+- **Command-Line Arguments**: Transparent argument passing to scripts and binaries (`run /bin/echo.bin "hello world"`).
+- **Disassembler (`disasm <file.bin>`)**: Decodes `px64` binaries into 32-bit fixed instructions with x64 register names (`$rax`..`$r15`).
 - **Hardware Telemetry Commands**:
   - `timeline`: Monospace microsecond breakdown of the 6 pipeline stages.
   - `ring`: Real-time inspection of SPSC lock-free queues (occupancy, head/tail pointers).
@@ -47,21 +50,22 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
   - `doc pulse`: In-kernel formal specification of PulseLang v2.
   - `exit` / `poweroff`: ACPI hardware shutdown.
 
-### 3.2 PulseLang v2 (AI-Native Temporal Reactive DSL)
-- Mathematically dense, AI-optimized grammar with first-class time literals (`50ns`, `200us`, `5ms`, `1s`).
-- Direct register bindings (`$rtt`, `$sum`), hardware handles (`#f`), and compiler contracts (`@contract: @wcet(5us) @budget(50us);`).
-- Zero-copy stream piping (`|>`) and deadline assertions (`@within(500us) { ... } !drop;`).
-- Standard scripts: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`.
+### 3.2 PulseLang v2 & `px64` Architecture
+- **`px64` 64-bit Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed instructions.
+- **AI-Actionable Error Diagnostics**: Machine-readable diagnostic logs with error codes, byte offsets, ASCII/Hex dumps, and automatic repair hints.
+- **First-Class Time & Intrinsics**: Direct hardware calls (`@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`).
+- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`.
 - **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)
 - Full-screen terminal text editor running inside the kernel on Core 0.
+- **Nano-Style Shortcut Bar**: Persistent bottom bar (`[^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear]`).
+- **High-Speed Paste**: Instant UART batch drain preventing character drops on large code pastes.
 - Real-time ANSI syntax highlighting for PulseLang tokens, directives, and numbers.
-- Smart word jumping (`Ctrl+Left` / `Ctrl+Right`), full cursor tracking, and one-key in-kernel compilation (`Ctrl+R`).
 
 ### 3.4 LatencyFS (Static Real-Time Filesystem)
 - In-memory static filesystem with zero fragmentation and fixed memory layout.
-- Files stored as fixed-size blocks with instant $O(1)$ lookup.
+- Files stored as fixed-size blocks with instant $O(1)$ lookup and precompiled `px64` binaries in `/bin/`.
 
 ---
 

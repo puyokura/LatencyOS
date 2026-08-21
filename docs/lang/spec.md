@@ -82,7 +82,7 @@ PrimaryExpr     ::= IntegerLiteral
                   | IntrinsicCall
                   | "(" Expression ")"
 
-IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@print" | "@println" ) "(" ArgList? ")"
+IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@argc" | "@arg" | "@print" | "@println" ) "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
 IntegerLiteral  ::= [0-9]+
@@ -99,10 +99,36 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 | Intrinsic | Signature | WCET | Description |
 |---|---|---|---|
-| `@tsc()` | `() -> i64` | **~15 ns** | Reads serialized hardware Time-Stamp Counter (`rdtscp`). |
+| `@tsc()` | `() -> i64` | **~15 ns** | Reads serialized hardware Time-Stamp Counter (`lfence; rdtsc`). |
 | `@rtt()` | `() -> i64` | **~20 ns** | Queries active network round-trip time in nanoseconds from NIC driver. |
 | `@rate(pct)` | `(i64) -> ()` | **~10 ns** | Sets congestion throttle percentage (range: `10` to `100`). |
 | `@capture()` | `() -> #handle`| **~100 ns**| Claims zero-copy GPU frame buffer descriptor slot. |
 | `@send(#h)` | `(#handle) -> ()` | **~200 ns**| Enqueues frame buffer to Intel e1000 NIC TX ring and moves ownership. |
-| `@print(v)` | `(Any) -> ()` | **~500 ns**| Emits text/number to UART COM1 port (no newline). |
-| `@println(v)`| `(Any) -> ()` | **~500 ns**| Emits text/number to UART COM1 port with automatic CRLF normalization. |
+| `@argc()` | `() -> i64` | **~5 ns** | Returns number of CLI arguments passed to the script (0..8). |
+| `@arg(idx)` | `(i64) -> Tagged` | **~10 ns** | Accesses command-line argument at index `idx` via zero-allocation tagged pointer. |
+| `@print(v)` | `(Any) -> ()` | **~500 ns**| Emits text, argument, or number to UART COM1 port (no newline). |
+| `@println(v)`| `(Any) -> ()` | **~500 ns**| Emits text, argument, or number to UART COM1 port with automatic CRLF normalization. |
+
+---
+
+## 5. Command-Line Arguments & Zero-Copy Passing
+
+PulseLang scripts executed via `run <file> [args...]` receive CLI arguments directly into static memory buffers:
+
+```pulse
+// echo.pl - Accessing Command-Line Arguments
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
+```
+

@@ -77,3 +77,65 @@ $rtt > 300us ? {
     @rate(100);
 };
 ```
+
+### テンプレート 4: コマンドライン引数エコー (`echo.pl`)
+```pulse
+// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
+```
+
+---
+
+## 3. AI 向け機械可読エラー診断フォーマット
+
+コンパイルエラー発生時、PulseLang は AI エージェントが自律修復可能な構造化ログを出力します：
+
+```text
+==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
+[ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN
+[MESSAGE]: Unexpected token encountered in expression
+[FILE]: /home/err_syntax.pl
+[LOCATION]: Line 3, Column 10 (ByteOffset: 50)
+[TOKEN_FOUND]: Kind: Number(42), Value: "42"
+[EXPECTED]: Literal value, variable ($var), hardware handle (#h), or intrinsic call (@fn)
+[PARSER_STAGE]: Expression -> Primary
+[SOURCE_CONTEXT]:
+  Line   2: @contract: @wcet(100us) @budget(500us);
+> Line   3: $x := := 42;
+                  ^^ [Syntax Error Here]
+  Line   4: 
+[HEX_DUMP (offset 0x0020..0x0036)]:
+  00000020: 28 35 30 30 75 73 29 3b 0a 24 78 20 3a 3d 20 3a  |(500us);.$x := :|
+  00000030: 3d 20 34 32 3b 0a                                |= 42;.|
+[AI_REPAIR_HINT]: Replace invalid token with a valid variable name, number, or expression
+=============================================================================================
+```
+
+---
+
+## 4. よくある AI 生成ミスと回避策
+
+| 不正なパターン | 不正な理由 | 正しい記述 |
+|---|---|---|
+| `let x = 10;` | PulseLang では `$var := expr;` を使用 | `$x := 10;` |
+| `f := @capture();` | DMA ハンドルには `#` が必須 | `#f := @capture();` |
+| `while ($i < 10) {}` | ループには `@while(...) {}` が必須 | `@while($i < 10) {}` |
+| `args[0]` | 引数取得には `@arg(i)` を使用 | `@arg(0)` |
+| `delay(10);` | 無制限のスリープは禁止 | `@within(Time) {}` を使用 |
+| `malloc(1024);` | 動的ヒープ確保は存在しない | 静的スロットのみ使用 |
+| `@send(#f)` の欠落 | `#handle` のリークはコンパイルエラー | 送信または明示的に破棄 |
+| `500`（単位なし） | 時間には単位接尾辞が必須 | `@within(500us)` |
+| `if $x > 0 { ... }` | `if` には丸括弧が必要 | `if ($x > 0) { ... }` または `$x > 0 ? { ... } : { ... };` |
+

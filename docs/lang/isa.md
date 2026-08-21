@@ -1,53 +1,152 @@
-# PulseLang v2 Bytecode ISA & Virtual Machine Reference
+# px64 (Pulse Extended 64-bit Real-Time Architecture) ISA & VM Specification
 
 ---
 
-## 1. Virtual Machine Architectural Limits
+## 1. Architectural Overview & Design Invariants
 
-- **Stack Size**: 64 entries (64-bit signed integers).
-- **Static Variable Slots**: 32 entries (`$0` to `$31`, `i64`).
-- **Static String Pool**: 512 bytes with tagged pointer representation (`0x7FFF_...`).
-- **Step Limit**: 10,000 instructions max (hard infinite loop & WCET breach prevention).
-- **Deadline Stack**: 8-level nested temporal deadline stack with hardware TSC comparison.
+`px64` is a deterministic, 64-bit register-machine Instruction Set Architecture (ISA) and virtual machine engineered directly into the LatencyOS kernel. It is specifically designed to execute hard real-time streaming scripts with strictly bounded Worst-Case Execution Time (WCET) and zero runtime heap allocations.
 
----
-
-## 2. Bytecode Instruction Set
-
-| Opcode | Mnemonic | Operands | Stack Effect | Description |
-|---|---|---|---|---|
-| `0x00` | `OP_NOP` | None | `[] -> []` | No operation |
-| `0x01` | `OP_PUSH_CONST` | `i64` (8 bytes) | `[] -> [val]` | Push immediate 64-bit integer |
-| `0x02` | `OP_LOAD_VAR` | `u8` (1 byte) | `[] -> [var[idx]]` | Load value from register slot |
-| `0x03` | `OP_STORE_VAR` | `u8` (1 byte) | `[val] -> []` | Store value to register slot |
-| `0x04` | `OP_ADD` | None | `[a, b] -> [a + b]` | Integer addition |
-| `0x05` | `OP_SUB` | None | `[a, b] -> [a - b]` | Integer subtraction |
-| `0x06` | `OP_MUL` | None | `[a, b] -> [a * b]` | Integer multiplication |
-| `0x07` | `OP_DIV` | None | `[a, b] -> [a / b]` | Integer division (div-by-zero protected) |
-| `0x08` | `OP_MOD` | None | `[a, b] -> [a % b]` | Integer modulo |
-| `0x09` | `OP_CMP_EQ` | None | `[a, b] -> [a == b]` | Equality test (1 or 0) |
-| `0x0A` | `OP_CMP_NE` | None | `[a, b] -> [a != b]` | Inequality test |
-| `0x0B` | `OP_CMP_LT` | None | `[a, b] -> [a < b]` | Less than |
-| `0x0C` | `OP_CMP_LE` | None | `[a, b] -> [a <= b]` | Less than or equal |
-| `0x0D` | `OP_CMP_GT` | None | `[a, b] -> [a > b]` | Greater than |
-| `0x0E` | `OP_CMP_GE` | None | `[a, b] -> [a >= b]` | Greater than or equal |
-| `0x0F` | `OP_JUMP` | `u16` (2 bytes) | `[] -> []` | Unconditional jump |
-| `0x10` | `OP_JUMP_IF_FALSE`| `u16` (2 bytes)| `[cond] -> []` | Jump if top of stack is 0 |
-| `0x11` | `OP_CALL_NATIVE` | `u8, u8` (2 bytes)| `[args...] -> [res]` | Call hardware intrinsic (func_id, argc) |
-| `0x12` | `OP_WITHIN_START`| `i64` (8 bytes) | `[] -> []` | Push temporal deadline (ns) |
-| `0x13` | `OP_WITHIN_END` | None | `[] -> []` | Pop and evaluate temporal deadline |
-| `0x14` | `OP_DROP` | None | `[] -> []` | Drop overdue frame & free descriptors |
-| `0x15` | `OP_PUSH_STR` | `u16, u16` (4B) | `[] -> [ptr]` | Push static string pool reference |
-| `0x16` | `OP_HALT` | None | `[] -> []` | Terminate script execution |
+### Architectural Invariants:
+1. **Fixed 32-bit (4-Byte) Instruction Format**: Every instruction is exactly 4 bytes long, enabling $O(1)$ constant-time instruction fetch and decoding without variable-length instruction hazards.
+2. **20-Register Architecture**: 16 General Purpose Registers (`$rax`..`$r15`) + 4 Hardware DMA Slot Registers (`#f0`..`#f3`).
+3. **Tagged Pointer String & Argument Encoding**: Strings and CLI arguments are passed via high-bit tagged 64-bit integers (`STR_TAG: 0x4000_...`, `ARG_TAG: 0x2000_...`) with zero heap allocation.
+4. **Hardware-Integrated Temporal Guards**: First-class hardware instructions for deadline tracking (`WITHIN_START`, `WITHIN_END`, `DROP`) backed by CPU TSC serialized registers.
+5. **Deterministic Step Budget**: Maximum 10,000 instruction steps per execution to strictly prevent infinite loops and WCET overruns.
 
 ---
 
-## 3. Native Function Identifiers (`NATIVE_*`)
+## 2. Register File Map (20 Registers)
 
-- `1`: `NATIVE_PRINT` (`@print`)
-- `2`: `NATIVE_PRINTLN` (`@println`)
-- `3`: `NATIVE_SYS_TSC` (`@tsc`)
-- `4`: `NATIVE_NET_RTT` (`@rtt`)
-- `5`: `NATIVE_NET_SET_RATE` (`@rate`)
-- `6`: `NATIVE_GPU_CAPTURE` (`@capture`)
-- `7`: `NATIVE_NET_SEND` (`@send`)
+| Reg ID | Canonical Name | x64 Alias | Primary Architectural Purpose |
+|---|---|---|---|
+| `0` | `$rax` | `$r0` | Accumulator, Primary Expression Result, Return Value |
+| `1` | `$rcx` | `$r1` | Counter, 1st User Variable Slot |
+| `2` | `$rdx` | `$r2` | Data Register, 2nd User Variable Slot |
+| `3` | `$rbx` | `$r3` | Base Register, 3rd User Variable Slot |
+| `4` | `$rsp` | `$r4` | Stack Pointer Alias, 4th User Variable Slot |
+| `5` | `$rbp` | `$r5` | Base Pointer Alias, 5th User Variable Slot |
+| `6` | `$rsi` | `$r6` | Source Index, 6th User Variable Slot |
+| `7` | `$rdi` | `$r7` | Destination Index, 7th User Variable Slot |
+| `8` | `$r8` | `$r8` | 8th User Variable Slot |
+| `9` | `$r9` | `$r9` | 9th User Variable Slot |
+| `10` | `$r10` | `$r10` | 10th User Variable Slot |
+| `11` | `$r11` | `$r11` | 11th User Variable Slot |
+| `12` | `$r12` | `$r12` | 12th User Variable Slot |
+| `13` | `$r13` | `$r13` | 13th User Variable Slot |
+| `14` | `$r14` | `$r14` | Secondary Internal Calculation Scratch Register |
+| `15` | `$r15` | `$r15` | Primary Internal Calculation Scratch Register |
+| `16` | `#f0` | `#frame`, `#slot0` | Hardware Zero-Copy Frame Slot 0 Descriptor |
+| `17` | `#f1` | `#slot1` | Hardware Zero-Copy Frame Slot 1 Descriptor |
+| `18` | `#f2` | `#slot2` | Hardware Zero-Copy Frame Slot 2 Descriptor |
+| `19` | `#f3` | `#slot3` | Hardware Zero-Copy Frame Slot 3 Descriptor |
+
+---
+
+## 3. 32-bit Fixed Instruction Format
+
+All `px64` instructions are 4 bytes aligned:
+
+```text
++----------------+----------------+----------------+----------------+
+| Byte 0 (Opcode)| Byte 1 (Rd)    | Byte 2 (Rs1)   | Byte 3 (Rs2)   |
+| [7:0]          | [7:0]          | [7:0] / Imm_hi | [7:0] / Imm_lo |
++----------------+----------------+----------------+----------------+
+```
+
+- **Byte 0 (`Opcode`)**: `PX64_OP_*` opcode identifier (0..22).
+- **Byte 1 (`Rd`)**: Destination Register ID (0..19).
+- **Byte 2 (`Rs1`)**: First Source Register ID (0..19) OR High Byte of 16-bit Immediate (`Imm[15:8]`).
+- **Byte 3 (`Rs2`)**: Second Source Register ID (0..19) OR Low Byte of 16-bit Immediate (`Imm[7:0]`).
+
+---
+
+## 4. Complete Instruction Set
+
+| Opcode | Mnemonic | Operands | Encoding | Semantics & Operation | WCET |
+|---|---|---|---|---|---|
+| `0x00` | `NOP` | None | `00 00 00 00` | No Operation | ~1 ns |
+| `0x01` | `MOV` | `Rd, Imm16` | `01 Rd Ih Il` | `Rd = (Ih << 8) \| Il` | ~2 ns |
+| `0x02` | `MOV` | `Rd, Rs1` | `02 Rd Rs 00` | `Rd = Rs1` | ~2 ns |
+| `0x03` | `MOVS` | `Rd, Offset, Len` | `03 Rd Of Ln` | `Rd = STR_TAG \| (Of << 32) \| Ln` | ~3 ns |
+| `0x04` | `ADD` | `Rd, Rs1, Rs2` | `04 Rd S1 S2` | `Rd = Rs1.wrapping_add(Rs2)` | ~2 ns |
+| `0x05` | `SUB` | `Rd, Rs1, Rs2` | `05 Rd S1 S2` | `Rd = Rs1.wrapping_sub(Rs2)` | ~2 ns |
+| `0x06` | `MUL` | `Rd, Rs1, Rs2` | `06 Rd S1 S2` | `Rd = Rs1.wrapping_mul(Rs2)` | ~3 ns |
+| `0x07` | `DIV` | `Rd, Rs1, Rs2` | `07 Rd S1 S2` | `Rd = (Rs2 != 0) ? Rs1 / Rs2 : 0` | ~12 ns |
+| `0x08` | `MOD` | `Rd, Rs1, Rs2` | `08 Rd S1 S2` | `Rd = (Rs2 != 0) ? Rs1 % Rs2 : 0` | ~12 ns |
+| `0x09` | `CMPEQ` | `Rd, Rs1, Rs2` | `09 Rd S1 S2` | `Rd = (Rs1 == Rs2) ? 1 : 0` | ~2 ns |
+| `0x0A` | `CMPNE` | `Rd, Rs1, Rs2` | `0a Rd S1 S2` | `Rd = (Rs1 != Rs2) ? 1 : 0` | ~2 ns |
+| `0x0B` | `CMPLT` | `Rd, Rs1, Rs2` | `0b Rd S1 S2` | `Rd = (Rs1 < Rs2) ? 1 : 0` | ~2 ns |
+| `0x0C` | `CMPLE` | `Rd, Rs1, Rs2` | `0c Rd S1 S2` | `Rd = (Rs1 <= Rs2) ? 1 : 0` | ~2 ns |
+| `0x0D` | `CMPGT` | `Rd, Rs1, Rs2` | `0d Rd S1 S2` | `Rd = (Rs1 > Rs2) ? 1 : 0` | ~2 ns |
+| `0x0E` | `CMPGE` | `Rd, Rs1, Rs2` | `0e Rd S1 S2` | `Rd = (Rs1 >= Rs2) ? 1 : 0` | ~2 ns |
+| `0x0F` | `JMP` | `Target16` | `0f 00 Th Tl` | `IP = (Th << 8) \| Tl` | ~2 ns |
+| `0x10` | `JZ` | `Rs1, Target16` | `10 Rs Th Tl` | `if Rs1 == 0 { IP = Target }` | ~3 ns |
+| `0x11` | `JNZ` | `Rs1, Target16` | `11 Rs Th Tl` | `if Rs1 != 0 { IP = Target }` | ~3 ns |
+| `0x12` | `CALL_NAT` | `Rd, FuncId, ArgReg` | `12 Rd Fn Ar` | `Rd = call_native(Fn, ArgReg)` | Varies |
+| `0x13` | `WITHIN_START` | `Rs1` | `13 Rs 00 00` | Push deadline `TSC + ns_to_tsc(Rs1 * 1000)` | ~15 ns |
+| `0x14` | `WITHIN_END` | None | `14 00 00 00` | Pop deadline stack | ~2 ns |
+| `0x15` | `DROP` | None | `15 00 00 00` | If `TSC > deadline`, drop overdue frame | ~10 ns |
+| `0x16` | `HALT` | None | `16 00 00 00` | Terminate VM execution | ~1 ns |
+
+---
+
+## 5. Native Intrinsics (`CALL_NAT`) Reference
+
+| Func ID | Intrinsic Name | Signature | Description |
+|---|---|---|---|
+| `1` | `@print` | `(any) -> 0` | Print string literal, tagged CLI argument, or integer to serial console without heap allocation. |
+| `2` | `@println` | `(any) -> 0` | Print value followed by CRLF to serial console. |
+| `3` | `@tsc` | `() -> i64` | Read hardware serialized Time Stamp Counter (`lfence; rdtsc`). |
+| `4` | `@rtt` | `() -> i64` | Read active network minimum round-trip time in nanoseconds. |
+| `5` | `@rate` | `(pct: i64) -> 0` | Adjust network congestion throttle percentage (10%..100%). |
+| `6` | `@capture` | `() -> i64` | Zero-copy GPU frame capture synchronized with VBLANK edge. Returns slot ID (16..19). |
+| `7` | `@send` | `(slot: i64) -> 1` | Transmit frame via kernel-bypass Intel e1000 PMD driver with SRTP/AES-GCM encryption. |
+| `8` | `@argc` | `() -> i64` | Return number of CLI arguments passed to script (0..8). |
+| `9` | `@arg` | `(idx: i64) -> Tagged` | Return tagged pointer reference to CLI argument at index `idx`. |
+
+---
+
+## 6. Binary Container Format (`PX64`)
+
+Compiled `px64` executable binaries contain a 16-byte fixed header followed by 4-byte aligned bytecode instructions and a static string pool.
+
+```text
++-------------------------------------------------------------------------------+
+| Bytes 0..3   : Magic Bytes ("PX64" -> 0x50, 0x58, 0x36, 0x34)                 |
+| Bytes 4..5   : Version (0x0002)                                               |
+| Bytes 6..7   : Bytecode Section Length in Bytes (CodeLen: u16 big-endian)     |
+| Bytes 8..9   : String Pool Section Length in Bytes (StrLen: u16 big-endian)   |
+| Bytes 10..11 : Register Count (0x0014 = 20 Registers)                         |
+| Bytes 12..15 : Reserved (0x0000_0000)                                         |
++-------------------------------------------------------------------------------+
+| Bytecode Payload (CodeLen bytes, 4-byte aligned px64 instructions)            |
++-------------------------------------------------------------------------------+
+| String Pool Payload (StrLen bytes of raw UTF-8 string data)                   |
++-------------------------------------------------------------------------------+
+```
+
+---
+
+## 7. Disassembly Output Format
+
+The in-kernel `disasm <file.bin>` command inspects and formats `PX64` binaries:
+
+```text
+=== px64 Real-Time Architecture Disassembly: /bin/echo.bin ===
+Magic: PX64 | Version: 2 | Code: 124 B | Registers: 20 GPRs+HW | StringPool: 51 B
+OFFSET  HEX          INSTRUCTION  OPERANDS
+---------------------------------------------------------------
+0000:   12 01 08 00  CALL_NAT     $rcx = @argc($rax)
+0004:   02 00 01 00  MOV          $rax, $rcx
+0008:   01 0f 00 00  MOV          $r15, 0
+000c:   0d 00 00 0f  CMPGT        $rax, $rax, $r15
+0010:   10 00 00 70  JZ           $rax, 0x0070
+0014:   01 02 00 00  MOV          $rdx, 0
+0018:   02 00 02 00  MOV          $rax, $rdx
+001c:   02 0f 01 00  MOV          $r15, $rcx
+0020:   0b 00 00 0f  CMPLT        $rax, $rax, $r15
+0024:   10 00 00 64  JZ           $rax, 0x0064
+...
+0078:   16 00 00 00  HALT
+```
+

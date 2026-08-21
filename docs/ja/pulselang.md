@@ -52,7 +52,7 @@ Primary         ::= Number
                   | IntrinsicCall
                   | "(" Expression ")"
 
-IntrinsicCall   ::= ( "@print" | "@println" | "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" ) "(" ArgList? ")"
+IntrinsicsCall   ::= ( "@print" | "@println" | "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@argc" | "@arg" ) "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
 TimeLiteral     ::= [0-9]+ ("ns" | "us" | "ms" | "s")
@@ -69,7 +69,7 @@ HardwareIdent   ::= "#" [a-zA-Z0-9_]+
 | **`i64`** | 64-bit 符号付き整数 | 算術計算・汎用レジスタ | `42`, `-100` |
 | **`TimeLiteral`** | 64-bit 符号なし整数 (ns) | コンパイル時に絶対ナノ秒値へ即値展開 | `500us` (→ 500,000) |
 | **`LinearHandle`** | 8-bit スロット ID | 複製不能・単一所有権ハードウェア記述子 | `#f` |
-| **`String`** | タグ付きポインタ (`0x7FFF_...`) | 静的文字列プールへのオフセット | `"Optimal"` |
+| **`String` / `Arg`** | タグ付きポインタ (`0x4000_...` / `0x2000_...`) | 静的文字列プール / 引数バッファへのオフセット | `"Optimal"`, `@arg(0)` |
 
 ### 3.1 線形型（Linear Type）`#handle` の所有権規則
 - `#f := @capture();` でハードウェアスロットが払い出されます。
@@ -84,7 +84,7 @@ HardwareIdent   ::= "#" [a-zA-Z0-9_]+
 |---|---|---|---|
 | **Compiler Contracts** | `@contract:`, `@pipeline:`, `@budget()`, `@wcet()` | コンパイル時 | 静的 WCET 予算の宣言と整合性検証 |
 | **Control Flow** | `@within(...)`, `@while(...)`, `@on_vblank:` | 実行時 | 時間制約付きブロック、イベントハンドラ |
-| **Hardware Intrinsics** | `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()` | 実行時 | ハードウェア直接実行システムコール |
+| **Hardware Intrinsics** | `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()` | 実行時 | ハードウェア直接実行システムコール |
 
 ---
 
@@ -92,22 +92,26 @@ HardwareIdent   ::= "#" [a-zA-Z0-9_]+
 
 | 関数名 | 引数 | 戻り値 | 最悪実行時間 | 説明 |
 |---|---|---|---|---|
-| `@tsc()` | なし | `i64` | ~15 ns | ハードウェア TSC（`rdtscp`）のシリアル化現在値 |
+| `@tsc()` | なし | `i64` | ~15 ns | ハードウェア TSC（`lfence; rdtsc`）のシリアル化現在値 |
 | `@rtt()` | なし | `i64` (ns) | ~20 ns | ネットワーク PMD が計測した最新の RTT |
 | `@rate(pct)` | `i64` (10..100) | なし | ~10 ns | 輻輳制御コントローラの送信レート変更 |
 | `@capture()` | なし | `#handle` | ~100 ns | 最新の GPU フレームバッファスロットを取得 |
 | `@send(#h)` | `#handle` | なし | ~200 ns | フレームを NIC 送信リングへゼロコピー送出 |
+| `@argc()` | なし | `i64` | ~5 ns | スクリプトに渡された引数の個数 (0..8) |
+| `@arg(idx)` | `i64` | Tagged | ~10 ns | 指定インデックスの引数をタグ付きポインタで参照 |
 | `@print(val)` | 任意 | なし | ~500 ns | シリアルポートへ出力（改行なし） |
 | `@println(val)`| 任意 | なし | ~500 ns | シリアルポートへ出力（改行あり） |
 
 ---
 
-## 6. バイトコード ISA 仕様
+## 6. `px64` アーキテクチャ & バイトコード仕様
 
-- **スタックサイズ**: 64 エントリ (`i64`)
-- **レジスタスロット**: 32 個 (`$0` 〜 `$31`)
+- **アーキテクチャ**: `px64` (Pulse Extended 64-bit Real-Time Architecture)
+- **命令フォーマット**: 32-bit (4 バイト) 固定長命令
+- **レジスタ数**: 20 本（16 本の GPR `$rax`〜`$r15` ＋ 4 本の HW スロット `#f0`〜`#f3`）
 - **文字列プール**: 512 バイト
 - **ステップ数制限**: 10,000 命令（無限ループ防止）
+
 
 ```
 0x01: OP_PUSH_CONST   [i64]          スタックへ即値をプッシュ

@@ -51,7 +51,7 @@ $dt := @tsc() - $t0;
 
 ---
 
-### 1.3 `jitter.pl` (連続 TSC によるハードウェアジッタ計測)
+### 1.4 `jitter.pl` (連続 TSC によるハードウェアジッタ計測)
 ```pulse
 // jitter.pl - Cycle-Accurate Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
@@ -66,8 +66,27 @@ $delta < 100 ? {
     @println("[STATUS] Determinism: Jitter detected");
 };
 ```
+
+### 1.5 `echo.pl` (コマンドライン引数エコー & 文字列整形)
+```pulse
+// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
+```
 - **解説**:
-  - 連続して 2 回 TSC を読み出し、ディスパッチと命令実行に伴うオーバーヘッドを測定。100 サイクル未満であればジッタフリーと判定します。
+  - `@argc()`: シェルから渡された引数の総数を取得。
+  - `@arg($i)`: ゼロアロケーションで $i$ 番目の引数文字列を出力。
 
 ---
 
@@ -109,3 +128,4 @@ $k := 0;
     @println($net);
 } !drop;
 ```
+

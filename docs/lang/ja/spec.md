@@ -66,7 +66,7 @@ PrimaryExpr     ::= IntegerLiteral
                   | IntrinsicCall
                   | "(" Expression ")"
 
-IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@print" | "@println" ) "(" ArgList? ")"
+IntrinsicCall   ::= ( "@tsc" | "@rtt" | "@rate" | "@capture" | "@send" | "@argc" | "@arg" | "@print" | "@println" ) "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
 IntegerLiteral  ::= [0-9]+
@@ -83,10 +83,36 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 | 関数名 | シグネチャ | 最悪実行時間 | 説明 |
 |---|---|---|---|
-| `@tsc()` | `() -> i64` | **~15 ns** | ハードウェア TSC（`rdtscp`）のシリアル化現在値を返す |
+| `@tsc()` | `() -> i64` | **~15 ns** | ハードウェア TSC（`lfence; rdtsc`）のシリアル化現在値を返す |
 | `@rtt()` | `() -> i64` | **~20 ns** | PMD ドライバが計測した最新の RTT（ナノ秒）を取得 |
 | `@rate(pct)` | `(i64) -> ()` | **~10 ns** | 送信レート（10〜100%）を設定 |
 | `@capture()` | `() -> #handle` | **~100 ns** | GPU フレームバッファの線形記述子スロットを取得 |
 | `@send(#h)` | `(#handle) -> ()` | **~200 ns** | NIC 送信リングへゼロコピー送出し、所有権を移動 |
+| `@argc()` | `() -> i64` | **~5 ns** | スクリプトに渡されたコマンドライン引数の個数 (0〜8) を取得 |
+| `@arg(idx)` | `(i64) -> Tagged` | **~10 ns** | インデックス `idx` のコマンドライン引数をタグ付きポインタで参照 |
 | `@print(v)` | `(Any) -> ()` | **~500 ns** | シリアル出力（改行なし） |
 | `@println(v)` | `(Any) -> ()` | **~500 ns** | シリアル出力（改行あり、CRLF 自動正規化） |
+
+---
+
+## 5. コマンドライン引数とゼロコピー受け渡し
+
+`run <ファイル> [引数...]` で実行されたスクリプトは、ヒープ割り当てなしで引数を受信できます：
+
+```pulse
+// echo.pl - コマンドライン引数の処理例
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
+```
+

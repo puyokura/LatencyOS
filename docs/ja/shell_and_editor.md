@@ -55,39 +55,62 @@ LatencyOS の対話環境は、マイクロ秒・ナノ秒単位のハードウ�
 ---
 
 ### 1.3 コンパイル済みバイナリの実行方法 (`compile` & `run`)
-PulseLang のスクリプト（`.pl`）は、その場でコンパイルして実行できるほか、事前にバイトコードバイナリ（`.bin`）へビルドしておくことで、**コンパイル時間ゼロの $O(1)$ 最速起動**が可能です。
+PulseLang のスクリプト（`.pl`）は、その場でコンパイルして実行できるほか、事前に `px64` バイトコードバイナリ（`.bin`）へビルドしておくことで、**コンパイル時間ゼロの $O(1)$ 最速起動**が可能です。また、コマンドライン引数（スペース区切り）を渡すことができます。
 
 1. **コンパイル**:
    ```text
-   [c0|14ns] % compile stream.pl stream.bin
-   [BUILD] Compiled stream.pl -> stream.bin (108 B binary bytecode, wcet ~2400 ns)
+   [c0|14ns] % compile /pulselang/echo.pl /bin/my_echo.bin
+   [BUILD] Compiled /pulselang/echo.pl -> /bin/my_echo.bin (191 B binary bytecode, wcet ~4475 ns)
    ```
-2. **実行**:
+2. **実行 & 引数受け渡し**:
    ```text
-   [c0|12ns] % run stream.bin
-   [STREAM] Glass-to-Glass Pipeline executing on Core 1-3...
-   ```
-   ※ `run` コマンドは引数のファイル先頭のマジック（`PULS`）を自動検知するため、`.pl` と `.bin` のいずれも同じ `run <ファイル名>` で実行可能です。
+   [c0|12ns] % run /bin/my_echo.bin "hello world"
+   hello world
 
-3. **バイナリビューア (`hex` / `xxd` / `disasm`)**:
+   [c0|12ns] % run /pulselang/echo.pl "arg1" "arg2"
+   arg1 arg2
+   ```
+   ※ `run` コマンドは引数のファイル先頭のマジック（`PX64` または `PULS`）を自動検知するため、`.pl` と `.bin` のいずれも同じ `run <ファイル名> [引数...]` で透過的に実行可能です。
+
+3. **バイナリビューア & 逆アセンブラ (`hex` / `disasm`)**:
    - `hex stream.bin`: バイトコードの 16 進ダンプを出力
-   - `disasm stream.bin`: バイトコードの Opcode とオペランドを逆アセンブル
+   - `disasm stream.bin`: `px64` レジスタマシン命令とオペランド（`$rax`〜`$r15`, `#f0`〜`#f3`）を逆アセンブル表示
+
+```text
+[c0|18ns] % disasm /bin/echo.bin
+=== px64 Real-Time Architecture Disassembly: /bin/echo.bin ===
+Magic: PX64 | Version: 2 | Code: 124 B | Registers: 20 GPRs+HW | StringPool: 51 B
+OFFSET  HEX          INSTRUCTION  OPERANDS
+---------------------------------------------------------------
+0000:   12 01 08 00  CALL_NAT     $rcx = @argc($rax)
+0004:   02 00 01 00  MOV          $rax, $rcx
+0008:   01 0f 00 00  MOV          $r15, 0
+000c:   0d 00 00 0f  CMPGT        $rax, $rax, $r15
+0010:   10 00 00 70  JZ           $rax, 0x0070
+...
+0078:   16 00 00 00  HALT
+```
 
 ---
 
-### 1.4 階層的ファイルシステムと初期ディレクトリ構成
-LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。すべてのスクリプト（`.pl`）は `/pulselang/`、スタンドアロンバイナリ（`.bin`）は `/bin/` 配下に整理されて配置されます。
+### 1.4 階層的ファイルシステムとパス解決
+LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。
+- 絶対パス（`/pulselang/echo.pl`）
+- カレントディレクトリ相対パス（`echo.pl`、`pulselang/echo.pl`）
+- `cd <dir>` によるカレントワーキングディレクトリの移動と `pwd`
 
 ```text
 / (ルート)
 ├── /pulselang/         # PulseLang v2 スクリプトディレクトリ
+│   ├── echo.pl         # コマンドライン引数対応エコー
 │   ├── stream.pl       # ゼロコピー GPU-to-NIC パイプライン
 │   ├── bench.pl        # リアルタイム演算ベンチマーク
 │   ├── filter.pl       # 輻輳制御ガード
 │   ├── jitter.pl       # ジッター計測
 │   └── telemetry.pl    # ハードウェアテレメトリ
-├── /bin/               # コンパイル済み実行可能バイナリ
-│   ├── stream.bin      # コンパイル済みバイナリ (即時実行用)
+├── /bin/               # コンパイル済み px64 実行可能バイナリ
+│   ├── echo.bin        # コンパイル済みバイナリ
+│   ├── stream.bin      # コンパイル済みバイナリ
 │   ├── bench.bin       # コンパイル済みバイナリ
 │   ├── filter.bin      # コンパイル済みバイナリ
 │   ├── jitter.bin      # コンパイル済みバイナリ
@@ -101,39 +124,13 @@ LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築�
     └── readme.txt      # テキストガイド
 ```
 
-### 1.5 カレントディレクトリ限定 `ls` の動作
-`ls` コマンドは**現在のカレントワーキングディレクトリ内のファイル・ディレクトリのみ**を表示します。
-
-```text
-[c0|12ns] % pwd
-/
-[c0|10ns] % ls
-bin/  etc/  var/  home/  pulselang/
-
-[c0|14ns] % cd /pulselang
-[c0|10ns] % pwd
-/pulselang
-[c0|12ns] % ls
-stream.pl  bench.pl  filter.pl  jitter.pl  telemetry.pl
-
-[c0|10ns] % cd /bin
-[c0|10ns] % pwd
-/bin
-[c0|12ns] % ls
-stream.bin  bench.bin  filter.bin  jitter.bin  telemetry.bin
-
-[c0|15ns] % ls -t
-stream.bin       (wcet: ~0.8us , size:  108 B)
-bench.bin        (wcet: ~0.8us , size:   96 B)
-filter.bin       (wcet: ~0.8us , size:  112 B)
-...
-```
-
 ---
 
 ## 2. PulseEditor (カーネル内蔵フルスクリーンエディタ)
 
-PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作する ANSI フルスクリーンテキストエディタです。`.pl` スクリプトのほか、`.txt`、`.json`、`.log`、`.md` などあらゆるテキストファイルを編集できます。
+PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作する ANSI フルスクリーンテキストエディタです。画面最下部に Nano 風の固定ショートカットバーが常時表示されます。
+
+```text
   1 | // stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
   2 | @pipeline: UltraStream @budget(8000us);
   3 | @on_vblank: {
@@ -145,32 +142,58 @@ PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作
   9 |     } !drop;
  10 | };
 --------------------------------------------------------------------------------
-[MSG] Ready. (Ctrl+S: Save, Ctrl+R: Run, Ctrl+Q: Quit, Ctrl+C: Clear)
- [^S Save]  [^R Run]  [^Q Quit]  [^C Clear]  [^X Save&Quit]  [^K KillLine]
+[MSG] Ready.
+ [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear]
 ```
 
-### 2.1 キーバインド一覧 (Ctrl 操作完全対応)
+### 2.1 キーバインド一覧
 
 | キー操作 | 機能 | 説明 |
 |---|---|---|
-| `Ctrl + S` | **保存** | 現在のバッファを LatencyFS へ即時永続化 |
-| `Ctrl + R` | **コンパイル & 実行** | エディタを開いたままスクリプトを実行し結果を確認 |
-| `Ctrl + Q` | **終了** | エディタを終了し Pulse Shell へ復帰 |
+| `Ctrl + S` / `F2` | **保存** | 現在のバッファを LatencyFS へ即時永続化 |
+| `Ctrl + R` / `F5` | **コンパイル & 実行** | エディタを開いたままスクリプトを実行し結果を確認 |
+| `Ctrl + Q` / `F10`| **終了** | エディタを終了し Pulse Shell へ復帰 |
 | `Ctrl + X` | **保存して終了** | バッファを保存したうえで即座にシェルへ復帰 |
-| `Ctrl + C` | **バッファクリア** | 編集中のテキストを一括消去 |
+| `Esc C` / `Ctrl + C` | **バッファクリア** | 編集中のテキストを一括消去 |
 | `Ctrl + A` / `Home` | **行頭移動** | 現在行の先頭へカーソルを移動 |
 | `Ctrl + E` / `End` | **行末移動** | 現在行の末尾へカーソルを移動 |
-| `Ctrl + K` | **行末まで削除 (Kill Line)** | カーソル位置から現在行末までを一括削除 |
+| `Ctrl + K` | **行末まで削除** | カーソル位置から現在行末までを一括削除 |
 | `Ctrl + U` | **行頭まで削除** | カーソル位置から現在行頭までを一括削除 |
-| `Ctrl + D` | **1文字削除** | カーソル位置の文字を削除（Delete 相当） |
+| `Ctrl + D` | **1文字削除** | カーソル位置の文字を削除 |
 | `Ctrl + L` | **画面再描画** | エディタ画面を強制リフレッシュ |
-| `Ctrl + ←` | **左単語ジャンプ** | カーソルを前の単語の先頭へ移動 |
-| `Ctrl + →` | **右単語ジャンプ** | カーソルを次の単語の先頭へ移動 |
+| `Ctrl + ←` / `Ctrl + →` | **単語ジャンプ** | 前後の単語境界へカーソルを移動 |
 | `Tab` | **インデント挿入** | 4 つのスペースを自動挿入 |
 | `Backspace` | **文字削除** | カーソル直前の文字を削除 |
-| `Delete` | **文字削除** | カーソル位置の文字を削除 |
+| `Delete` (`\x1b[3~`)| **前方文字削除** | カーソル位置の文字を正確に削除（残像なし） |
 
 ---
 
-### 2.2 Windows からのコード貼り付け (Paste)
-- Windows / Zed / VS Code / PowerShell からコードをコピーし、エディタ上で `Ctrl + V`（または右クリック / `Shift + Insert`）で貼り付けた場合、UART 受信バッファの自動一括ドレインと CRLF 重複排除機能により、**1 文字も欠落することなくインデントを維持したまま瞬時にコードが挿入** されます。
+### 2.2 高速コード貼り付け (Paste)
+Windows / Mac / Linux からコードをコピーし、エディタ上で `Ctrl + V`（または右クリック / `Shift + Insert`）で貼り付けた場合、UART 受信バッファの自動一括ドレインと CRLF 重複排除機能により、**長いコードやコメント行であっても 1 文字も欠落することなく瞬時に挿入** されます。
+
+---
+
+### 2.3 AI 向け機械可読コンパイルエラーログ
+PulseLang コンパイラは、エラー発生時に AI エージェントや自動化ツールが即座に原因特定・修復できるように構造化された診断ログを出力します：
+
+```text
+==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
+[ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN
+[MESSAGE]: Unexpected token encountered in expression
+[FILE]: /home/err_syntax.pl
+[LOCATION]: Line 3, Column 10 (ByteOffset: 50)
+[TOKEN_FOUND]: Kind: Number(42), Value: "42"
+[EXPECTED]: Literal value, variable ($var), hardware handle (#h), or intrinsic call (@fn)
+[PARSER_STAGE]: Expression -> Primary
+[SOURCE_CONTEXT]:
+  Line   2: @contract: @wcet(100us) @budget(500us);
+> Line   3: $x := := 42;
+                  ^^ [Syntax Error Here]
+  Line   4: 
+[HEX_DUMP (offset 0x0020..0x0036)]:
+  00000020: 28 35 30 30 75 73 29 3b 0a 24 78 20 3a 3d 20 3a  |(500us);.$x := :|
+  00000030: 3d 20 34 32 3b 0a                                |= 42;.|
+[AI_REPAIR_HINT]: Replace invalid token with a valid variable name, number, or expression
+=============================================================================================
+```
+
