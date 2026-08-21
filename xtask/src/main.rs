@@ -674,11 +674,11 @@ fn test_editor_delete(kernel_elf: &Path) {
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(150));
 
-    // Check that nano-style bottom bar \x1b[24;1H is rendered
+    // Check that PulseEditor bottom bar \x1b[24;1H is rendered
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
-    assert!(full_output.contains("\x1b[24;1H\x1b[7m [^S / F2 Save]"), "Missing nano-style fixed bottom shortcuts bar at row 24!");
+    assert!(full_output.contains("\x1b[24;1H\x1b[7m [^S / F2 Save]"), "Missing PulseEditor fixed bottom shortcuts bar at row 24!");
 
     // Save and Quit
     tcp_stream.write_all(&[0x13]).unwrap(); // ^S
@@ -760,6 +760,171 @@ fn test_editor_delete(kernel_elf: &Path) {
     let _ = child.wait();
 
     println!("[xtask-test] === TEST PASSED: Nano-style bottom bar, DELETE key, path resolution, and script argument execution verified! ===");
+}
+
+fn test_editor_scroll(kernel_elf: &Path) {
+    let qemu = find_tool("qemu-system-x86_64");
+    println!("[xtask] Running automated nano editor scrolling & 35+ lines test with kernel: {}", kernel_elf.display());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
+    let mut cmd = Command::new(&qemu);
+    cmd.arg("-kernel")
+        .arg(kernel_elf)
+        .arg("-cpu")
+        .arg("max")
+        .arg("-chardev")
+        .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
+        .arg("-serial")
+        .arg("chardev:ser0")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-m")
+        .arg("128M")
+        .arg("-smp")
+        .arg("4")
+        .arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("e1000,netdev=net0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("PATH", get_augmented_path());
+
+    let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+
+    let (mut tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+    let _ = tcp_stream.set_nodelay(true);
+    let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
+
+    use std::io::{Read, Write};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match tcp_read.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+
+    println!("[xtask-test] Waiting for shell prompt...");
+    assert!(wait_for("[c0|", 15, &mut full_output), "Timed out waiting for shell prompt");
+
+    // Open editor for a new file
+    println!("[xtask-test] Opening editor: edit /home/scroll_35.pl");
+    tcp_stream.write_all(b"edit /home/scroll_35.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+
+    assert!(wait_for("LatencyOS PulseEditor", 5, &mut full_output), "Timed out waiting for PulseEditor to open");
+    println!("[xtask-test] PulseEditor UI verified!");
+
+    // Verify PulseEditor top and bottom headers
+    assert!(full_output.contains("LatencyOS PulseEditor | File:"), "Missing PulseEditor header title");
+    assert!(full_output.contains("\x1b[24;1H\x1b[7m [^S / F2 Save]"), "Missing PulseEditor shortcut bar");
+
+    // Create 35 lines of code
+    println!("[xtask-test] Typing 35 lines into editor...");
+    let mut script_payload = String::new();
+    for i in 1..=35 {
+        script_payload.push_str(&format!("$line_{:02} := {};\n", i, i * 10));
+    }
+    tcp_stream.write_all(script_payload.as_bytes()).unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Drain terminal buffer from typing
+    std::thread::sleep(Duration::from_millis(300));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+
+    // Move to TOP (Line 1) using Page Up (^Y or \x1b[5~)
+    println!("[xtask-test] Moving to TOP with Page Up (^Y)...");
+    tcp_stream.write_all(&[0x19, 0x19]).unwrap(); // ^Y twice
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    full_output.clear();
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] Viewport at TOP:\n{}", full_output);
+    assert!(full_output.contains("line_01"), "Line 1 not visible at top of viewport!");
+    assert!(!full_output.contains("line_35"), "Line 35 should not be visible when scrolled to top!");
+
+    // Scroll down to Line 35 using Page Down (^V or \x1b[6~)
+    println!("[xtask-test] Scrolling down to BOTTOM with Page Down (^V)...");
+    tcp_stream.write_all(&[0x16, 0x16]).unwrap(); // ^V twice
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    full_output.clear();
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] Viewport at BOTTOM:\n{}", full_output);
+    assert!(full_output.contains("line_35"), "Line 35 not visible after scrolling down!");
+
+    // Test Nano Cut (^K) and Uncut (^U)
+    println!("[xtask-test] Testing Nano Cut (^K) and Uncut (^U)...");
+    tcp_stream.write_all(&[0x0B]).unwrap(); // ^K
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    tcp_stream.write_all(&[0x15]).unwrap(); // ^U
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Save and Quit
+    println!("[xtask-test] Saving and exiting with ^X...");
+    tcp_stream.write_all(&[0x18]).unwrap(); // ^X
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Timed out waiting for shell prompt after ^X");
+
+    // Cat the file and verify all 35 lines exist in LatencyFS
+    full_output.clear();
+    println!("[xtask-test] Running: cat /home/scroll_35.pl");
+    tcp_stream.write_all(b"cat /home/scroll_35.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] Result file content:\n{}", full_output);
+
+    for i in 1..=35 {
+        assert!(full_output.contains(&format!("$line_{:02} := {};", i, i * 10)), "Missing line {} in saved file!", i);
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] === TEST PASSED: GNU nano UI, vertical scrolling past 21 lines, and 35+ lines file persistence verified! ===");
 }
 
 fn test_px64_architecture(kernel_elf: &Path) {
@@ -849,7 +1014,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
     }
     println!("[xtask-test] disasm /bin/echo.bin output:\n{}", full_output);
     assert!(full_output.contains("=== [px64 Virtual Register Machine Disassembly] /bin/echo.bin ==="), "Missing px64 disassembly header");
-    assert!(full_output.contains("Magic: PX64 | Version: 2"), "Missing PX64 magic and version");
+    assert!(full_output.contains("Magic: PX64 | Version: 3"), "Missing PX64 magic and version");
     assert!(full_output.contains("CALL_NAT"), "Missing CALL_NAT instruction in disassembly");
 
     // Test 2: compile /pulselang/echo.pl /bin/my_echo.bin
@@ -944,10 +1109,127 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] Elapsed host time for /loop_cap.pl: {:?}", cap_elapsed);
     assert!(full_output.contains("ERR_PX64_TIMEOUT_EXCEEDED"), "Adversarial @capture() loop must trigger ERR_PX64_TIMEOUT_EXCEEDED at wall-clock deadline");
 
+    // Test 8: Large 64-bit constant loading with LDC (>65535) and ADDI/SUBI
+    full_output.clear();
+    println!("[xtask-test] Creating script with 64-bit constants and compound ops (/const_test.pl)...");
+    tcp_stream.write_all(b"edit /const_test.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"$big := 1000000;\r\n$big += 5;\r\n$big -= 2;\r\n@print(\"CALC_RES:\");\r\n@println($big);\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    println!("[xtask-test] Compiling /const_test.pl -> /bin/const_test.bin...");
+    tcp_stream.write_all(b"compile /const_test.pl /bin/const_test.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] compile /const_test.pl output:\n{}", full_output);
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed to compile 64-bit const script");
+
+    full_output.clear();
+    println!("[xtask-test] Disassembling /bin/const_test.bin...");
+    tcp_stream.write_all(b"disasm /bin/const_test.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] disasm /bin/const_test.bin output:\n{}", full_output);
+    assert!(full_output.contains("LDC") && full_output.contains("1000000"), "disasm must show LDC instruction with 1000000 constant");
+    assert!(full_output.contains("ADDI") && full_output.contains("SUBI"), "disasm must show ADDI and SUBI instructions");
+
+    full_output.clear();
+    println!("[xtask-test] Running /bin/const_test.bin...");
+    tcp_stream.write_all(b"run /bin/const_test.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run /bin/const_test.bin output:\n{}", full_output);
+    assert!(full_output.contains("CALC_RES:1000003"), "Expected calculation 1000000 + 5 - 2 = 1000003");
+
+    // Test 9: Execution of all 6 pre-compiled standard binaries in /bin/
+    for script in &["stream.bin", "bench.bin", "filter.bin", "jitter.bin", "telemetry.bin", "echo.bin"] {
+        full_output.clear();
+        println!("[xtask-test] Testing /bin/{} execution...", script);
+        tcp_stream.write_all(format!("run /bin/{}\r\n", script).as_bytes()).unwrap();
+        tcp_stream.flush().unwrap();
+        assert!(wait_for("[c0|", 5, &mut full_output), "Timed out running /bin/{}", script);
+        println!("[xtask-test] /bin/{} output:\n{}", script, full_output);
+        assert!(!full_output.contains("ERR_"), "Standard binary /bin/{} must execute without errors", script);
+    }
+
+    // Test 10: Run benchmark command to obtain real hardware/VM measured execution times
+    full_output.clear();
+    println!("[xtask-test] Running benchmark for real execution timing...");
+    tcp_stream.write_all(b"benchmark\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[PX64_VM_MICROBENCHMARK]", 60, &mut full_output), "Benchmark timed out waiting for [PX64_VM_MICROBENCHMARK]");
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] benchmark output:\n{}", full_output);
+    assert!(full_output.contains("[PX64_VM_MICROBENCHMARK]"), "Must report measured px64 VM microbenchmarks");
+
+    // Test 11: Binary with invalid opcode (0xFE)
+    full_output.clear();
+    println!("[xtask-test] Disassembling /bin/test_invalid_op.bin...");
+    tcp_stream.write_all(b"disasm /bin/test_invalid_op.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] disasm test_invalid_op output:\n{}", full_output);
+    assert!(full_output.contains("UNKNOWN_OP_0xfe"), "Disassembler must display UNKNOWN_OP_0xfe for unregistered opcode");
+
+    full_output.clear();
+    println!("[xtask-test] Running /bin/test_invalid_op.bin (must trigger ERR_PX64_INVALID_OPCODE)...");
+    tcp_stream.write_all(b"run /bin/test_invalid_op.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run test_invalid_op output:\n{}", full_output);
+    assert!(full_output.contains("ERR_PX64_INVALID_OPCODE"), "Invalid opcode must trigger ERR_PX64_INVALID_OPCODE");
+    assert!(full_output.contains("Invalid Opcode Execution Fault"), "Diagnostic must identify Invalid Opcode category");
+
+    // Test 12: Binary with LDC out-of-bounds (const[99] when const_count is 0)
+    full_output.clear();
+    println!("[xtask-test] Disassembling /bin/test_oob_const.bin...");
+    tcp_stream.write_all(b"disasm /bin/test_oob_const.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] disasm test_oob_const output:\n{}", full_output);
+    assert!(full_output.contains("LDC") && full_output.contains("const[99]"), "Disassembler must display LDC with out-of-bounds index");
+
+    full_output.clear();
+    println!("[xtask-test] Running /bin/test_oob_const.bin (must trigger ERR_PX64_CONST_OUT_OF_BOUNDS)...");
+    tcp_stream.write_all(b"run /bin/test_oob_const.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run test_oob_const output:\n{}", full_output);
+    assert!(full_output.contains("ERR_PX64_CONST_OUT_OF_BOUNDS"), "LDC out-of-bounds must trigger ERR_PX64_CONST_OUT_OF_BOUNDS");
+    assert!(full_output.contains("Constant Pool Access Violation"), "Diagnostic must identify Constant Pool Access Violation category");
+
     let _ = child.kill();
     let _ = child.wait();
 
-    println!("[xtask-test] === TEST PASSED: px64 Real-Time Architecture ISA, 20-register allocation, binary encoding, disassembler, and execution completely verified! ===");
+    println!("[xtask-test] === TEST PASSED: Phase 9 px64 Instruction Set Refactoring (64-bit Constant Pool LDC, ADDI/SUBI, Disassembler, All Standard Binaries, Microbenchmark, Error Diagnostics) completely verified! ===");
 }
 
 fn check_versions() {
@@ -1018,6 +1300,10 @@ fn main() {
             let kernel_path = run_cargo_build(release);
             test_editor_delete(&kernel_path);
         }
+        "test-editor-scroll" => {
+            let kernel_path = run_cargo_build(release);
+            test_editor_scroll(&kernel_path);
+        }
         "test-px64" => {
             let kernel_path = run_cargo_build(release);
             test_px64_architecture(&kernel_path);
@@ -1026,7 +1312,7 @@ fn main() {
             check_versions();
         }
         _ => {
-            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-px64|test-boot|check] [--release]");
+            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-editor-scroll|test-px64|test-boot|check] [--release]");
             std::process::exit(1);
         }
     }

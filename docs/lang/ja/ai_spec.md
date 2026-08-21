@@ -127,16 +127,50 @@ $argc > 0 ? {
 ### 3.2 実行時エラー・タイムアウト診断フォーマット
 ```text
 ==================== [PULSELANG RUNTIME ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
-[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED
-[MESSAGE]: Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)
-[FILE]: /loop_cap.pl
+[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED / ERR_PX64_CONST_OUT_OF_BOUNDS / ERR_PX64_INVALID_OPCODE
+[MESSAGE]: <実行時違反の簡潔な説明>
+[FILE]: <対象ファイルパス>
 [EXECUTION_DOMAIN]: px64 Real-Time Register Virtual Machine
-[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation
+[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation / Constant Pool Access Violation / Invalid Opcode Execution Fault
 [TIMEOUT_LIMIT]: 5,000,000 ns (5.0 ms wall-clock)
-[ROOT_CAUSE]: Script execution exceeded 5.0ms wall-clock threshold (infinite loop or long-running intrinsics)
-[AI_REPAIR_HINT]: Bound while loops with finite counter or insert @within temporal deadline guards
+[ROOT_CAUSE]: <障害をトリガーした厳密な実行時条件>
+[AI_REPAIR_HINT]: <AIが実行すべき具体的な修復手順>
 =============================================================================================
 ```
+
+---
+
+## 4. px64 v3 バイナリヘッダー & 命令セット仕様
+
+### 4.1 16-Byte バイナリヘッダー
+```text
+Offset  Type    Field             Description
+0x00    [u8; 4] Magic             b"PX64" (0x50 0x58 0x36 0x34)
+0x04    u16     Version           3 (PX64 v3)
+0x06    u16     Code Length       バイトコード命令長（バイト単位）
+0x08    u16     String Pool Len   文字列テーブル長（バイト単位）
+0x0A    u16     Const Pool Count  64-bit整数定数（i64）のエントリ数
+0x0C    u16     Num Registers     20（16 GPR ＋ 4 HW DMAスロット）
+0x0E    u16     Reserved          0x0000
+```
+
+### 4.2 オペコードリファレンステーブル
+| オペコード (Hex) | 命令名 | フォーマット | 説明 | WCET (ベアメタル / QEMU) |
+|---|---|---|---|---|
+| `0x00` | `NOP` | `00 00 00 00` | 何もしない | 1 ns / 74 ns |
+| `0x01` | `MOV_IMM` | `01 Rd imm16` | 16-bit符号なし即値をレジスタにロード | 2 ns / 80 ns |
+| `0x02` | `MOV_REG` | `02 Rd Rs1 00` | `$rs1` を `$rd` にコピー | 2 ns / 80 ns |
+| `0x03` | `MOV_STR` | `03 Rd off len` | 文字列スライスタグ付き記述子をロード | 3 ns / 82 ns |
+| `0x04..0x08` | `ADD/SUB/MUL/DIV/MOD` | `Op Rd Rs1 Rs2` | 整数算術演算 `$rd = $rs1 op $rs2` | 3 ns / 85 ns |
+| `0x09..0x0E` | `CMPEQ..CMPGE` | `Op Rd Rs1 Rs2` | 条件比較 `$rd = ($rs1 op $rs2) ? 1 : 0` | 3 ns / 85 ns |
+| `0x0F` | `JMP` | `0f 00 imm16` | オフセット `imm16` への無条件ジャンプ | 2 ns / 80 ns |
+| `0x10..0x11` | `JZ / JNZ` | `Op Rd imm16` | 条件付き分岐（`$rd == 0` / `$rd != 0`） | 3 ns / 82 ns |
+| `0x12` | `CALL_NAT` | `12 Rd func Rs2` | カーネルハードウェアIntrinsics呼び出し | Intrinsics依存 |
+| `0x13..0x15` | `WITHIN/DROP` | `Op Rd 00 00` | デッドライン予算ガード | 5 ns / 85 ns |
+| `0x16` | `HALT` | `16 00 00 00` | VM実行終了 | 1 ns / 74 ns |
+| `0x17` | `LDC` | `17 Rd const_idx` | 定数プールから64-bit定数をロード (`i64`) | **5 ns / 98 ns** |
+| `0x18` | `ADDI` | `18 Rd Rs1 imm8` | 8-bit即値加算 `$rd = $rs1 + imm8` | **3 ns / 89 ns** |
+| `0x19` | `SUBI` | `19 Rd Rs1 imm8` | 8-bit即値減算 `$rd = $rs1 - imm8` | **3 ns / 89 ns** |
 
 ---
 

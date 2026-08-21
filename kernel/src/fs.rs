@@ -238,6 +238,36 @@ $argc > 0 ? {
         if let Ok(sz) = crate::lang::compile_pulse_to_binary(echo_src, &mut bin_buf) {
             let _ = fs_create_internal("/bin/echo.bin", &bin_buf[..sz], false);
         }
+
+        // Test fixture: binary with unregistered/invalid opcode (0xFE)
+        let mut bad_op_bin = [0u8; 20];
+        bad_op_bin[0..4].copy_from_slice(b"PX64");
+        bad_op_bin[4..6].copy_from_slice(&3u16.to_be_bytes()); // Version 3
+        bad_op_bin[6..8].copy_from_slice(&4u16.to_be_bytes()); // Code len 4
+        bad_op_bin[8..10].copy_from_slice(&0u16.to_be_bytes()); // Str pool 0
+        bad_op_bin[10..12].copy_from_slice(&0u16.to_be_bytes()); // Const count 0
+        bad_op_bin[12..14].copy_from_slice(&20u16.to_be_bytes()); // 20 regs
+        bad_op_bin[14..16].fill(0);
+        bad_op_bin[16] = 0xFE; // Invalid opcode
+        bad_op_bin[17] = 0x00;
+        bad_op_bin[18] = 0x00;
+        bad_op_bin[19] = 0x00;
+        let _ = fs_create_internal("/bin/test_invalid_op.bin", &bad_op_bin, false);
+
+        // Test fixture: binary with out-of-bounds LDC constant index (const[99] when const_count is 0)
+        let mut oob_const_bin = [0u8; 20];
+        oob_const_bin[0..4].copy_from_slice(b"PX64");
+        oob_const_bin[4..6].copy_from_slice(&3u16.to_be_bytes()); // Version 3
+        oob_const_bin[6..8].copy_from_slice(&4u16.to_be_bytes()); // Code len 4
+        oob_const_bin[8..10].copy_from_slice(&0u16.to_be_bytes()); // Str pool 0
+        oob_const_bin[10..12].copy_from_slice(&0u16.to_be_bytes()); // Const count 0
+        oob_const_bin[12..14].copy_from_slice(&20u16.to_be_bytes()); // 20 regs
+        oob_const_bin[14..16].fill(0);
+        oob_const_bin[16] = crate::lang::PX64_OP_LDC; // 23
+        oob_const_bin[17] = 0; // $rax
+        oob_const_bin[18] = 0; // hi
+        oob_const_bin[19] = 99; // lo (const[99] out of bounds!)
+        let _ = fs_create_internal("/bin/test_oob_const.bin", &oob_const_bin, false);
     }
 }
 

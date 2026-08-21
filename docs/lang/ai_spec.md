@@ -125,16 +125,50 @@ When an error occurs, PulseLang emits structured, deterministic diagnostic logs 
 ### 3.2 Runtime Execution & Timeout Diagnostic Format
 ```text
 ==================== [PULSELANG RUNTIME ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
-[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED
-[MESSAGE]: Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)
+[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED / ERR_PX64_CONST_OUT_OF_BOUNDS / ERR_PX64_INVALID_OPCODE
+[MESSAGE]: <Concise runtime violation description>
 [FILE]: <Target file path>
 [EXECUTION_DOMAIN]: px64 Real-Time Register Virtual Machine
-[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation
+[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation / Constant Pool Access Violation / Invalid Opcode Execution Fault
 [TIMEOUT_LIMIT]: 5,000,000 ns (5.0 ms wall-clock)
-[ROOT_CAUSE]: Script execution exceeded 5.0ms wall-clock threshold (infinite loop or long-running intrinsics)
-[AI_REPAIR_HINT]: Bound while loops with finite counter or insert @within temporal deadline guards
+[ROOT_CAUSE]: <Precise runtime condition triggering fault>
+[AI_REPAIR_HINT]: <Specific actionable repair instruction>
 =============================================================================================
 ```
+
+---
+
+## 4. px64 v3 Binary Header & Instruction Set Layout
+
+### 4.1 16-Byte Binary Header
+```text
+Offset  Type    Field             Description
+0x00    [u8; 4] Magic             b"PX64" (0x50 0x58 0x36 0x34)
+0x04    u16     Version           3 (PX64 v3)
+0x06    u16     Code Length       Bytecode size in bytes
+0x08    u16     String Pool Len   String table size in bytes
+0x0A    u16     Const Pool Count  Count of 64-bit (8-byte) integer constants
+0x0C    u16     Num Registers     20 (16 GPRs + 4 HW DMA slots)
+0x0E    u16     Reserved          0x0000
+```
+
+### 4.2 Opcodes Reference Table
+| Opcode (Hex) | Name | Format | Description | WCET (Hardware / QEMU) |
+|---|---|---|---|---|
+| `0x00` | `NOP` | `00 00 00 00` | No operation | 1 ns / 74 ns |
+| `0x01` | `MOV_IMM` | `01 Rd imm16` | Move 16-bit unsigned immediate into `$reg` | 2 ns / 80 ns |
+| `0x02` | `MOV_REG` | `02 Rd Rs1 00` | Copy `$rs1` into `$rd` | 2 ns / 80 ns |
+| `0x03` | `MOV_STR` | `03 Rd off len` | Load string slice tagged descriptor | 3 ns / 82 ns |
+| `0x04..0x08` | `ADD/SUB/MUL/DIV/MOD` | `Op Rd Rs1 Rs2` | Integer arithmetic `$rd = $rs1 op $rs2` | 3 ns / 85 ns |
+| `0x09..0x0E` | `CMPEQ..CMPGE` | `Op Rd Rs1 Rs2` | Conditional comparison `$rd = ($rs1 op $rs2) ? 1 : 0` | 3 ns / 85 ns |
+| `0x0F` | `JMP` | `0f 00 imm16` | Unconditional jump to byte offset `imm16` | 2 ns / 80 ns |
+| `0x10..0x11` | `JZ / JNZ` | `Op Rd imm16` | Conditional branch on `$rd == 0` / `$rd != 0` | 3 ns / 82 ns |
+| `0x12` | `CALL_NAT` | `12 Rd func Rs2` | Call native kernel hardware intrinsic | Intrinsics dependent |
+| `0x13..0x15` | `WITHIN/DROP` | `Op Rd 00 00` | Temporal deadline budget guards | 5 ns / 85 ns |
+| `0x16` | `HALT` | `16 00 00 00` | Terminate VM execution | 1 ns / 74 ns |
+| `0x17` | `LDC` | `17 Rd const_idx` | Load 64-bit constant from constant pool (`i64`) | **5 ns / 98 ns** |
+| `0x18` | `ADDI` | `18 Rd Rs1 imm8` | Add 8-bit unsigned immediate `$rd = $rs1 + imm8` | **3 ns / 89 ns** |
+| `0x19` | `SUBI` | `19 Rd Rs1 imm8` | Subtract 8-bit unsigned immediate `$rd = $rs1 - imm8` | **3 ns / 89 ns** |
 
 ---
 

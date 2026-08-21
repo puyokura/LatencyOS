@@ -217,18 +217,28 @@ fn print_runtime_diagnostic(filename: &str, err: &CompileError) {
         }
         "ERR_BINARY_VERSION_MISMATCH" => {
             serial_println!("[RUNTIME_FAULT_CATEGORY]: Binary Version Incompatibility");
-            serial_println!("[EXPECTED_VERSION]: PX64 Version 2");
+            serial_println!("[EXPECTED_VERSION]: PX64 Version 3");
             serial_println!("[ROOT_CAUSE]: Binary was compiled with an incompatible or outdated toolchain version");
             serial_println!("[AI_REPAIR_HINT]: Recompile source file with 'compile <src.pl> <dst.bin>'");
         }
         "ERR_BINARY_TRUNCATED" => {
             serial_println!("[RUNTIME_FAULT_CATEGORY]: Truncated Binary Payload");
-            serial_println!("[ROOT_CAUSE]: Binary file payload is smaller than declared header code + string pool length");
+            serial_println!("[ROOT_CAUSE]: Binary file payload is smaller than declared header code + string pool + const pool length");
             serial_println!("[AI_REPAIR_HINT]: Re-generate binary artifact or check file system storage integrity");
+        }
+        "ERR_PX64_CONST_OUT_OF_BOUNDS" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Constant Pool Access Violation");
+            serial_println!("[ROOT_CAUSE]: Instruction attempted to load from an invalid 64-bit constant pool index");
+            serial_println!("[AI_REPAIR_HINT]: Recompile source file or inspect binary with 'disasm <file.bin>'");
+        }
+        "ERR_PX64_INVALID_OPCODE" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Invalid Opcode Execution Fault");
+            serial_println!("[ROOT_CAUSE]: Virtual machine encountered an unrecognized or unregistered instruction opcode");
+            serial_println!("[AI_REPAIR_HINT]: Verify compiler code generator or inspect bytecode with 'disasm <file.bin>'");
         }
         _ => {
             serial_println!("[RUNTIME_FAULT_CATEGORY]: Virtual Machine Execution Fault");
-            serial_println!("[ROOT_CAUSE]: Invalid instruction opcode or VM state corruption");
+            serial_println!("[ROOT_CAUSE]: Virtual machine execution fault or internal VM state corruption");
             serial_println!("[AI_REPAIR_HINT]: Recompile source file or inspect binary with 'disasm <file.bin>'");
         }
     }
@@ -656,6 +666,9 @@ pub const PX64_OP_WITHIN_START: u8 = 19; // [19, Rs1, 0, 0]        -> Push deadl
 pub const PX64_OP_WITHIN_END: u8 = 20;  // [20, 0, 0, 0]           -> Pop deadline
 pub const PX64_OP_DROP: u8 = 21;        // [21, 0, 0, 0]           -> Drop frame on deadline overrun
 pub const PX64_OP_HALT: u8 = 22;        // [22, 0, 0, 0]           -> Halt VM
+pub const PX64_OP_LDC: u8 = 23;         // [23, Rd, ConstIdx_hi, ConstIdx_lo] -> Rd = const_pool[ConstIdx] (0x17)
+pub const PX64_OP_ADDI: u8 = 24;        // [24, Rd, Rs1, Imm8]     -> Rd = Rs1 + Imm8 (0x18)
+pub const PX64_OP_SUBI: u8 = 25;        // [25, Rd, Rs1, Imm8]     -> Rd = Rs1 - Imm8 (0x19)
 
 // Legacy Bytecode Instruction Set (PULS v1/v2 backward compatibility)
 pub const OP_NOP: u8 = 0;
@@ -683,9 +696,10 @@ pub const OP_PUSH_STR: u8 = 21;
 pub const OP_HALT: u8 = 22;
 
 pub const PX64_BIN_MAGIC: [u8; 4] = *b"PX64";
-pub const PX64_BIN_VERSION: u16 = 2;
+pub const PX64_BIN_VERSION: u16 = 3;
 pub const PX64_HEADER_SIZE: usize = 16;
 pub const PX64_NUM_REGISTERS: usize = 20;
+pub const MAX_CONST_POOL: usize = 64;
 
 // Function: px64_reg_name
 // Description: Map register index to canonical x64-compatible register name.
@@ -761,6 +775,8 @@ pub struct Compiler<'a> {
     var_count: usize,
     pub str_pool: [u8; MAX_STRING_POOL],
     pub str_pool_len: usize,
+    pub const_pool: [i64; MAX_CONST_POOL],
+    pub const_pool_len: usize,
 }
 
 impl<'a> Compiler<'a> {
@@ -777,7 +793,30 @@ impl<'a> Compiler<'a> {
             var_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
+            const_pool: [0; MAX_CONST_POOL],
+            const_pool_len: 0,
         }
+    }
+
+    pub fn add_constant(&mut self, val: i64) -> Result<u16, CompileError> {
+        for i in 0..self.const_pool_len {
+            if self.const_pool[i] == val {
+                return Ok(i as u16);
+            }
+        }
+        if self.const_pool_len >= MAX_CONST_POOL {
+            return Err(self.error(
+                "ERR_CONST_POOL_FULL",
+                "64-bit constant pool exhausted (64 entries limit reached)",
+                "Fewer unique 64-bit constants",
+                "Constant Pool Allocation",
+                "Reduce large constant literals",
+            ));
+        }
+        let idx = self.const_pool_len;
+        self.const_pool[idx] = val;
+        self.const_pool_len += 1;
+        Ok(idx as u16)
     }
 
     fn peek(&self) -> Token {
@@ -1131,6 +1170,22 @@ impl<'a> Compiler<'a> {
                         ));
                     }
                 } else if self.match_token(TokenKind::PlusEq) {
+                    if let TokenKind::Number(n) = self.peek().kind {
+                        if n >= 0 && n <= 255 {
+                            self.advance();
+                            self.emit_inst(PX64_OP_ADDI, var_reg, var_reg, n as u8)?;
+                            if !self.match_token(TokenKind::Semi) {
+                                return Err(self.error(
+                                    "ERR_MISSING_SEMICOLON",
+                                    "Missing semicolon ';' at end of compound assignment",
+                                    "Semicolon ';'",
+                                    "Statement -> Compound Addition Assignment",
+                                    "Append ';' at end of statement",
+                                ));
+                            }
+                            return Ok(());
+                        }
+                    }
                     let tmp_reg = 15u8;
                     self.expression(tmp_reg)?;
                     self.emit_inst(PX64_OP_ADD, var_reg, var_reg, tmp_reg)?;
@@ -1144,6 +1199,22 @@ impl<'a> Compiler<'a> {
                         ));
                     }
                 } else if self.match_token(TokenKind::MinusEq) {
+                    if let TokenKind::Number(n) = self.peek().kind {
+                        if n >= 0 && n <= 255 {
+                            self.advance();
+                            self.emit_inst(PX64_OP_SUBI, var_reg, var_reg, n as u8)?;
+                            if !self.match_token(TokenKind::Semi) {
+                                return Err(self.error(
+                                    "ERR_MISSING_SEMICOLON",
+                                    "Missing semicolon ';' at end of compound assignment",
+                                    "Semicolon ';'",
+                                    "Statement -> Compound Subtraction Assignment",
+                                    "Append ';' at end of statement",
+                                ));
+                            }
+                            return Ok(());
+                        }
+                    }
                     let tmp_reg = 15u8;
                     self.expression(tmp_reg)?;
                     self.emit_inst(PX64_OP_SUB, var_reg, var_reg, tmp_reg)?;
@@ -1314,12 +1385,22 @@ impl<'a> Compiler<'a> {
 
         match tok.kind {
             TokenKind::Number(n) => {
-                self.emit_imm16(PX64_OP_MOV_IMM, dst, n as u16)?;
+                if n >= 0 && n <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, dst, n as u16)?;
+                } else {
+                    let idx = self.add_constant(n)?;
+                    self.emit_imm16(PX64_OP_LDC, dst, idx)?;
+                }
             }
 
             TokenKind::TimeLiteral(ns) => {
-                let us = ns / 1_000;
-                self.emit_imm16(PX64_OP_MOV_IMM, dst, us as u16)?;
+                let us = (ns / 1_000) as i64;
+                if us >= 0 && us <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, dst, us as u16)?;
+                } else {
+                    let idx = self.add_constant(us)?;
+                    self.emit_imm16(PX64_OP_LDC, dst, idx)?;
+                }
             }
 
             TokenKind::StringLit => {
@@ -1438,6 +1519,7 @@ pub const ARG_TAG: i64 = 0x2000_0000_0000_0000;
 pub struct PX64VM<'a> {
     pub code: &'a [u8],
     pub str_pool: &'a [u8],
+    pub const_pool: &'a [i64],
     pub ip: usize,
     pub regs: [i64; PX64_NUM_REGISTERS],
     pub deadline_stack: [u64; 8],
@@ -1445,10 +1527,11 @@ pub struct PX64VM<'a> {
 }
 
 impl<'a> PX64VM<'a> {
-    pub fn new(code: &'a [u8], str_pool: &'a [u8]) -> Self {
+    pub fn new(code: &'a [u8], str_pool: &'a [u8], const_pool: &'a [i64]) -> Self {
         Self {
             code,
             str_pool,
+            const_pool,
             ip: 0,
             regs: [0; PX64_NUM_REGISTERS],
             deadline_stack: [0; 8],
@@ -1494,6 +1577,31 @@ impl<'a> PX64VM<'a> {
                 PX64_OP_MOV_IMM => {
                     if rd < PX64_NUM_REGISTERS {
                         self.regs[rd] = imm16 as i64;
+                    }
+                }
+
+                PX64_OP_LDC => {
+                    let const_idx = imm16 as usize;
+                    if const_idx >= self.const_pool.len() {
+                        return Err(CompileError::simple(
+                            "ERR_PX64_CONST_OUT_OF_BOUNDS",
+                            "Constant pool index out of bounds during LDC execution",
+                        ));
+                    }
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.const_pool[const_idx];
+                    }
+                }
+
+                PX64_OP_ADDI => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1].wrapping_add(rs2 as i64);
+                    }
+                }
+
+                PX64_OP_SUBI => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1].wrapping_sub(rs2 as i64);
                     }
                 }
 
@@ -1675,8 +1783,23 @@ impl<'a> PX64VM<'a> {
                         }
 
                         NATIVE_NET_SEND => {
-                            let handle = capture_frame_zero_copy(0, 1, read_tsc_serialized());
-                            let deadline = read_tsc_serialized() + crate::tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
+                            let slot_id = (arg_val as u8) % crate::gpu::NUM_FRAME_SLOTS as u8;
+                            let now = read_tsc_serialized();
+                            let data_slice = crate::gpu::get_frame_slot_data(slot_id);
+                            let send_size = core::cmp::min(1400, data_slice.len());
+                            let handle = crate::gpu::FrameHandle {
+                                slot_id,
+                                frame_id: 1,
+                                width: crate::gpu::FRAME_WIDTH,
+                                height: crate::gpu::FRAME_HEIGHT,
+                                stride: crate::gpu::FRAME_STRIDE,
+                                phys_addr: data_slice.as_ptr() as u64,
+                                size: send_size,
+                                crc32: 0x12345678,
+                                vblank_tsc: now,
+                                capture_done_tsc: now,
+                            };
+                            let deadline = now + crate::tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
                             let mut seq = 1u16;
                             let _ = stream_send_frame(&handle, deadline, &mut seq);
                             1
@@ -1745,6 +1868,61 @@ impl<'a> PX64VM<'a> {
 
         Ok(())
     }
+}
+
+// Function: benchmark_px64_instructions
+// Description: Benchmark real cycle count and nanosecond execution times for px64 instructions.
+// Worst-case execution time: ~100_000 ns
+pub fn benchmark_px64_instructions(tsc_freq_hz: u64) -> (u64, u64, u64) {
+    let const_pool = [123456789012345i64; 4];
+    let mut code = [0u8; 4004];
+
+    // Measure 1,000 iterations of LDC
+    for i in 0..1000 {
+        code[i * 4] = PX64_OP_LDC;
+        code[i * 4 + 1] = 0; // $rax
+        code[i * 4 + 2] = 0;
+        code[i * 4 + 3] = 0; // const[0]
+    }
+    code[4000] = PX64_OP_HALT;
+    let mut vm = PX64VM::new(&code, &[], &const_pool);
+    let t0 = read_tsc_serialized();
+    let _ = vm.run(tsc_freq_hz);
+    let t1 = read_tsc_serialized();
+    let ldc_total_ns = crate::tsc::tsc_to_ns(t1 - t0, tsc_freq_hz);
+    let ldc_ns_per_inst = ldc_total_ns / 1000;
+
+    // Measure 1,000 iterations of ADDI
+    for i in 0..1000 {
+        code[i * 4] = PX64_OP_ADDI;
+        code[i * 4 + 1] = 0; // $rax
+        code[i * 4 + 2] = 0; // $rax
+        code[i * 4 + 3] = 1; // +1
+    }
+    code[4000] = PX64_OP_HALT;
+    let mut vm2 = PX64VM::new(&code, &[], &const_pool);
+    let t2 = read_tsc_serialized();
+    let _ = vm2.run(tsc_freq_hz);
+    let t3 = read_tsc_serialized();
+    let addi_total_ns = crate::tsc::tsc_to_ns(t3 - t2, tsc_freq_hz);
+    let addi_ns_per_inst = addi_total_ns / 1000;
+
+    // Measure 1,000 iterations of NOP (pure decode & loop overhead)
+    for i in 0..1000 {
+        code[i * 4] = PX64_OP_NOP;
+        code[i * 4 + 1] = 0;
+        code[i * 4 + 2] = 0;
+        code[i * 4 + 3] = 0;
+    }
+    code[4000] = PX64_OP_HALT;
+    let mut vm3 = PX64VM::new(&code, &[], &const_pool);
+    let t4 = read_tsc_serialized();
+    let _ = vm3.run(tsc_freq_hz);
+    let t5 = read_tsc_serialized();
+    let decode_total_ns = crate::tsc::tsc_to_ns(t5 - t4, tsc_freq_hz);
+    let decode_ns_per_inst = decode_total_ns / 1000;
+
+    (ldc_ns_per_inst, addi_ns_per_inst, decode_ns_per_inst)
 }
 
 // Legacy VM for PULS v1/v2 backward compatibility
@@ -1981,7 +2159,11 @@ pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError
     let mut compiler = Compiler::new(src, &tokens);
     let code_len = compiler.compile()?;
 
-    let mut vm = PX64VM::new(&compiler.code[..code_len], &compiler.str_pool[..compiler.str_pool_len]);
+    let mut vm = PX64VM::new(
+        &compiler.code[..code_len],
+        &compiler.str_pool[..compiler.str_pool_len],
+        &compiler.const_pool[..compiler.const_pool_len],
+    );
     vm.run(tsc_freq_hz)
 }
 
@@ -2000,8 +2182,10 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     let mut compiler = Compiler::new(src, &tokens);
     let code_len = compiler.compile()?;
     let str_pool_len = compiler.str_pool_len;
+    let const_pool_count = compiler.const_pool_len;
+    let const_pool_bytes = const_pool_count * 8;
 
-    let total_size = PX64_HEADER_SIZE + code_len + str_pool_len;
+    let total_size = PX64_HEADER_SIZE + code_len + str_pool_len + const_pool_bytes;
     if total_size > out_buf.len() {
         return Err(CompileError::simple(
             "ERR_BINARY_BUFFER_OVERFLOW",
@@ -2010,16 +2194,22 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     }
 
     // Header (16 bytes)
-    out_buf[0..4].copy_from_slice(&PX64_BIN_MAGIC);
-    out_buf[4..6].copy_from_slice(&PX64_BIN_VERSION.to_be_bytes());
+    out_buf[0..4].copy_from_slice(&PX64_BIN_MAGIC); // b"PX64"
+    out_buf[4..6].copy_from_slice(&PX64_BIN_VERSION.to_be_bytes()); // 3
     out_buf[6..8].copy_from_slice(&(code_len as u16).to_be_bytes());
     out_buf[8..10].copy_from_slice(&(str_pool_len as u16).to_be_bytes());
-    out_buf[10..12].copy_from_slice(&(PX64_NUM_REGISTERS as u16).to_be_bytes());
-    out_buf[12..16].fill(0); // Reserved
+    out_buf[10..12].copy_from_slice(&(const_pool_count as u16).to_be_bytes());
+    out_buf[12..14].copy_from_slice(&(PX64_NUM_REGISTERS as u16).to_be_bytes()); // 20
+    out_buf[14..16].fill(0); // Reserved
 
-    // Payload
+    // Payload: Code + String Pool + Constant Pool
     out_buf[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
-    out_buf[PX64_HEADER_SIZE + code_len..total_size].copy_from_slice(&compiler.str_pool[..str_pool_len]);
+    out_buf[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len].copy_from_slice(&compiler.str_pool[..str_pool_len]);
+
+    let const_start = PX64_HEADER_SIZE + code_len + str_pool_len;
+    for (i, &c) in compiler.const_pool[..const_pool_count].iter().enumerate() {
+        out_buf[const_start + i * 8..const_start + (i + 1) * 8].copy_from_slice(&c.to_be_bytes());
+    }
 
     Ok(total_size)
 }
@@ -2035,15 +2225,24 @@ pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError
         }
         let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
         let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+        let const_count = u16::from_be_bytes([bin[10], bin[11]]) as usize;
+        let const_bytes = const_count * 8;
 
-        if bin.len() < PX64_HEADER_SIZE + code_len + str_pool_len {
+        if bin.len() < PX64_HEADER_SIZE + code_len + str_pool_len + const_bytes {
             return Err(CompileError::simple("ERR_BINARY_TRUNCATED", "Truncated px64 binary payload"));
         }
 
         let code = &bin[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len];
         let str_pool = &bin[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len];
 
-        let mut vm = PX64VM::new(code, str_pool);
+        let mut const_pool = [0i64; 64];
+        let const_slice_raw = &bin[PX64_HEADER_SIZE + code_len + str_pool_len..PX64_HEADER_SIZE + code_len + str_pool_len + const_bytes];
+        for i in 0..const_count {
+            let b = &const_slice_raw[i * 8..(i + 1) * 8];
+            const_pool[i] = i64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        }
+
+        let mut vm = PX64VM::new(code, str_pool, &const_pool[..const_count]);
         vm.run(tsc_freq_hz)
     } else if bin.len() >= PULSE_HEADER_SIZE && &bin[0..4] == &PULSE_BIN_MAGIC {
         let version = u16::from_be_bytes([bin[4], bin[5]]);

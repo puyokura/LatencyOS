@@ -875,15 +875,28 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     let version = u16::from_be_bytes([data[4], data[5]]);
                     let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
                     let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
-                    let num_regs = u16::from_be_bytes([data[10], data[11]]);
+                    let const_count = u16::from_be_bytes([data[10], data[11]]) as usize;
+                    let num_regs = u16::from_be_bytes([data[12], data[13]]);
                     serial_println!("=== [px64 Virtual Register Machine Disassembly] {} ===", file_path);
                     serial_println!("NOTE: Registers ($rax..$r15, #f0..#f3) are px64 VM virtual registers, not host CPU GPRs.");
                     serial_println!(
-                        "Magic: PX64 | Version: {} | Code: {} B | Registers: {} GPRs+HW | StringPool: {} B",
-                        version, code_len, num_regs, str_pool_len
+                        "Magic: PX64 | Version: {} | Code: {} B | Registers: {} GPRs+HW | StringPool: {} B | ConstPool: {} entries",
+                        version, code_len, num_regs, str_pool_len, const_count
                     );
                     serial_println!("OFFSET  HEX          INSTRUCTION  OPERANDS (px64 Virtual Registers)");
                     serial_println!("---------------------------------------------------------------");
+
+                    let const_start = crate::lang::PX64_HEADER_SIZE + code_len + str_pool_len;
+                    let const_bytes = const_count * 8;
+                    let mut const_pool = [0i64; 64];
+                    if data.len() >= const_start + const_bytes {
+                        let const_raw = &data[const_start..const_start + const_bytes];
+                        for i in 0..const_count {
+                            let b = &const_raw[i * 8..(i + 1) * 8];
+                            const_pool[i] = i64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+                        }
+                    }
+
                     let code = &data[crate::lang::PX64_HEADER_SIZE..crate::lang::PX64_HEADER_SIZE + code_len];
                     let mut ip = 0;
                     while ip + 4 <= code.len() {
@@ -980,8 +993,19 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             crate::lang::PX64_OP_HALT => {
                                 serial_println!("{:04x}:   16 00 00 00  HALT", op_ip);
                             }
+                            crate::lang::PX64_OP_LDC => {
+                                let const_idx = imm16 as usize;
+                                let const_val = if const_idx < const_count { const_pool[const_idx] } else { 0 };
+                                serial_println!("{:04x}:   17 {:02x} {:02x} {:02x}  LDC          {}, const[{}] ({})", op_ip, rd, rs1, rs2, rd_str, imm16, const_val);
+                            }
+                            crate::lang::PX64_OP_ADDI => {
+                                serial_println!("{:04x}:   18 {:02x} {:02x} {:02x}  ADDI         {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2);
+                            }
+                            crate::lang::PX64_OP_SUBI => {
+                                serial_println!("{:04x}:   19 {:02x} {:02x} {:02x}  SUBI         {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2);
+                            }
                             _ => {
-                                serial_println!("{:04x}:   {:02x} {:02x} {:02x} {:02x}  UNKNOWN", op_ip, op, rd, rs1, rs2);
+                                serial_println!("{:04x}:   {:02x} {:02x} {:02x} {:02x}  UNKNOWN_OP_0x{:02x}", op_ip, op, rd, rs1, rs2, op);
                             }
                         }
                     }
@@ -1416,6 +1440,14 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             }
 
             print_statistical_latency_report();
+
+            let (ldc_ns, addi_ns, decode_ns) = crate::lang::benchmark_px64_instructions(tsc_freq_hz);
+            serial_println!("----------------------------------------------------------------------------");
+            serial_println!("[PX64_VM_MICROBENCHMARK]");
+            serial_println!("  LDC  (64-bit const pool load)     : {} ns / instruction", ldc_ns);
+            serial_println!("  ADDI (8-bit immediate arithmetic) : {} ns / instruction", addi_ns);
+            serial_println!("  Decode & Dispatch Loop Overhead  : {} ns / instruction", decode_ns);
+            serial_println!("----------------------------------------------------------------------------");
         }
 
         "congestion" => {
