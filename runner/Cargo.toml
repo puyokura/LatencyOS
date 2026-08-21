@@ -1,7 +1,8 @@
 [package]
-name = "xtask"
+name = "runner"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation"] }

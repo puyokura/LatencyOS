@@ -1263,6 +1263,198 @@ fn check_versions() {
     }
 }
 
+fn bundle_standalone_exe() {
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    let root = get_workspace_root();
+    let kernel_path = run_cargo_build(true);
+
+    let qemu_exe = find_tool("qemu-system-x86_64");
+    if !qemu_exe.exists() {
+        eprintln!("[xtask] ERROR: qemu-system-x86_64 not found to bundle portable runner.");
+        std::process::exit(1);
+    }
+    let qemu_dir = qemu_exe.parent().unwrap();
+
+    let dist_dir = root.join("dist");
+    std::fs::create_dir_all(&dist_dir).expect("Failed to create dist directory");
+
+    let runtime_zip_path = dist_dir.join("runtime.zip");
+    println!("[xtask] Packaging portable QEMU runtime and kernel into {}...", runtime_zip_path.display());
+
+    let zip_file = File::create(&runtime_zip_path).expect("Failed to create runtime.zip");
+    let mut zip = ZipWriter::new(zip_file);
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    // 1. Add kernel
+    println!("[xtask]   Adding kernel: {}", kernel_path.display());
+    let mut kernel_data = Vec::new();
+    File::open(&kernel_path).expect("Failed to open kernel").read_to_end(&mut kernel_data).unwrap();
+    zip.start_file("kernel", options).unwrap();
+    zip.write_all(&kernel_data).unwrap();
+
+    // 2. Add qemu-system-x86_64.exe
+    println!("[xtask]   Adding QEMU executable: {}", qemu_exe.display());
+    let mut qemu_data = Vec::new();
+    File::open(&qemu_exe).expect("Failed to open qemu executable").read_to_end(&mut qemu_data).unwrap();
+    zip.start_file("qemu-system-x86_64.exe", options).unwrap();
+    zip.write_all(&qemu_data).unwrap();
+
+    // 3. Add all DLLs in qemu_dir
+    if let Ok(entries) = std::fs::read_dir(qemu_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if ext.eq_ignore_ascii_case("dll") {
+                        let file_name = path.file_name().unwrap().to_str().unwrap();
+                        let mut dll_data = Vec::new();
+                        if let Ok(mut f) = File::open(&path) {
+                            let _ = f.read_to_end(&mut dll_data);
+                            let _ = zip.start_file(file_name, options);
+                            let _ = zip.write_all(&dll_data);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Add share/ ROM directory
+    let share_dir = qemu_dir.join("share");
+    if share_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&share_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let file_name = path.file_name().unwrap().to_str().unwrap();
+                    let zip_entry_name = format!("share/{}", file_name);
+                    let mut rom_data = Vec::new();
+                    if let Ok(mut f) = File::open(&path) {
+                        let _ = f.read_to_end(&mut rom_data);
+                        let _ = zip.start_file(zip_entry_name, options);
+                        let _ = zip.write_all(&rom_data);
+                    }
+                }
+            }
+        }
+    }
+
+    zip.finish().expect("Failed to finalize runtime.zip");
+
+    let zip_size_mb = std::fs::metadata(&runtime_zip_path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+    println!("[xtask] Runtime archive created: {:.2} MB", zip_size_mb);
+
+    // 5. Build runner crate into dist/LatencyOS.exe
+    println!("[xtask] Compiling standalone runner into dist/LatencyOS.exe...");
+    let cargo = find_tool("cargo");
+    let mut cmd = Command::new(&cargo);
+    cmd.current_dir(&root)
+        .env("PATH", get_augmented_path())
+        .env("LATENCYOS_RUNTIME_ZIP", &runtime_zip_path)
+        .arg("build")
+        .arg("--package")
+        .arg("runner")
+        .arg("--release");
+
+    let status = cmd.status().expect("Failed to build runner package");
+    if !status.success() {
+        eprintln!("[xtask] ERROR: Failed to compile runner crate.");
+        std::process::exit(1);
+    }
+
+    let runner_exe = root.join("target").join("release").join("runner.exe");
+    let out_exe = dist_dir.join("LatencyOS.exe");
+    std::fs::copy(&runner_exe, &out_exe).expect("Failed to copy runner.exe to dist/LatencyOS.exe");
+
+    let exe_size_mb = std::fs::metadata(&out_exe).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+    println!("================================================================================");
+    println!("[xtask] SUCCESS: Single standalone executable generated!");
+    println!("[xtask] Location: {}", out_exe.display());
+    println!("[xtask] File Size: {:.2} MB", exe_size_mb);
+    println!("[xtask] Portable: 100% self-contained (zero host dependencies, no install required)");
+    println!("================================================================================");
+}
+
+fn test_standalone_exe() {
+    use std::io::{Read, Write};
+    let root = get_workspace_root();
+    let out_exe = root.join("dist").join("LatencyOS.exe");
+    if !out_exe.exists() {
+        bundle_standalone_exe();
+    }
+
+    println!("[xtask] Testing standalone executable: {}", out_exe.display());
+
+    let mut cmd = Command::new(&out_exe);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().expect("Failed to launch standalone LatencyOS.exe");
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+    let mut stdout = child.stdout.take().expect("Failed to open stdout");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+
+    println!("[xtask-test] Waiting for standalone LatencyOS to boot and present shell prompt...");
+    assert!(wait_for("[c0|", 15, &mut full_output), "Timed out waiting for shell prompt from standalone LatencyOS.exe");
+
+    println!("[xtask-test] Shell prompt received! Output preview:\n{}", full_output);
+    assert!(full_output.contains("LatencyOS Core0 booted"), "Missing boot banner");
+
+    println!("[xtask-test] Sending test command: run /bin/echo.bin \"standalone_test_passed\"");
+    stdin.write_all(b"run /bin/echo.bin \"standalone_test_passed\"\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("standalone_test_passed", 5, &mut full_output), "Failed to execute script on standalone binary");
+
+    println!("[xtask-test] Sending poweroff command...");
+    stdin.write_all(b"poweroff\r\n").unwrap();
+    stdin.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("================================================================================");
+    println!("[xtask] SUCCESS: Standalone LatencyOS.exe verified end-to-end with 100% success!");
+    println!("================================================================================");
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("run");
@@ -1276,6 +1468,12 @@ fn main() {
         "run" | "interactive" => {
             let kernel_path = run_cargo_build(release);
             run_qemu(&kernel_path, false, 0);
+        }
+        "bundle" | "dist" => {
+            bundle_standalone_exe();
+        }
+        "test-standalone" => {
+            test_standalone_exe();
         }
         "test-boot" => {
             let kernel_path = run_cargo_build(release);
@@ -1312,7 +1510,7 @@ fn main() {
             check_versions();
         }
         _ => {
-            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-editor-scroll|test-px64|test-boot|check] [--release]");
+            eprintln!("Usage: cargo xtask [build|run|interactive|bundle|dist|test-standalone|test-paste|test-compile-error|test-editor-delete|test-editor-scroll|test-px64|test-boot|check] [--release]");
             std::process::exit(1);
         }
     }

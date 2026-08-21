@@ -2,5 +2,6 @@
 members = [
     "kernel",
     "xtask",
+    "runner",
 ]
 resolver = "2"
