@@ -179,6 +179,8 @@ unsafe fn move_word_right() {
     redraw_line();
 }
 
+static mut LAST_WAS_CR: bool = false;
+
 // Function: poll_shell
 // Description: Non-blocking poll for incoming serial characters, full multi-byte ANSI CSI sequences, and line editing.
 // Worst-case execution time: ~25 ns (when idle) to ~100_000 ns (when executing a command)
@@ -196,9 +198,11 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                     match b {
                         0x1B => {
                             ESC_STATE = EscapeState::Esc;
+                            LAST_WAS_CR = false;
                         }
 
-                        b'\r' | b'\n' => {
+                        b'\r' => {
+                            LAST_WAS_CR = true;
                             if needs_redraw {
                                 redraw_line();
                                 needs_redraw = false;
@@ -218,8 +222,32 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             print_prompt();
                         }
 
+                        b'\n' => {
+                            if !LAST_WAS_CR {
+                                if needs_redraw {
+                                    redraw_line();
+                                    needs_redraw = false;
+                                }
+                                serial_print!("\r\n");
+                                if LINE_LEN > 0 {
+                                    save_to_history(&LINE_BUF[..LINE_LEN]);
+                                    if let Ok(cmd_str) = core::str::from_utf8(&LINE_BUF[..LINE_LEN]) {
+                                        let t_start = read_tsc_serialized();
+                                        execute_command(cmd_str.trim(), tsc_freq_hz);
+                                        let t_end = read_tsc_serialized();
+                                        LAST_CMD_LATENCY_NS = tsc_to_ns(t_end - t_start, tsc_freq_hz);
+                                    }
+                                    LINE_LEN = 0;
+                                    CURSOR_POS = 0;
+                                }
+                                print_prompt();
+                            }
+                            LAST_WAS_CR = false;
+                        }
+
                         // Backspace
                         0x08 | 0x7F => {
+                            LAST_WAS_CR = false;
                             if CURSOR_POS > 0 {
                                 for i in CURSOR_POS - 1..LINE_LEN - 1 {
                                     LINE_BUF[i] = LINE_BUF[i + 1];
@@ -232,6 +260,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
                         // Ctrl+C (Interrupt/Clear line)
                         0x03 => {
+                            LAST_WAS_CR = false;
                             if needs_redraw {
                                 redraw_line();
                                 needs_redraw = false;
@@ -244,15 +273,19 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
                         // Ctrl+L (Clear screen)
                         0x0C => {
+                            LAST_WAS_CR = false;
                             serial_print!("\x1b[2J\x1b[H");
                             needs_redraw = true;
                         }
 
                         // Tab
-                        b'\t' => {}
+                        b'\t' => {
+                            LAST_WAS_CR = false;
+                        }
 
                         // Printable characters
                         0x20..=0x7E => {
+                            LAST_WAS_CR = false;
                             if LINE_LEN < MAX_LINE_LEN - 1 {
                                 for i in (CURSOR_POS..LINE_LEN).rev() {
                                     LINE_BUF[i + 1] = LINE_BUF[i];
@@ -264,7 +297,9 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             }
                         }
 
-                        _ => {}
+                        _ => {
+                            LAST_WAS_CR = false;
+                        }
                     }
                 }
 

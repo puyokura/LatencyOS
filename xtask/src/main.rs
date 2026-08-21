@@ -195,7 +195,36 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .env("PATH", get_augmented_path());
 
         if !capture_output {
-            let status = cmd.status().expect("Failed to run QEMU");
+            cmd.stdin(Stdio::piped());
+            cmd.stdout(Stdio::inherit());
+            cmd.stderr(Stdio::inherit());
+
+            let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+            let mut qemu_stdin = child.stdin.take().expect("Failed to open QEMU stdin");
+
+            // Proxy host stdin with micro-paced chunking (8 bytes / 1.5ms) to guarantee QEMU 16550 UART FIFO never overflows during clipboard paste
+            std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                let mut host_stdin = std::io::stdin();
+                let mut buf = [0u8; 512];
+                loop {
+                    match host_stdin.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            for chunk in buf[..n].chunks(8) {
+                                if qemu_stdin.write_all(chunk).is_err() {
+                                    break;
+                                }
+                                let _ = qemu_stdin.flush();
+                                std::thread::sleep(Duration::from_micros(1500));
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+
+            let status = child.wait().expect("Failed to wait on QEMU");
             println!("[xtask] QEMU exited with status: {}", status);
             None
         } else {
@@ -247,6 +276,150 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
     })
 }
 
+fn test_paste(kernel_elf: &Path) {
+    let qemu = find_tool("qemu-system-x86_64");
+    println!("[xtask] Running automated paste test with kernel: {}", kernel_elf.display());
+
+    let mut cmd = Command::new(&qemu);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x00000200);
+    }
+    cmd.arg("-kernel")
+        .arg(kernel_elf)
+        .arg("-cpu")
+        .arg("max")
+        .arg("-serial")
+        .arg("stdio")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-m")
+        .arg("128M")
+        .arg("-smp")
+        .arg("4")
+        .arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("e1000,netdev=net0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PATH", get_augmented_path());
+
+    let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+    let mut stdout = child.stdout.take().expect("Failed to open stdout");
+
+    use std::io::Write;
+    use std::io::Read;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    };
+
+    let write_paced = |w: &mut std::process::ChildStdin, data: &[u8]| {
+        for chunk in data.chunks(8) {
+            w.write_all(chunk).unwrap();
+            w.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+
+    println!("[xtask-test] Waiting for shell prompt...");
+    if !wait_for("[c0|", 10, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for shell prompt. Output so far:\n{}", full_output);
+    }
+    println!("[xtask-test] Shell prompt received!");
+
+    // Send edit command
+    println!("[xtask-test] Opening editor: edit /home/paste_test.pl");
+    full_output.clear();
+    write_paced(&mut stdin, b"edit /home/paste_test.pl\r\n");
+
+    if !wait_for("PulseEditor", 5, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for PulseEditor. Output so far:\n{}", full_output);
+    }
+    println!("[xtask-test] PulseEditor is open!");
+
+    // Multi-line PulseLang script test
+    let test_script = "@contract: @wcet(100us) @budget(500us);\r\n@pipeline: StreamNetwork @budget(5ms);\r\n$sum := 0;\r\n$rtt := @rtt();\r\n#f := @capture();\r\n@println(\"Pasting worked perfectly!\");\r\n";
+
+    println!("[xtask-test] Pasting multi-line PulseLang code into editor...");
+    full_output.clear();
+    write_paced(&mut stdin, test_script.as_bytes());
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Send Save (^S = 0x13)
+    println!("[xtask-test] Sending Save (^S)...");
+    write_paced(&mut stdin, &[0x13]);
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Send Quit (^Q = 0x11)
+    println!("[xtask-test] Sending Quit (^Q)...");
+    write_paced(&mut stdin, &[0x11]);
+
+    if !wait_for("[c0|", 5, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for shell after quit. Output so far:\n{}", full_output);
+    }
+
+    // Inspect file content with cat
+    println!("[xtask-test] Running: cat /home/paste_test.pl");
+    full_output.clear();
+    write_paced(&mut stdin, b"cat /home/paste_test.pl\r\n");
+    std::thread::sleep(Duration::from_millis(300));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] File content output:\n{}", full_output);
+    if full_output.contains("@contract:")
+        && full_output.contains("@wcet(100us)")
+        && full_output.contains("@pipeline:")
+        && full_output.contains("$sum := 0;")
+        && full_output.contains("$rtt := @rtt();")
+        && full_output.contains("@println(\"Pasting worked perfectly!\");")
+    {
+        println!("[xtask-test] === TEST PASSED: Multi-line PulseLang code was completely pasted and saved! ===");
+    } else {
+        panic!("[xtask-test] === TEST FAILED: Missing lines in file content! Output was: {} ===", full_output);
+    }
+}
+
 fn check_versions() {
     let tools = [
         ("rustup", "rustup --version"),
@@ -288,7 +461,11 @@ fn main() {
             let kernel_path = run_cargo_build(release);
             println!("[xtask] Build finished successfully: {}", kernel_path.display());
         }
-        "run" => {
+        "run" | "interactive" => {
+            let kernel_path = run_cargo_build(release);
+            run_qemu(&kernel_path, false, 0);
+        }
+        "test-boot" => {
             let kernel_path = run_cargo_build(release);
             let output = run_qemu(&kernel_path, true, 90);
             if let Some(out) = output {
@@ -299,15 +476,15 @@ fn main() {
                 }
             }
         }
-        "interactive" => {
+        "test-paste" => {
             let kernel_path = run_cargo_build(release);
-            run_qemu(&kernel_path, false, 0);
+            test_paste(&kernel_path);
         }
         "check" => {
             check_versions();
         }
         _ => {
-            eprintln!("Usage: cargo xtask [build|run|interactive|check] [--release]");
+            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-boot|check] [--release]");
             std::process::exit(1);
         }
     }
