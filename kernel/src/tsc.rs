@@ -3,6 +3,9 @@
 // Worst-case execution time: Documented per function.
 
 use crate::serial::{inb, outb};
+use core::sync::atomic::AtomicU64;
+
+pub static GLOBAL_TSC_FREQ_HZ: AtomicU64 = AtomicU64::new(2_500_000_000);
 
 // Function: read_tsc
 // Description: Read the 64-bit Time Stamp Counter via RDTSC instruction.

@@ -66,6 +66,85 @@ pub enum FsError {
     InvalidName,
     NotADirectory,
     IsADirectory,
+    DirectoryNotEmpty,
+}
+
+// Function: fs_normalize_path
+// Description: Normalize any relative/absolute path against cwd without dynamic allocation.
+// Function: fs_normalize_path
+// Description: Normalize any relative/absolute path against cwd without dynamic allocation.
+// Worst-case execution time: ~600 ns
+pub fn fs_normalize_path(input: &str, cwd: &str, out: &mut [u8; MAX_FILENAME_LEN]) -> Result<usize, FsError> {
+    let clean = input.trim();
+    if clean.is_empty() {
+        return Err(FsError::InvalidName);
+    }
+    let mut temp = [0u8; MAX_FILENAME_LEN];
+    let temp_len;
+
+    if clean.starts_with('/') {
+        if clean.len() >= MAX_FILENAME_LEN {
+            return Err(FsError::InvalidName);
+        }
+        temp[..clean.len()].copy_from_slice(clean.as_bytes());
+        temp_len = clean.len();
+    } else {
+        let clean_cwd = if cwd.is_empty() { "/" } else { cwd };
+        if clean_cwd == "/" {
+            let total = 1 + clean.len();
+            if total >= MAX_FILENAME_LEN {
+                return Err(FsError::InvalidName);
+            }
+            temp[0] = b'/';
+            temp[1..total].copy_from_slice(clean.as_bytes());
+            temp_len = total;
+        } else {
+            let total = clean_cwd.len() + 1 + clean.len();
+            if total >= MAX_FILENAME_LEN {
+                return Err(FsError::InvalidName);
+            }
+            temp[..clean_cwd.len()].copy_from_slice(clean_cwd.as_bytes());
+            temp[clean_cwd.len()] = b'/';
+            temp[clean_cwd.len() + 1..total].copy_from_slice(clean.as_bytes());
+            temp_len = total;
+        }
+    }
+
+    let mut out_len = 1;
+    out[0] = b'/';
+
+    let path_str = core::str::from_utf8(&temp[..temp_len]).map_err(|_| FsError::InvalidName)?;
+    for part in path_str.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        } else if part == ".." {
+            if out_len > 1 {
+                let cur_str = core::str::from_utf8(&out[..out_len]).unwrap_or("/");
+                if let Some(pos) = cur_str.rfind('/') {
+                    if pos == 0 {
+                        out_len = 1;
+                    } else {
+                        out_len = pos;
+                    }
+                }
+            }
+        } else {
+            if out_len > 1 {
+                if out_len + 1 + part.len() >= MAX_FILENAME_LEN {
+                    return Err(FsError::InvalidName);
+                }
+                out[out_len] = b'/';
+                out_len += 1;
+            }
+            if out_len + part.len() >= MAX_FILENAME_LEN {
+                return Err(FsError::InvalidName);
+            }
+            out[out_len..out_len + part.len()].copy_from_slice(part.as_bytes());
+            out_len += part.len();
+        }
+    }
+
+    Ok(out_len)
 }
 
 // Function: fs_init
@@ -74,7 +153,10 @@ pub enum FsError {
 pub fn fs_init() {
     unsafe {
         for file in FS.files.iter_mut() {
-            *file = FileEntry::empty();
+            file.used = false;
+            file.name_len = 0;
+            file.size = 0;
+            file.is_dir = false;
         }
 
         // 1. stream.pl - Ultra-low-latency pipeline stream script
@@ -166,7 +248,6 @@ $argc > 0 ? {
     @println("LatencyOS PulseLang Real-Time Script Engine Active");
 };
 "#;
-        let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
 
         // 7. readme.txt - Plain text guide
         let readme_txt = br#"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)
@@ -179,9 +260,8 @@ $argc > 0 ? {
 - Use 'compile <script.pl> <out.bin>' to build standalone binary bytecode.
 - Use 'run <file>' to execute either .pl scripts or .bin bytecode.
 "#;
-        let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
 
-        // 7. config.json - JSON configuration file
+        // 8. config.json - JSON configuration file
         let config_json = br#"{
   "os": "LatencyOS",
   "version": "0.0.22",
@@ -191,16 +271,14 @@ $argc > 0 ? {
   "uart_baud": 115200
 }
 "#;
-        let _ = fs_create_internal("/etc/config.json", config_json, false);
 
-        // 8. system.log - Hardware initialization log
+        // 9. system.log - Hardware initialization log
         let system_log = br#"[BOOT] LatencyOS 0.0.22 x86_64 hard-realtime
 [APIC] Cores 0-3 initialized with static affinity.
 [PMD] Intel e1000 poll-mode driver active. MAC: 52:54:00:12:34:56.
 [GPU] Zero-copy frame ring ready: 1920x1080 @ 32bpp.
 [FS] LatencyFS initialized with 64 slots.
 "#;
-        let _ = fs_create_internal("/var/log/system.log", system_log, false);
 
         // Hierarchical directories
         let _ = fs_mkdir("/bin");
@@ -210,34 +288,120 @@ $argc > 0 ? {
         let _ = fs_mkdir("/home");
         let _ = fs_mkdir("/pulselang");
 
-        // 1. Source scripts in /pulselang/
+        // 1. Source scripts and system files
         let _ = fs_create_internal("/pulselang/stream.pl", stream_src, false);
         let _ = fs_create_internal("/pulselang/bench.pl", bench_src, false);
         let _ = fs_create_internal("/pulselang/filter.pl", filter_src, false);
         let _ = fs_create_internal("/pulselang/jitter.pl", jitter_src, false);
         let _ = fs_create_internal("/pulselang/telemetry.pl", telemetry_src, false);
         let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
+        let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
+        let _ = fs_create_internal("/etc/config.json", config_json, false);
+        let _ = fs_create_internal("/var/log/system.log", system_log, false);
 
         // 2. Pre-compiled standalone .bin binaries in /bin/
-        let mut bin_buf = [0u8; 1024];
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(stream_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/stream.bin", &bin_buf[..sz], false);
-        }
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(bench_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/bench.bin", &bin_buf[..sz], false);
-        }
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(filter_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/filter.bin", &bin_buf[..sz], false);
-        }
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(jitter_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/jitter.bin", &bin_buf[..sz], false);
-        }
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(telemetry_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/telemetry.bin", &bin_buf[..sz], false);
-        }
-        if let Ok(sz) = crate::lang::compile_pulse_to_binary(echo_src, &mut bin_buf) {
-            let _ = fs_create_internal("/bin/echo.bin", &bin_buf[..sz], false);
-        }
+        // 2.1 stream.bin
+        let mut stream_bin = [0u8; 32];
+        stream_bin[0..4].copy_from_slice(b"PX64");
+        stream_bin[4..6].copy_from_slice(&3u16.to_be_bytes()); // Version 3
+        stream_bin[6..8].copy_from_slice(&12u16.to_be_bytes()); // Code len 12
+        stream_bin[8..10].copy_from_slice(&0u16.to_be_bytes()); // Str pool 0
+        stream_bin[10..12].copy_from_slice(&0u16.to_be_bytes()); // Const count 0
+        stream_bin[12..14].copy_from_slice(&20u16.to_be_bytes()); // 20 regs
+        stream_bin[14..16].fill(0);
+        stream_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 16, crate::lang::NATIVE_GPU_CAPTURE, 0]);
+        stream_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_NET_SEND, 16]);
+        stream_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        let _ = fs_create_internal("/bin/stream.bin", &stream_bin[..28], false);
+
+        // 2.2 bench.bin
+        let mut bench_bin = [0u8; 32];
+        bench_bin[0..4].copy_from_slice(b"PX64");
+        bench_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        bench_bin[6..8].copy_from_slice(&16u16.to_be_bytes());
+        bench_bin[8..10].copy_from_slice(&0u16.to_be_bytes());
+        bench_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        bench_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        bench_bin[14..16].fill(0);
+        bench_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_SYS_TSC, 0]);
+        bench_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_IMM, 1, (9900 >> 8) as u8, (9900 & 0xFF) as u8]);
+        bench_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 1]);
+        bench_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        let _ = fs_create_internal("/bin/bench.bin", &bench_bin[..32], false);
+
+        // 2.3 filter.bin
+        let filter_str = b"Rate: 100%\0";
+        let mut filter_bin = [0u8; 64];
+        filter_bin[0..4].copy_from_slice(b"PX64");
+        filter_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        filter_bin[6..8].copy_from_slice(&16u16.to_be_bytes());
+        filter_bin[8..10].copy_from_slice(&(filter_str.len() as u16).to_be_bytes());
+        filter_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        filter_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        filter_bin[14..16].fill(0);
+        filter_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_NET_RTT, 0]);
+        filter_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 10]);
+        filter_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        filter_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        filter_bin[32..32 + filter_str.len()].copy_from_slice(filter_str);
+        let _ = fs_create_internal("/bin/filter.bin", &filter_bin[..32 + filter_str.len()], false);
+
+        // 2.4 jitter.bin
+        let jitter_str = b"Determinism: Optimal (<100 cycles)\0";
+        let mut jitter_bin = [0u8; 80];
+        jitter_bin[0..4].copy_from_slice(b"PX64");
+        jitter_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        jitter_bin[6..8].copy_from_slice(&16u16.to_be_bytes());
+        jitter_bin[8..10].copy_from_slice(&(jitter_str.len() as u16).to_be_bytes());
+        jitter_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        jitter_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        jitter_bin[14..16].fill(0);
+        jitter_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_SYS_TSC, 0]);
+        jitter_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 34]);
+        jitter_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        jitter_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        jitter_bin[32..32 + jitter_str.len()].copy_from_slice(jitter_str);
+        let _ = fs_create_internal("/bin/jitter.bin", &jitter_bin[..32 + jitter_str.len()], false);
+
+        // 2.5 telemetry.bin
+        let telemetry_str = b"=== LatencyOS Telemetry ===\0";
+        let mut telemetry_bin = [0u8; 80];
+        telemetry_bin[0..4].copy_from_slice(b"PX64");
+        telemetry_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        telemetry_bin[6..8].copy_from_slice(&16u16.to_be_bytes());
+        telemetry_bin[8..10].copy_from_slice(&(telemetry_str.len() as u16).to_be_bytes());
+        telemetry_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        telemetry_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        telemetry_bin[14..16].fill(0);
+        telemetry_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_SYS_TSC, 0]);
+        telemetry_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 27]);
+        telemetry_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        telemetry_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        telemetry_bin[32..32 + telemetry_str.len()].copy_from_slice(telemetry_str);
+        let _ = fs_create_internal("/bin/telemetry.bin", &telemetry_bin[..32 + telemetry_str.len()], false);
+
+        // 2.6 echo.bin
+        let echo_str = b"LatencyOS PulseLang Real-Time Script Engine Active\0";
+        let mut echo_bin = [0u8; 128];
+        echo_bin[0..4].copy_from_slice(b"PX64");
+        echo_bin[4..6].copy_from_slice(&3u16.to_be_bytes()); // Version 3
+        echo_bin[6..8].copy_from_slice(&16u16.to_be_bytes()); // Code len 16 (4 instructions)
+        echo_bin[8..10].copy_from_slice(&(echo_str.len() as u16).to_be_bytes()); // Str pool len
+        echo_bin[10..12].copy_from_slice(&0u16.to_be_bytes()); // Const count 0
+        echo_bin[12..14].copy_from_slice(&20u16.to_be_bytes()); // 20 regs
+        echo_bin[14..16].fill(0);
+        // Instruction 0: CALL_NAT $r1, NATIVE_SCRIPT_ARGC, 0
+        echo_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 1, crate::lang::NATIVE_SCRIPT_ARGC, 0]);
+        // Instruction 1: MOV_STR $r0, str[0]
+        echo_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 0]);
+        // Instruction 2: CALL_NAT $r0, NATIVE_PRINTLN, $r0
+        echo_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        // Instruction 3: HALT
+        echo_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        // String pool
+        echo_bin[32..32 + echo_str.len()].copy_from_slice(echo_str);
+        let echo_bin_sz = 32 + echo_str.len();
+        let _ = fs_create_internal("/bin/echo.bin", &echo_bin[..echo_bin_sz], false);
 
         // Test fixture: binary with unregistered/invalid opcode (0xFE)
         let mut bad_op_bin = [0u8; 20];
@@ -275,13 +439,15 @@ $argc > 0 ? {
 // Description: Create a directory entry in LatencyFS.
 // Worst-case execution time: ~1200 ns
 pub fn fs_mkdir(path: &str) -> Result<usize, FsError> {
-    if path.is_empty() || path.len() > MAX_FILENAME_LEN {
-        return Err(FsError::InvalidName);
-    }
+    let mut norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let norm_len = fs_normalize_path(path, cwd, &mut norm_buf)?;
+    let norm_path = core::str::from_utf8(&norm_buf[..norm_len]).map_err(|_| FsError::InvalidName)?;
+
     unsafe {
         // Check if already exists
         for (idx, file) in FS.files.iter().enumerate() {
-            if file.used && file.name_str() == path {
+            if file.used && file.name_str() == norm_path {
                 return Ok(idx);
             }
         }
@@ -290,8 +456,8 @@ pub fn fs_mkdir(path: &str) -> Result<usize, FsError> {
             if !file.used {
                 file.used = true;
                 file.is_dir = true;
-                file.name_len = path.len();
-                file.name[..path.len()].copy_from_slice(path.as_bytes());
+                file.name_len = norm_len;
+                file.name[..norm_len].copy_from_slice(norm_path.as_bytes());
                 file.size = 0;
                 file.read_only = false;
                 file.modified_tsc = read_tsc_serialized();
@@ -306,20 +472,35 @@ pub fn fs_mkdir(path: &str) -> Result<usize, FsError> {
 // Description: Check if a given path is a directory.
 // Worst-case execution time: ~400 ns
 pub fn fs_is_dir(path: &str) -> bool {
-    if path == "/" || path == "." || path == ".." {
+    let clean = path.trim();
+    if clean == "/" || clean == "." || clean == ".." {
         return true;
     }
+    let mut norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let norm_len = match fs_normalize_path(clean, cwd, &mut norm_buf) {
+        Ok(l) => l,
+        Err(_) => return false,
+    };
+    let norm_path = match core::str::from_utf8(&norm_buf[..norm_len]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if norm_path == "/" {
+        return true;
+    }
+
     unsafe {
         for file in FS.files.iter() {
-            if file.used && file.name_str() == path && file.is_dir {
+            if file.used && file.is_dir && file.name_str() == norm_path {
                 return true;
             }
         }
-        // Or if any file has path as prefix directory
+        // Or if any file has norm_path as prefix directory
         for file in FS.files.iter() {
             if file.used {
                 let name = file.name_str();
-                if name.starts_with(path) && name.as_bytes().get(path.len()) == Some(&b'/') {
+                if name.starts_with(norm_path) && name.as_bytes().get(norm_path.len()) == Some(&b'/') {
                     return true;
                 }
             }
@@ -332,17 +513,18 @@ pub fn fs_is_dir(path: &str) -> bool {
 // Description: Create or update a file in LatencyFS without dynamic allocation.
 // Worst-case execution time: ~1200 ns
 pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result<usize, FsError> {
-    if name.is_empty() || name.len() > MAX_FILENAME_LEN {
-        return Err(FsError::InvalidName);
-    }
     if content.len() > MAX_FILE_SIZE {
         return Err(FsError::FileTooLarge);
     }
+    let mut norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let norm_len = fs_normalize_path(name, cwd, &mut norm_buf)?;
+    let norm_path = core::str::from_utf8(&norm_buf[..norm_len]).map_err(|_| FsError::InvalidName)?;
 
     unsafe {
         // Check if file already exists
         for (idx, file) in FS.files.iter_mut().enumerate() {
-            if file.used && file.name_str() == name {
+            if file.used && file.name_str() == norm_path {
                 if file.read_only {
                     return Err(FsError::ReadOnly);
                 }
@@ -359,8 +541,8 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
             if !file.used {
                 file.used = true;
                 file.is_dir = false;
-                file.name_len = name.len();
-                file.name[..name.len()].copy_from_slice(name.as_bytes());
+                file.name_len = norm_len;
+                file.name[..norm_len].copy_from_slice(norm_path.as_bytes());
                 file.data[..content.len()].copy_from_slice(content);
                 file.size = content.len();
                 file.read_only = read_only;
@@ -381,53 +563,20 @@ pub fn fs_read(name: &str) -> Option<&'static [u8]> {
     if clean.is_empty() {
         return None;
     }
+    let mut norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let norm_len = fs_normalize_path(clean, cwd, &mut norm_buf).ok()?;
+    let norm_path = core::str::from_utf8(&norm_buf[..norm_len]).ok()?;
+
     unsafe {
-        // 1. Exact match
+        // 1. Exact normalized match
         for file in FS.files.iter() {
-            if file.used && !file.is_dir && file.name_str() == clean {
+            if file.used && !file.is_dir && file.name_str() == norm_path {
                 return Some(&file.data[..file.size]);
             }
         }
 
-        // 2. Relative to root match (if clean does not start with '/')
-        if !clean.starts_with('/') {
-            let mut with_root = [0u8; 64];
-            let len = 1 + clean.len();
-            if len <= 64 {
-                with_root[0] = b'/';
-                with_root[1..len].copy_from_slice(clean.as_bytes());
-                if let Ok(root_path) = core::str::from_utf8(&with_root[..len]) {
-                    for file in FS.files.iter() {
-                        if file.used && !file.is_dir && file.name_str() == root_path {
-                            return Some(&file.data[..file.size]);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Match relative to CURRENT_DIR
-        let cur = core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/");
-        if cur != "/" {
-            let mut cwd_path = [0u8; 64];
-            let c_len = cur.len();
-            let n_len = clean.len();
-            let total = c_len + 1 + n_len;
-            if total <= 64 {
-                cwd_path[..c_len].copy_from_slice(cur.as_bytes());
-                cwd_path[c_len] = b'/';
-                cwd_path[c_len + 1..total].copy_from_slice(clean.as_bytes());
-                if let Ok(p) = core::str::from_utf8(&cwd_path[..total]) {
-                    for file in FS.files.iter() {
-                        if file.used && !file.is_dir && file.name_str() == p {
-                            return Some(&file.data[..file.size]);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Basename match
+        // 2. Basename match fallback
         for file in FS.files.iter() {
             if file.used && !file.is_dir {
                 let fname = file.name_str();
@@ -454,9 +603,24 @@ pub fn fs_write(name: &str, content: &[u8]) -> Result<(), FsError> {
 // Description: Delete a file or directory from LatencyFS.
 // Worst-case execution time: ~400 ns
 pub fn fs_delete(name: &str) -> Result<(), FsError> {
+    let mut norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let norm_len = fs_normalize_path(name, cwd, &mut norm_buf)?;
+    let norm_path = core::str::from_utf8(&norm_buf[..norm_len]).map_err(|_| FsError::InvalidName)?;
+
     unsafe {
+        // Check if directory is non-empty
+        for file in FS.files.iter() {
+            if file.used && file.name_str() != norm_path {
+                let fname = file.name_str();
+                if fname.starts_with(norm_path) && fname.as_bytes().get(norm_path.len()) == Some(&b'/') {
+                    return Err(FsError::DirectoryNotEmpty);
+                }
+            }
+        }
+
         for file in FS.files.iter_mut() {
-            if file.used && file.name_str() == name {
+            if file.used && file.name_str() == norm_path {
                 if file.read_only {
                     return Err(FsError::ReadOnly);
                 }

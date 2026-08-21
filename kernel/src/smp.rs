@@ -185,7 +185,8 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
         CoreRole::Control => {
             loop {
                 CORE_LOOP_COUNT[idx].fetch_add(1, Ordering::Relaxed);
-                crate::shell::poll_shell(3_400_000_000);
+                let freq = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
+                crate::shell::poll_shell(freq);
                 core::hint::spin_loop();
             }
         }
@@ -198,13 +199,14 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
             let mut slot_id = 0u8;
             loop {
                 CORE_LOOP_COUNT[idx].fetch_add(1, Ordering::Relaxed);
+                let freq = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
 
                 // 1. Detect VBLANK edge via hardware status register polling
                 let vblank_tsc = poll_vblank_edge(500);
 
                 // 2. Perform zero-copy frame buffer capture and compute integrity CRC32
                 let handle = capture_frame_zero_copy(slot_id, frame_seq, vblank_tsc);
-                let capture_latency_ns = tsc_to_ns(handle.capture_done_tsc.saturating_sub(vblank_tsc), 3_400_000_000);
+                let capture_latency_ns = tsc_to_ns(handle.capture_done_tsc.saturating_sub(vblank_tsc), freq);
 
                 LAST_CAPTURE_LATENCY_NS.store(capture_latency_ns, Ordering::Relaxed);
                 LAST_FRAME_CRC.store(handle.crc32, Ordering::Relaxed);
@@ -248,19 +250,20 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
             let mut packet_seq = 1u16;
             loop {
                 CORE_LOOP_COUNT[idx].fetch_add(1, Ordering::Relaxed);
+                let freq = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
 
                 // 1. Poll e1000 RX ring buffer for incoming ACK packets (bounded to ~90 ns)
-                let _ = poll_rx_ack(3_400_000_000);
+                let _ = poll_rx_ack(freq);
 
                 // 2. Poll Encode->Network SPSC ring buffer for ready frames
                 if let Some(frame) = ENCODE_TO_NET_RING.pop() {
-                    let deadline_delta_tsc = crate::tsc::ns_to_tsc(20_000_000, 3_400_000_000);
+                    let deadline_delta_tsc = crate::tsc::ns_to_tsc(20_000_000, freq);
                     let deadline_tsc = read_tsc_serialized().wrapping_add(deadline_delta_tsc);
 
                     let send_start_tsc = read_tsc_serialized();
                     if let Ok(bytes) = stream_send_frame(&frame, deadline_tsc, &mut packet_seq) {
                         let send_end_tsc = read_tsc_serialized();
-                        let send_lat_ns = tsc_to_ns(send_end_tsc - send_start_tsc, 3_400_000_000);
+                        let send_lat_ns = tsc_to_ns(send_end_tsc - send_start_tsc, freq);
                         LAST_NET_SEND_LATENCY_NS.store(send_lat_ns, Ordering::Relaxed);
                         NETWORK_FRAMES_SENT.fetch_add(1, Ordering::Release);
                         LAST_NET_BYTES_SENT.store(bytes as u64, Ordering::Relaxed);

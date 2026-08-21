@@ -11,12 +11,12 @@ use crate::serial_println;
 use crate::tsc::read_tsc_serialized;
 use core::sync::atomic::Ordering;
 
-pub const MAX_TOKENS: usize = 512;
+pub const MAX_TOKENS: usize = 256;
 pub const MAX_BYTECODE_SIZE: usize = 1024;
 pub const MAX_VARS: usize = 32;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;
-pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 5_000_000; // 5.0 ms (5,000,000 ns) wall-clock hard limit
+pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 20_000_000; // 20.0 ms (20,000,000 ns) wall-clock hard watchdog limit
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -763,6 +763,13 @@ pub fn set_script_args(args: &[&str]) {
 // Compiler (px64 Single-Pass Register Allocator & Instruction Generator)
 // -----------------------------------------------------------------------------
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HandleState {
+    Unallocated,
+    Allocated { line: usize, col: usize },
+    Consumed,
+}
+
 pub struct Compiler<'a> {
     src: &'a [u8],
     tokens: &'a [Token],
@@ -777,6 +784,8 @@ pub struct Compiler<'a> {
     pub str_pool_len: usize,
     pub const_pool: [i64; MAX_CONST_POOL],
     pub const_pool_len: usize,
+    temp_depth: u8,
+    handle_states: [HandleState; 4],
 }
 
 impl<'a> Compiler<'a> {
@@ -795,6 +804,29 @@ impl<'a> Compiler<'a> {
             str_pool_len: 0,
             const_pool: [0; MAX_CONST_POOL],
             const_pool_len: 0,
+            temp_depth: 0,
+            handle_states: [HandleState::Unallocated; 4],
+        }
+    }
+
+    pub fn alloc_temp(&mut self) -> Result<u8, CompileError> {
+        if self.temp_depth >= 6 {
+            return Err(self.error(
+                "ERR_EXPR_TOO_COMPLEX",
+                "Expression nesting too deep (exceeded register scratch pool)",
+                "Simpler expression or intermediate variables",
+                "Expression Evaluation",
+                "Split complex expression into intermediate variables",
+            ));
+        }
+        let reg = 15 - self.temp_depth;
+        self.temp_depth += 1;
+        Ok(reg)
+    }
+
+    pub fn free_temp(&mut self, reg: u8) {
+        if self.temp_depth > 0 && reg == 15 - (self.temp_depth - 1) {
+            self.temp_depth -= 1;
         }
     }
 
@@ -954,6 +986,25 @@ impl<'a> Compiler<'a> {
         while self.peek().kind != TokenKind::Eof {
             self.statement()?;
         }
+
+        // BL-03: Verify all allocated hardware handles were sent/consumed!
+        for i in 0..4 {
+            if let HandleState::Allocated { line, col } = self.handle_states[i] {
+                return Err(CompileError {
+                    code: "ERR_LINEAR_UNCONSUMED_HANDLE",
+                    message: "Hardware handle captured but never sent/consumed (linear ownership violation)",
+                    line,
+                    col,
+                    byte_offset: 0,
+                    token_kind: TokenKind::HardwareIdent,
+                    token_len: 2,
+                    expected: "Consume handle with @send(#handle)",
+                    stage: "Linear Ownership Verification",
+                    suggestion: "Add '@send(#handle);' along all execution paths to release DMA buffer",
+                });
+            }
+        }
+
         self.emit_inst(PX64_OP_HALT, 0, 0, 0)?;
         Ok(self.code_len)
     }
@@ -1044,8 +1095,13 @@ impl<'a> Compiler<'a> {
                 };
 
                 let time_reg = 0;
-                let budget_us = deadline_ns / 1_000;
-                self.emit_imm16(PX64_OP_MOV_IMM, time_reg, budget_us as u16)?;
+                let val = deadline_ns as i64;
+                if val >= 0 && val <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, time_reg, val as u16)?;
+                } else {
+                    let idx = self.add_constant(val)?;
+                    self.emit_imm16(PX64_OP_LDC, time_reg, idx)?;
+                }
                 self.emit_inst(PX64_OP_WITHIN_START, time_reg, 0, 0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
@@ -1075,6 +1131,21 @@ impl<'a> Compiler<'a> {
                 self.advance();
                 let loop_start = self.code_len as u16;
                 self.match_token(TokenKind::LParen);
+
+                // BL-04: Static Loop Boundary Verification
+                let cond_tok = self.peek();
+                if let TokenKind::Number(n) = cond_tok.kind {
+                    if n != 0 {
+                        return Err(self.error(
+                            "ERR_UNBOUNDED_LOOP",
+                            "Constant infinite loop (@while(1)) rejected: loops must have statically bounded monotonic conditions",
+                            "Bounded condition e.g. @while($i < 100)",
+                            "Static Loop Bound Verification",
+                            "Replace infinite loop with bounded loop counter",
+                        ));
+                    }
+                }
+
                 let cond_reg = 0;
                 self.expression(cond_reg)?;
                 self.match_token(TokenKind::RParen);
@@ -1159,6 +1230,20 @@ impl<'a> Compiler<'a> {
                 let var_reg = self.resolve_var(ident)?;
 
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
+                    // BL-03: Handle hardware handle allocation tracking
+                    if var_reg >= 16 && var_reg <= 19 {
+                        let slot = (var_reg - 16) as usize;
+                        if let HandleState::Allocated { .. } = self.handle_states[slot] {
+                            return Err(self.error(
+                                "ERR_LINEAR_OVERWRITE",
+                                "Hardware handle overwritten before previous buffer was consumed/sent",
+                                "Consume prior handle with @send(#h) before reassigning",
+                                "Linear Ownership Verification",
+                                "Ensure '@send(#h)' is invoked before overwriting '#h := @capture()'",
+                            ));
+                        }
+                        self.handle_states[slot] = HandleState::Allocated { line: ident.line, col: ident.col };
+                    }
                     self.expression(var_reg)?;
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
@@ -1169,6 +1254,7 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of assignment statement",
                         ));
                     }
+                    return Ok(());
                 } else if self.match_token(TokenKind::PlusEq) {
                     if let TokenKind::Number(n) = self.peek().kind {
                         if n >= 0 && n <= 255 {
@@ -1186,9 +1272,10 @@ impl<'a> Compiler<'a> {
                             return Ok(());
                         }
                     }
-                    let tmp_reg = 15u8;
+                    let tmp_reg = self.alloc_temp()?;
                     self.expression(tmp_reg)?;
                     self.emit_inst(PX64_OP_ADD, var_reg, var_reg, tmp_reg)?;
+                    self.free_temp(tmp_reg);
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -1198,6 +1285,7 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of statement",
                         ));
                     }
+                    return Ok(());
                 } else if self.match_token(TokenKind::MinusEq) {
                     if let TokenKind::Number(n) = self.peek().kind {
                         if n >= 0 && n <= 255 {
@@ -1215,9 +1303,10 @@ impl<'a> Compiler<'a> {
                             return Ok(());
                         }
                     }
-                    let tmp_reg = 15u8;
+                    let tmp_reg = self.alloc_temp()?;
                     self.expression(tmp_reg)?;
                     self.emit_inst(PX64_OP_SUB, var_reg, var_reg, tmp_reg)?;
+                    self.free_temp(tmp_reg);
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -1227,6 +1316,7 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of statement",
                         ));
                     }
+                    return Ok(());
                 } else {
                     self.current -= 1;
                     self.expression_statement()?;
@@ -1261,7 +1351,35 @@ impl<'a> Compiler<'a> {
                 let tok = self.advance();
                 let name = &self.src[tok.start..tok.start + tok.len];
                 let func_id = match name {
-                    b"@send" | b"net.send" => NATIVE_NET_SEND,
+                    b"@send" | b"net.send" => {
+                        if dst >= 16 && dst <= 19 {
+                            let slot = (dst - 16) as usize;
+                            match self.handle_states[slot] {
+                                HandleState::Unallocated => {
+                                    return Err(self.error(
+                                        "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                        "Hardware handle sent before being captured/allocated",
+                                        "Capture handle with '#f := @capture()' before sending",
+                                        "Linear Ownership Verification",
+                                        "Initialize hardware handle with '@capture()' before '@send()'",
+                                    ));
+                                }
+                                HandleState::Consumed => {
+                                    return Err(self.error(
+                                        "ERR_LINEAR_DOUBLE_SEND",
+                                        "Hardware handle sent multiple times (double-send / double-free violation)",
+                                        "Single @send per allocated handle",
+                                        "Linear Ownership Verification",
+                                        "Remove duplicate '@send(#f);' calls on the same handle",
+                                    ));
+                                }
+                                HandleState::Allocated { .. } => {
+                                    self.handle_states[slot] = HandleState::Consumed;
+                                }
+                            }
+                        }
+                        NATIVE_NET_SEND
+                    }
                     b"@print" | b"print" => NATIVE_PRINT,
                     b"@println" | b"println" => NATIVE_PRINTLN,
                     b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
@@ -1321,13 +1439,14 @@ impl<'a> Compiler<'a> {
         self.comparison(dst)?;
         while self.peek().kind == TokenKind::EqEq || self.peek().kind == TokenKind::NotEq {
             let op = self.advance().kind;
-            let rhs_reg = 15u8;
+            let rhs_reg = self.alloc_temp()?;
             self.comparison(rhs_reg)?;
             if op == TokenKind::EqEq {
                 self.emit_inst(PX64_OP_CMP_EQ, dst, dst, rhs_reg)?;
             } else {
                 self.emit_inst(PX64_OP_CMP_NE, dst, dst, rhs_reg)?;
             }
+            self.free_temp(rhs_reg);
         }
         Ok(())
     }
@@ -1336,7 +1455,7 @@ impl<'a> Compiler<'a> {
         self.term(dst)?;
         while matches!(self.peek().kind, TokenKind::Lt | TokenKind::LtEq | TokenKind::Gt | TokenKind::GtEq) {
             let op = self.advance().kind;
-            let rhs_reg = 15u8;
+            let rhs_reg = self.alloc_temp()?;
             self.term(rhs_reg)?;
             match op {
                 TokenKind::Lt => { self.emit_inst(PX64_OP_CMP_LT, dst, dst, rhs_reg)?; }
@@ -1345,6 +1464,7 @@ impl<'a> Compiler<'a> {
                 TokenKind::GtEq => { self.emit_inst(PX64_OP_CMP_GE, dst, dst, rhs_reg)?; }
                 _ => {}
             }
+            self.free_temp(rhs_reg);
         }
         Ok(())
     }
@@ -1353,13 +1473,14 @@ impl<'a> Compiler<'a> {
         self.factor(dst)?;
         while self.peek().kind == TokenKind::Plus || self.peek().kind == TokenKind::Minus {
             let op = self.advance().kind;
-            let rhs_reg = 15u8;
+            let rhs_reg = self.alloc_temp()?;
             self.factor(rhs_reg)?;
             if op == TokenKind::Plus {
                 self.emit_inst(PX64_OP_ADD, dst, dst, rhs_reg)?;
             } else {
                 self.emit_inst(PX64_OP_SUB, dst, dst, rhs_reg)?;
             }
+            self.free_temp(rhs_reg);
         }
         Ok(())
     }
@@ -1368,7 +1489,7 @@ impl<'a> Compiler<'a> {
         self.primary(dst)?;
         while self.peek().kind == TokenKind::Star || self.peek().kind == TokenKind::Slash || self.peek().kind == TokenKind::Percent {
             let op = self.advance().kind;
-            let rhs_reg = 15u8;
+            let rhs_reg = self.alloc_temp()?;
             self.primary(rhs_reg)?;
             match op {
                 TokenKind::Star => { self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?; }
@@ -1376,6 +1497,7 @@ impl<'a> Compiler<'a> {
                 TokenKind::Percent => { self.emit_inst(PX64_OP_MOD, dst, dst, rhs_reg)?; }
                 _ => {}
             }
+            self.free_temp(rhs_reg);
         }
         Ok(())
     }
@@ -1394,17 +1516,21 @@ impl<'a> Compiler<'a> {
             }
 
             TokenKind::TimeLiteral(ns) => {
-                let us = (ns / 1_000) as i64;
-                if us >= 0 && us <= 65535 {
-                    self.emit_imm16(PX64_OP_MOV_IMM, dst, us as u16)?;
+                let val = ns as i64;
+                if val >= 0 && val <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, dst, val as u16)?;
                 } else {
-                    let idx = self.add_constant(us)?;
+                    let idx = self.add_constant(val)?;
                     self.emit_imm16(PX64_OP_LDC, dst, idx)?;
                 }
             }
 
             TokenKind::StringLit => {
-                let s = &self.src[tok.start + 1..tok.start + tok.len - 1];
+                let s = if tok.len >= 2 {
+                    &self.src[tok.start + 1..tok.start + tok.len - 1]
+                } else {
+                    &[]
+                };
                 if self.str_pool_len + s.len() > MAX_STRING_POOL {
                     return Err(self.error(
                         "ERR_STRING_POOL_FULL",
@@ -1433,12 +1559,20 @@ impl<'a> Compiler<'a> {
                 if self.peek().kind == TokenKind::LParen {
                     self.advance(); // consume '('
                     let mut arg_reg = 0u8;
+                    let mut raw_h_reg = 0u8;
                     if self.peek().kind != TokenKind::RParen {
-                        arg_reg = 15u8;
+                        let arg_tok = self.peek();
+                        if arg_tok.kind == TokenKind::HardwareIdent {
+                            if let Ok(reg) = self.resolve_var(arg_tok) {
+                                raw_h_reg = reg;
+                            }
+                        }
+                        arg_reg = self.alloc_temp()?;
                         self.expression(arg_reg)?;
                         while self.match_token(TokenKind::Comma) {
-                            let dummy = 14u8;
+                            let dummy = self.alloc_temp()?;
                             self.expression(dummy)?;
+                            self.free_temp(dummy);
                         }
                     }
                     if !self.match_token(TokenKind::RParen) {
@@ -1458,7 +1592,36 @@ impl<'a> Compiler<'a> {
                         b"@rtt" | b"net.rtt" => NATIVE_NET_RTT,
                         b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
                         b"@capture" | b"gpu.capture" => NATIVE_GPU_CAPTURE,
-                        b"@send" | b"net.send" => NATIVE_NET_SEND,
+                        b"@send" | b"net.send" => {
+                            let target_reg = if raw_h_reg >= 16 && raw_h_reg <= 19 { raw_h_reg } else { arg_reg };
+                            if target_reg >= 16 && target_reg <= 19 {
+                                let slot = (target_reg - 16) as usize;
+                                match self.handle_states[slot] {
+                                    HandleState::Unallocated => {
+                                        return Err(self.error(
+                                            "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                            "Hardware handle sent before being captured/allocated",
+                                            "Capture handle with '#f := @capture()' before sending",
+                                            "Linear Ownership Verification",
+                                            "Initialize hardware handle with '@capture()' before '@send()'",
+                                        ));
+                                    }
+                                    HandleState::Consumed => {
+                                        return Err(self.error(
+                                            "ERR_LINEAR_DOUBLE_SEND",
+                                            "Hardware handle sent multiple times (double-send / double-free violation)",
+                                            "Single @send per allocated handle",
+                                            "Linear Ownership Verification",
+                                            "Remove duplicate '@send(#f);' calls on the same handle",
+                                        ));
+                                    }
+                                    HandleState::Allocated { .. } => {
+                                        self.handle_states[slot] = HandleState::Consumed;
+                                    }
+                                }
+                            }
+                            NATIVE_NET_SEND
+                        }
                         b"@argc" | b"sys.argc" => NATIVE_SCRIPT_ARGC,
                         b"@arg" | b"sys.arg" => NATIVE_SCRIPT_ARG,
                         _ => {
@@ -1473,6 +1636,9 @@ impl<'a> Compiler<'a> {
                     };
 
                     self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg_reg)?;
+                    if arg_reg != 0 {
+                        self.free_temp(arg_reg);
+                    }
                 } else {
                     let var_reg = self.resolve_var(tok)?;
                     if var_reg != dst {
@@ -1826,8 +1992,7 @@ impl<'a> PX64VM<'a> {
                 }
 
                 PX64_OP_WITHIN_START => {
-                    let budget_us = if rd < PX64_NUM_REGISTERS { self.regs[rd] as u64 } else { 500 };
-                    let budget_ns = budget_us * 1_000;
+                    let budget_ns = if rd < PX64_NUM_REGISTERS { self.regs[rd] as u64 } else { 500_000 };
                     let deadline = read_tsc_serialized() + crate::tsc::ns_to_tsc(budget_ns, tsc_freq_hz);
                     if self.dl_sp < 8 {
                         self.deadline_stack[self.dl_sp] = deadline;

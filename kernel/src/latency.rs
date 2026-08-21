@@ -228,10 +228,12 @@ pub fn latency_report(freq_hz: u64) {
     let mut prev_ns: Option<u64> = None;
     let base_event = EVENT_LOG[EVENT_INPUT_TRIGGER as usize].load();
     let base_tsc = if base_event.valid { base_event.tsc } else { 0 };
+    let mut any_valid = false;
 
     for event_id in 0..=EVENT_NET_SENT {
         let record = EVENT_LOG[event_id as usize].load();
         if record.valid {
+            any_valid = true;
             let rel_tsc = record.tsc.saturating_sub(base_tsc);
             let time_ns = tsc_to_ns(rel_tsc, freq_hz);
             let (desc, budget) = get_event_name(event_id);
@@ -252,6 +254,10 @@ pub fn latency_report(freq_hz: u64) {
                 budget
             );
         }
+    }
+
+    if !any_valid {
+        serial_println!("  [LATENCY] No single-run telemetry events recorded yet. Run 'benchmark' to generate sample traces.");
     }
 
     // Report loop iteration benchmark
@@ -290,8 +296,10 @@ pub fn print_statistical_latency_report() {
         let (name, budget_us) = get_stage_info(stage);
         let stats = compute_stage_stats(stage);
 
-        let status = if (stats.p99_us as u64) <= budget_us {
+        let status = if (stats.max_us as u64) <= budget_us {
             "PASS"
+        } else if (stats.p99_us as u64) <= budget_us {
+            "PASS (p99)"
         } else {
             "EXCEEDED"
         };
@@ -308,6 +316,7 @@ pub fn print_statistical_latency_report() {
             status
         );
     }
+    serial_println!("Criteria: PASS = Worst-case Max <= Budget; PASS (p99) = 99th percentile <= Budget.");
     serial_println!("=========================================================================================================");
 }
 

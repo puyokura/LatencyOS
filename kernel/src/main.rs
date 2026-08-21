@@ -59,6 +59,7 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
     // 2. Read initial boot TSC and calibrate frequency (~10ms)
     let boot_tsc = tsc::read_tsc_serialized();
     let tsc_freq_hz = tsc::calibrate_tsc_freq();
+    tsc::GLOBAL_TSC_FREQ_HZ.store(tsc_freq_hz, Ordering::Release);
     let boot_ns = tsc::tsc_to_ns(boot_tsc, tsc_freq_hz);
 
     serial_println!("============================================================================");
@@ -215,6 +216,9 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
 
     // 13. Initialize and start Core 0 interactive control shell
     shell::init_shell();
+
+    // Signal all AP cores to begin executing their dedicated real-time loops
+    smp::START_SIGNAL.store(true, Ordering::Release);
 
     // Core 0 enters its designated Control domain loop (which runs shell::poll_shell)
     run_role_loop(0, CoreRole::Control);

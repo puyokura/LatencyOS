@@ -193,7 +193,7 @@ pub fn send_packet(packet: &[u8]) -> Result<(), ()> {
             None => return Err(()),
         };
 
-        let idx = drv.tx_tail;
+        let idx = drv.tx_tail % NUM_TX_DESCS;
         let desc = &mut TX_DESCS[idx];
 
         // Check if descriptor is free (Status bit 0: DD)
@@ -240,7 +240,7 @@ pub fn poll_rx_packet(out: &mut [u8]) -> Option<usize> {
 
         // Reset descriptor status and advance tail
         desc.status = 0;
-        drv.rx_tail = idx;
+        drv.rx_tail = idx % NUM_RX_DESCS;
         mmio_write32(drv.bar0, E1000_RDT, idx as u32);
 
         Some(copy_len)

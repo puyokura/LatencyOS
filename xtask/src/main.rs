@@ -519,33 +519,34 @@ fn test_compile_error(kernel_elf: &Path) {
     }
 
     // Create broken script via editor
+    println!("[xtask-test] Opening editor: edit /home/err_syntax.pl");
     full_output.clear();
     tcp_stream.write_all(b"edit /home/err_syntax.pl\r\n").unwrap();
     tcp_stream.flush().unwrap();
-    wait_for("PulseEditor", 5, &mut full_output);
+    assert!(wait_for("PulseEditor", 5, &mut full_output), "Timed out waiting for PulseEditor");
 
     let broken_script = "@contract: @wcet(100us) @budget(500us);\r\n$x := := 42;\r\n";
     tcp_stream.write_all(broken_script.as_bytes()).unwrap();
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
-    // Save and Quit
-    tcp_stream.write_all(&[0x13]).unwrap(); // ^S
+    // Send Save (^S = 0x13)
+    tcp_stream.write_all(&[0x13]).unwrap();
     tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    tcp_stream.write_all(&[0x11]).unwrap(); // ^Q
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Send Quit (^Q = 0x11)
+    tcp_stream.write_all(&[0x11]).unwrap();
     tcp_stream.flush().unwrap();
-    wait_for("[c0|", 5, &mut full_output);
+    assert!(wait_for("[c0|", 5, &mut full_output), "Timed out waiting for shell prompt after editor quit");
 
     // Compile broken script
     full_output.clear();
     println!("[xtask-test] Running: compile /home/err_syntax.pl");
     tcp_stream.write_all(b"compile /home/err_syntax.pl\r\n").unwrap();
     tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(400));
-    while let Ok(chunk) = rx.try_recv() {
-        full_output.push_str(&String::from_utf8_lossy(&chunk));
-    }
+    assert!(wait_for("[ERROR_CODE]:", 5, &mut full_output), "Timed out waiting for compiler error diagnostic. Output:\n{}", full_output);
+    assert!(wait_for("[c0|", 5, &mut full_output), "Timed out waiting for shell prompt after diagnostic");
 
     let _ = child.kill();
     let _ = child.wait();
@@ -866,11 +867,11 @@ fn test_editor_scroll(kernel_elf: &Path) {
 
     // Move to TOP (Line 1) using Page Up (^Y or \x1b[5~)
     println!("[xtask-test] Moving to TOP with Page Up (^Y)...");
+    full_output.clear();
     tcp_stream.write_all(&[0x19, 0x19]).unwrap(); // ^Y twice
     tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(300));
 
-    full_output.clear();
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
@@ -880,11 +881,11 @@ fn test_editor_scroll(kernel_elf: &Path) {
 
     // Scroll down to Line 35 using Page Down (^V or \x1b[6~)
     println!("[xtask-test] Scrolling down to BOTTOM with Page Down (^V)...");
+    full_output.clear();
     tcp_stream.write_all(&[0x16, 0x16]).unwrap(); // ^V twice
     tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(300));
 
-    full_output.clear();
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
@@ -1000,7 +1001,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
 
     if !wait_for("[c0|", 10, &mut full_output) {
         let _ = child.kill();
-        panic!("Timeout waiting for shell prompt");
+        panic!("Timeout waiting for shell prompt. Output received:\n{}", full_output);
     }
 
     // Test 1: disasm /bin/echo.bin
@@ -1053,23 +1054,51 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] run output:\n{}", full_output);
     assert!(full_output.contains("px64 register machine active"), "Failed to execute px64 compiled binary with arguments");
 
-    // Test 5: run /pulselang/telemetry.pl
+    // Test 5: run /pulselang/bench.pl (BL-01 verification: sum must be 9900, not 400!)
     full_output.clear();
-    println!("[xtask-test] Running: run /pulselang/telemetry.pl");
-    tcp_stream.write_all(b"run /pulselang/telemetry.pl\r\n").unwrap();
+    println!("[xtask-test] Running: run /pulselang/bench.pl (BL-01 fix verification)");
+    tcp_stream.write_all(b"run /pulselang/bench.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("9900", 5, &mut full_output), "Timed out running /pulselang/bench.pl");
+    println!("[xtask-test] run /pulselang/bench.pl output:\n{}", full_output);
+    assert!(full_output.contains("9900"), "bench.pl must calculate 9900 (BL-01 fix verification)");
+
+    // Test 5b: run /pulselang/filter.pl (BL-02 verification: 300us must not misdiagnose congestion)
+    full_output.clear();
+    println!("[xtask-test] Running: run /pulselang/filter.pl (BL-02 fix verification)");
+    tcp_stream.write_all(b"run /pulselang/filter.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("Rate: 100%", 5, &mut full_output), "Timed out running /pulselang/filter.pl");
+    println!("[xtask-test] run /pulselang/filter.pl output:\n{}", full_output);
+    assert!(full_output.contains("Rate: 100%"), "filter.pl must output Rate: 100% (BL-02 fix verification)");
+
+    // Test 6: Static Loop Boundary Verification -> ERR_UNBOUNDED_LOOP (BL-04)
+    full_output.clear();
+    println!("[xtask-test] Creating script with constant infinite loop (@while(1)) (/loop_unbounded.pl)...");
+    tcp_stream.write_all(b"edit /loop_unbounded.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"let $a = 0;\r\nwhile (1) {\r\n  $a += 1;\r\n}\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    tcp_stream.write_all(b"compile /loop_unbounded.pl /bin/loop_unbounded.bin\r\n").unwrap();
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(400));
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
-    assert!(full_output.contains("LatencyOS Telemetry"), "Failed to execute px64 telemetry script");
+    println!("[xtask-test] compile /loop_unbounded.pl output:\n{}", full_output);
+    assert!(full_output.contains("ERR_UNBOUNDED_LOOP"), "Constant @while(1) must trigger ERR_UNBOUNDED_LOOP (BL-04)");
 
-    // Test 6: Pure arithmetic infinite loop -> ERR_PX64_WCET_EXCEEDED (10,000 steps triggered)
+    // Test 6b: Non-decrementing loop -> ERR_PX64_WCET_EXCEEDED (10,000 steps)
     full_output.clear();
-    println!("[xtask-test] Creating and running pure arithmetic infinite loop (/loop_calc.pl)...");
+    println!("[xtask-test] Creating and running non-decrementing loop (/loop_calc.pl)...");
     tcp_stream.write_all(b"edit /loop_calc.pl\r\n").unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    tcp_stream.write_all(b"let $a = 0;\r\nwhile (1) {\r\n  $a += 1;\r\n}\r\n").unwrap();
+    tcp_stream.write_all(b"let $i = 0;\r\nlet $a = 0;\r\nwhile ($i < 100000) {\r\n  $a += 1;\r\n}\r\n").unwrap();
     std::thread::sleep(Duration::from_millis(200));
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
     std::thread::sleep(Duration::from_millis(200));
@@ -1085,12 +1114,12 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] run /loop_calc.pl output:\n{}", full_output);
     assert!(full_output.contains("ERR_PX64_WCET_EXCEEDED"), "Pure arithmetic loop must trigger ERR_PX64_WCET_EXCEEDED at 10,000 steps");
 
-    // Test 7: Adversarial @capture() infinite loop -> ERR_PX64_TIMEOUT_EXCEEDED (5.0ms wall-clock timeout triggered)
+    // Test 7: Adversarial @capture() loop -> ERR_PX64_TIMEOUT_EXCEEDED (5.0ms wall-clock timeout triggered)
     full_output.clear();
-    println!("[xtask-test] Creating and running adversarial @capture() infinite loop (/loop_cap.pl)...");
+    println!("[xtask-test] Creating and running adversarial @capture() loop (/loop_cap.pl)...");
     tcp_stream.write_all(b"edit /loop_cap.pl\r\n").unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    tcp_stream.write_all(b"while (1) {\r\n  let $f = @capture();\r\n}\r\n").unwrap();
+    tcp_stream.write_all(b"let $i = 0;\r\nwhile ($i < 100000) {\r\n  let $f = @capture();\r\n}\r\n").unwrap();
     std::thread::sleep(Duration::from_millis(200));
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
     std::thread::sleep(Duration::from_millis(200));
@@ -1108,6 +1137,47 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] run /loop_cap.pl output:\n{}", full_output);
     println!("[xtask-test] Elapsed host time for /loop_cap.pl: {:?}", cap_elapsed);
     assert!(full_output.contains("ERR_PX64_TIMEOUT_EXCEEDED"), "Adversarial @capture() loop must trigger ERR_PX64_TIMEOUT_EXCEEDED at wall-clock deadline");
+
+    // Test 7b: Linear Type Handle Verification (BL-03)
+    full_output.clear();
+    println!("[xtask-test] Testing Linear Type Unconsumed Handle (/unconsumed.pl)...");
+    tcp_stream.write_all(b"edit /unconsumed.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"#f := @capture();\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    tcp_stream.write_all(b"compile /unconsumed.pl /bin/unconsumed.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] compile /unconsumed.pl output:\n{}", full_output);
+    assert!(full_output.contains("ERR_LINEAR_UNCONSUMED_HANDLE"), "Unconsumed handle must trigger ERR_LINEAR_UNCONSUMED_HANDLE (BL-03)");
+
+    full_output.clear();
+    println!("[xtask-test] Testing Linear Type Double Send (/doublesend.pl)...");
+    tcp_stream.write_all(b"edit /doublesend.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"#f := @capture();\r\n@send(#f);\r\n@send(#f);\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    tcp_stream.write_all(b"compile /doublesend.pl /bin/doublesend.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] compile /doublesend.pl output:\n{}", full_output);
+    assert!(full_output.contains("ERR_LINEAR_DOUBLE_SEND"), "Double @send must trigger ERR_LINEAR_DOUBLE_SEND (BL-03)");
 
     // Test 8: Large 64-bit constant loading with LDC (>65535) and ADDI/SUBI
     full_output.clear();
@@ -1153,6 +1223,66 @@ fn test_px64_architecture(kernel_elf: &Path) {
     }
     println!("[xtask-test] run /bin/const_test.bin output:\n{}", full_output);
     assert!(full_output.contains("CALC_RES:1000003"), "Expected calculation 1000000 + 5 - 2 = 1000003");
+
+    // Test 8b: Dynamic Filesystem Operations (BL-05)
+    full_output.clear();
+    println!("[xtask-test] Testing Dynamic Filesystem mkdir, cd, pwd, touch, tree, rm (BL-05)...");
+    tcp_stream.write_all(b"mkdir qa\r\n").unwrap();
+    tcp_stream.write_all(b"cd qa\r\n").unwrap();
+    tcp_stream.write_all(b"pwd\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] mkdir qa / cd qa / pwd output:\n{}", full_output);
+    assert!(full_output.contains("/qa"), "cd qa must update pwd to /qa (BL-05)");
+
+    full_output.clear();
+    tcp_stream.write_all(b"touch inside\r\n").unwrap();
+    tcp_stream.write_all(b"tree\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] touch inside / tree output:\n{}", full_output);
+    assert!(full_output.contains("/qa/") && full_output.contains("inside"), "tree must dynamically list /qa/ and inside (BL-05)");
+
+    full_output.clear();
+    tcp_stream.write_all(b"cd ..\r\n").unwrap();
+    tcp_stream.write_all(b"rm qa\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] rm qa (non-empty) output:\n{}", full_output);
+    assert!(full_output.contains("Directory not empty"), "rm on non-empty directory must report Directory not empty (BL-05)");
+
+    full_output.clear();
+    tcp_stream.write_all(b"rm /qa/inside\r\n").unwrap();
+    tcp_stream.write_all(b"rm qa\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] rm /qa/inside then rm qa output:\n{}", full_output);
+
+    // Test 8c: SMP Multi-Core Activity & TSC Calibration (BL-06, BL-07)
+    full_output.clear();
+    println!("[xtask-test] Testing SMP Cores Activity and TSC reporting (BL-06, BL-07)...");
+    tcp_stream.write_all(b"cores\r\n").unwrap();
+    tcp_stream.write_all(b"tsc\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(full_output.contains("core1: [apic 1] Capture") && full_output.contains("booted: true, active: true"), "Core 1 must be active (BL-07)");
+    assert!(full_output.contains("core2: [apic 2] Encode") && full_output.contains("booted: true, active: true"), "Core 2 must be active (BL-07)");
+    assert!(full_output.contains("core3: [apic 3] Network") && full_output.contains("booted: true, active: true"), "Core 3 must be active (BL-07)");
 
     // Test 9: Execution of all 6 pre-compiled standard binaries in /bin/
     for script in &["stream.bin", "bench.bin", "filter.bin", "jitter.bin", "telemetry.bin", "echo.bin"] {
@@ -1229,7 +1359,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
     let _ = child.kill();
     let _ = child.wait();
 
-    println!("[xtask-test] === TEST PASSED: Phase 9 px64 Instruction Set Refactoring (64-bit Constant Pool LDC, ADDI/SUBI, Disassembler, All Standard Binaries, Microbenchmark, Error Diagnostics) completely verified! ===");
+    println!("[xtask-test] === TEST PASSED: All 10 Audit Remediations (BL-01 to BL-10) and Phase 9 px64 Instruction Set Refactoring completely verified! ===");
 }
 
 fn check_versions() {

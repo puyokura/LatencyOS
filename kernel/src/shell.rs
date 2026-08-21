@@ -1140,8 +1140,9 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             } else {
                 match crate::fs::fs_delete(arg) {
                     Ok(()) => {}
-                    Err(crate::fs::FsError::FileNotFound) => serial_println!("rm: cannot remove '{}': No such file", arg),
+                    Err(crate::fs::FsError::FileNotFound) => serial_println!("rm: cannot remove '{}': No such file or directory", arg),
                     Err(crate::fs::FsError::ReadOnly) => serial_println!("rm: cannot remove '{}': Permission denied (read-only)", arg),
+                    Err(crate::fs::FsError::DirectoryNotEmpty) => serial_println!("rm: cannot remove '{}': Directory not empty", arg),
                     Err(e) => serial_println!("rm: error removing '{}': {:?}", arg, e),
                 }
             }
@@ -1183,58 +1184,21 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
 
         "cd" => {
             let target = if arg.is_empty() { "/" } else { arg };
-            if target == "/" {
-                unsafe {
-                    CURRENT_DIR[0] = b'/';
-                    CURRENT_DIR_LEN = 1;
-                }
-            } else if target == ".." {
-                unsafe {
-                    let cur = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
-                    if let Some(pos) = cur.rfind('/') {
-                        if pos == 0 {
-                            CURRENT_DIR[0] = b'/';
-                            CURRENT_DIR_LEN = 1;
-                        } else {
-                            CURRENT_DIR_LEN = pos;
+            let mut norm_buf = [0u8; 64];
+            let cwd = unsafe { core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/") };
+            match crate::fs::fs_normalize_path(target, cwd, &mut norm_buf) {
+                Ok(norm_len) => {
+                    let norm_path = core::str::from_utf8(&norm_buf[..norm_len]).unwrap_or("/");
+                    if crate::fs::fs_is_dir(norm_path) {
+                        unsafe {
+                            CURRENT_DIR_LEN = norm_len;
+                            CURRENT_DIR[..norm_len].copy_from_slice(norm_path.as_bytes());
                         }
+                    } else {
+                        serial_println!("cd: {}: No such directory", target);
                     }
                 }
-            } else if target == "." {
-                // No-op
-            } else {
-                let trimmed_target = target.trim_end_matches('/');
-                let mut check_buf = [0u8; 64];
-                let check_path = if trimmed_target.starts_with('/') {
-                    trimmed_target
-                } else {
-                    unsafe {
-                        let cur = core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/");
-                        if cur == "/" {
-                            let len = 1 + trimmed_target.len();
-                            if len <= 64 {
-                                check_buf[0] = b'/';
-                                check_buf[1..len].copy_from_slice(trimmed_target.as_bytes());
-                                core::str::from_utf8(&check_buf[..len]).unwrap_or(trimmed_target)
-                            } else { trimmed_target }
-                        } else {
-                            let cur_len = CURRENT_DIR_LEN;
-                            let len = cur_len + 1 + trimmed_target.len();
-                            if len <= 64 {
-                                check_buf[..cur_len].copy_from_slice(&CURRENT_DIR[..cur_len]);
-                                check_buf[cur_len] = b'/';
-                                check_buf[cur_len + 1..len].copy_from_slice(trimmed_target.as_bytes());
-                                core::str::from_utf8(&check_buf[..len]).unwrap_or(trimmed_target)
-                            } else { trimmed_target }
-                        }
-                    }
-                };
-                if crate::fs::fs_is_dir(check_path) {
-                    unsafe {
-                        CURRENT_DIR_LEN = check_path.len();
-                        CURRENT_DIR[..check_path.len()].copy_from_slice(check_path.as_bytes());
-                    }
-                } else {
+                Err(_) => {
                     serial_println!("cd: {}: No such directory", target);
                 }
             }
@@ -1254,17 +1218,32 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         "tree" => {
             serial_println!(".");
             unsafe {
-                let dirs = ["/bin", "/pulselang", "/etc", "/var", "/var/log", "/home"];
-                for &dir in dirs.iter() {
-                    serial_println!("|-- {}/", dir);
-                    for file in crate::fs::FS.files.iter() {
-                        if file.used && !file.is_dir {
-                            let name = file.name_str();
-                            if name.starts_with(dir) && name.as_bytes().get(dir.len()) == Some(&b'/') {
-                                let rel = &name[dir.len() + 1..];
-                                if !rel.contains('/') {
-                                    serial_println!("|   |-- {}", rel);
+                // Collect and display all dynamic directories
+                for dir_entry in crate::fs::FS.files.iter() {
+                    if dir_entry.used && dir_entry.is_dir {
+                        let dir = dir_entry.name_str();
+                        serial_println!("|-- {}/", dir);
+                        for file in crate::fs::FS.files.iter() {
+                            if file.used && !file.is_dir {
+                                let name = file.name_str();
+                                if name.starts_with(dir) && name.as_bytes().get(dir.len()) == Some(&b'/') {
+                                    let rel = &name[dir.len() + 1..];
+                                    if !rel.contains('/') {
+                                        serial_println!("|   |-- {}", rel);
+                                    }
                                 }
+                            }
+                        }
+                    }
+                }
+                // Root files
+                for file in crate::fs::FS.files.iter() {
+                    if file.used && !file.is_dir {
+                        let name = file.name_str();
+                        if name.starts_with('/') {
+                            let rel = &name[1..];
+                            if !rel.contains('/') {
+                                serial_println!("|-- {}", rel);
                             }
                         }
                     }
@@ -1312,20 +1291,24 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             let s3_lat = LAST_CAPTURE_LATENCY_NS.load(Ordering::Relaxed);
             let s5_lat = LAST_NET_SEND_LATENCY_NS.load(Ordering::Relaxed);
 
-            serial_println!("stage 0 (isr):     150 ns  |==========");
-            serial_println!("stage 1 (usersp):  120 ns  |========");
-            serial_println!("stage 2 (vblank):  450 ns  |=============================");
-            serial_print!("stage 3 (capture): ");
-            print_formatted_time(s3_lat);
-            serial_println!(" |=========================================");
-            serial_println!("stage 4 (encode):  1.2 us  |=================================================");
-            serial_print!("stage 5 (network): ");
-            print_formatted_time(s5_lat);
-            serial_println!(" |=================================");
-            let total = 150 + 120 + 450 + s3_lat + 1200 + s5_lat;
-            serial_print!("total e2e:         ");
-            print_formatted_time(total);
-            serial_println!(" (budget: 8.00ms, margin: optimal)");
+            if s3_lat == 0 && s5_lat == 0 {
+                serial_println!("timeline: No frame events captured yet. Run 'benchmark' or start streaming.");
+            } else {
+                serial_println!("stage 0 (isr):     150 ns  |==========");
+                serial_println!("stage 1 (usersp):  120 ns  |========");
+                serial_println!("stage 2 (vblank):  450 ns  |=============================");
+                serial_print!("stage 3 (capture): ");
+                print_formatted_time(s3_lat);
+                serial_println!(" |=========================================");
+                serial_println!("stage 4 (encode):  1.2 us  |=================================================");
+                serial_print!("stage 5 (network): ");
+                print_formatted_time(s5_lat);
+                serial_println!(" |=================================");
+                let total = 150 + 120 + 450 + s3_lat + 1200 + s5_lat;
+                serial_print!("total e2e:         ");
+                print_formatted_time(total);
+                serial_println!(" (budget: 8.00ms, margin: optimal)");
+            }
         }
 
         "ring" => {
@@ -1355,14 +1338,19 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
 
         "tsc" => {
             let t = read_tsc_serialized();
-            serial_println!("tsc: {} (freq: {} MHz, resolution: 0.29 ns/cycle)", t, tsc_freq_hz / 1_000_000);
+            let freq_hz = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
+            let mhz = freq_hz / 1_000_000;
+            let ps_per_cycle = 1_000_000_000_000u64 / freq_hz;
+            let ns_int = ps_per_cycle / 1000;
+            let ns_frac = (ps_per_cycle % 1000) / 10;
+            serial_println!("tsc: {} (freq: {} MHz, resolution: {}.{:02} ns/cycle)", t, mhz, ns_int, ns_frac);
         }
-
 
         "status" => {
             let uptime_tsc = read_tsc_serialized();
-            let uptime_ns = tsc_to_ns(uptime_tsc, tsc_freq_hz);
-            serial_println!("uptime: {} ms  tsc_freq: {} MHz", uptime_ns / 1_000_000, tsc_freq_hz / 1_000_000);
+            let freq_hz = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
+            let uptime_ns = tsc_to_ns(uptime_tsc, freq_hz);
+            serial_println!("uptime: {} ms  tsc_freq: {} MHz", uptime_ns / 1_000_000, freq_hz / 1_000_000);
             for i in 0..NUM_CORES {
                 let role = get_core_role(i as u8);
                 let loops = CORE_LOOP_COUNT[i].load(Ordering::Relaxed);
