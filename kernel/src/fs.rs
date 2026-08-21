@@ -295,6 +295,7 @@ $argc > 0 ? {
         let _ = fs_mkdir("/var/log");
         let _ = fs_mkdir("/home");
         let _ = fs_mkdir("/pulselang");
+        let _ = fs_mkdir("/vram");
 
         // Standard Utility Scripts (.pl)
         let cat_src = br#"// cat.pl - Print argument or stream

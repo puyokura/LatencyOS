@@ -1346,7 +1346,20 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("LatencyVFS: MOUNT TABLE", 5, &mut full_output), "Failed LatencyVFS mount query");
 
-    println!("[xtask-test] 3. Testing LatencyVFS virtual stats file read: cat /vram/stats");
+    println!("[xtask-test] 3. Testing LatencyVFS virtual directory listing and stats: ls /vram & cat /vram/stats");
+    full_output.clear();
+    stdin.write_all(b"ls /\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("vram/", 5, &mut full_output), "Failed finding vram/ in root directory list");
+
+    full_output.clear();
+    stdin.write_all(b"ls /vram\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("stats", 5, &mut full_output), "Failed finding stats in /vram");
+    assert!(full_output.contains("slot0"), "Failed finding slot0 in /vram");
+    assert!(full_output.contains("scratch"), "Failed finding scratch in /vram");
+
+    full_output.clear();
     stdin.write_all(b"cat /vram/stats\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("Physical GPU DMA Framebuffer Pool", 5, &mut full_output), "Failed reading /vram/stats");

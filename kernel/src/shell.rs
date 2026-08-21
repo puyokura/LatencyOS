@@ -714,6 +714,31 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                 core::str::from_utf8(&norm_dir_buf[..norm_dir_len]).unwrap_or("/")
             };
 
+            if cur_dir == "/vram" || cur_dir == "vram" {
+                let entries = crate::vfs::vfs_list_entries();
+                for entry in entries.iter() {
+                    let (size, type_str) = if *entry == "stats" {
+                        (380, "vram: stats")
+                    } else if *entry == "scratch" {
+                        (crate::vfs::VFS_SCRATCH_SIZE, "vram: scratch")
+                    } else {
+                        (8294400, "vram: dma frame")
+                    };
+
+                    if is_timing {
+                        serial_print!("{:<16} ({:<13}, size: {:>8} B)\r\n", entry, type_str, size);
+                    } else if is_long {
+                        serial_println!("-rw-r--r-- 1 root root {:8} {}", size, entry);
+                    } else {
+                        serial_print!("\x1b[1;36m{}\x1b[0m  ", entry);
+                    }
+                }
+                if !is_long && !is_timing && !entries.is_empty() {
+                    serial_println!();
+                }
+                return;
+            }
+
             unsafe {
                 let mut count = 0;
                 for file in crate::fs::FS.files.iter() {
@@ -1301,13 +1326,19 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     if dir_entry.used && dir_entry.is_dir {
                         let dir = dir_entry.name_str();
                         serial_println!("|-- {}/", dir);
-                        for file in crate::fs::FS.files.iter() {
-                            if file.used && !file.is_dir {
-                                let name = file.name_str();
-                                if name.starts_with(dir) && name.as_bytes().get(dir.len()) == Some(&b'/') {
-                                    let rel = &name[dir.len() + 1..];
-                                    if !rel.contains('/') {
-                                        serial_println!("|   |-- {}", rel);
+                        if dir == "/vram" {
+                            for entry in crate::vfs::vfs_list_entries().iter() {
+                                serial_println!("|   |-- {}", entry);
+                            }
+                        } else {
+                            for file in crate::fs::FS.files.iter() {
+                                if file.used && !file.is_dir {
+                                    let name = file.name_str();
+                                    if name.starts_with(dir) && name.as_bytes().get(dir.len()) == Some(&b'/') {
+                                        let rel = &name[dir.len() + 1..];
+                                        if !rel.contains('/') {
+                                            serial_println!("|   |-- {}", rel);
+                                        }
                                     }
                                 }
                             }
