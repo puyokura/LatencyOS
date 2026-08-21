@@ -1401,7 +1401,54 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("hello_pulse", 5, &mut full_output), "Failed running compiled binary");
 
-    println!("[xtask-test] 8. Sending poweroff command...");
+    println!("[xtask-test] 8. Testing relative path fs operations (BL-11 fix): mkdir qa, cd qa, touch alpha, cp alpha alpha_copy, mv alpha_copy beta, ls -l");
+    full_output.clear();
+    stdin.write_all(b"mkdir qa\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+
+    full_output.clear();
+    stdin.write_all(b"cd qa\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+
+    full_output.clear();
+    stdin.write_all(b"touch alpha\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+
+    full_output.clear();
+    stdin.write_all(b"cp alpha alpha_copy\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+
+    full_output.clear();
+    stdin.write_all(b"mv alpha_copy beta\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+
+    full_output.clear();
+    stdin.write_all(b"ls -l\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("beta", 5, &mut full_output), "Failed relative mv: 'beta' not found in ls -l");
+    assert!(full_output.contains("alpha"), "Failed relative operations: 'alpha' not found in ls -l");
+    assert!(!full_output.lines().any(|l| l.trim().ends_with("alpha_copy")), "Failed relative mv: 'alpha_copy' still in ls -l");
+
+    println!("[xtask-test] 9. Testing timeline E2E status reporting (BL-12 fix): timeline");
+    full_output.clear();
+    stdin.write_all(b"timeline\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("stage 0 (isr)", 5, &mut full_output), "Failed timeline execution");
+    assert!(full_output.contains("status: PASS") || full_output.contains("status: EXCEEDED"), "Failed timeline status check");
+    assert!(!full_output.contains("margin: optimal"), "Timeline must not contain unconditional margin: optimal");
+
+    println!("[xtask-test] 10. Testing disassembler out-of-bounds const display (BL-15 fix): disasm /bin/test_oob_const.bin");
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/test_oob_const.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("<out of bounds>", 5, &mut full_output), "Failed disasm out-of-bounds const display");
+
+    println!("[xtask-test] 11. Sending poweroff command...");
     stdin.write_all(b"poweroff\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(500));

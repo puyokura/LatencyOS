@@ -2,4 +2,3 @@
 /dist
 **/*.rs.bk
 *.pcap
-reports/

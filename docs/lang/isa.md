@@ -113,15 +113,18 @@ Compiled `px64` executable binaries contain a 16-byte fixed header followed by 4
 ```text
 +-------------------------------------------------------------------------------+
 | Bytes 0..3   : Magic Bytes ("PX64" -> 0x50, 0x58, 0x36, 0x34)                 |
-| Bytes 4..5   : Version (0x0002)                                               |
+| Bytes 4..5   : Version (0x0003)                                               |
 | Bytes 6..7   : Bytecode Section Length in Bytes (CodeLen: u16 big-endian)     |
 | Bytes 8..9   : String Pool Section Length in Bytes (StrLen: u16 big-endian)   |
-| Bytes 10..11 : Register Count (0x0014 = 20 Registers)                         |
-| Bytes 12..15 : Reserved (0x0000_0000)                                         |
+| Bytes 10..11 : Constant Pool Entries Count (u16 big-endian)                   |
+| Bytes 12..13 : Register Count (0x0014 = 20 Registers)                         |
+| Bytes 14..15 : Reserved (0x0000)                                              |
 +-------------------------------------------------------------------------------+
 | Bytecode Payload (CodeLen bytes, 4-byte aligned px64 instructions)            |
 +-------------------------------------------------------------------------------+
 | String Pool Payload (StrLen bytes of raw UTF-8 string data)                   |
++-------------------------------------------------------------------------------+
+| Constant Pool Payload (ConstCount * 8 bytes of 64-bit big-endian constants)   |
 +-------------------------------------------------------------------------------+
 ```
 
@@ -132,8 +135,8 @@ Compiled `px64` executable binaries contain a 16-byte fixed header followed by 4
 The in-kernel `disasm <file.bin>` command inspects and formats `PX64` binaries:
 
 ```text
-=== px64 Real-Time Architecture Disassembly: /bin/echo.bin ===
-Magic: PX64 | Version: 2 | Code: 124 B | Registers: 20 GPRs+HW | StringPool: 51 B
+=== [px64 Virtual Register Machine Disassembly] /bin/echo.bin ===
+Magic: PX64 | Version: 3 | Code: 124 B | Registers: 20 GPRs+HW | StringPool: 51 B | ConstPool: 2 entries
 OFFSET  HEX          INSTRUCTION  OPERANDS
 ---------------------------------------------------------------
 0000:   12 01 08 00  CALL_NAT     $rcx = @argc($rax)

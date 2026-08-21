@@ -68,6 +68,7 @@ pub enum FsError {
     NotADirectory,
     IsADirectory,
     DirectoryNotEmpty,
+    AlreadyExists,
 }
 
 // Function: fs_normalize_path
@@ -734,20 +735,34 @@ pub fn fs_delete(name: &str) -> Result<(), FsError> {
 }
 
 // Function: fs_rename
-// Description: Rename a file in LatencyFS.
-// Worst-case execution time: ~500 ns
+// Description: Rename a file in LatencyFS with full relative/absolute path resolution.
+// Worst-case execution time: ~600 ns
 pub fn fs_rename(old_name: &str, new_name: &str) -> Result<(), FsError> {
-    if new_name.is_empty() || new_name.len() > MAX_FILENAME_LEN {
+    let mut old_norm_buf = [0u8; MAX_FILENAME_LEN];
+    let mut new_norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let old_norm_len = fs_normalize_path(old_name, cwd, &mut old_norm_buf)?;
+    let old_norm = core::str::from_utf8(&old_norm_buf[..old_norm_len]).map_err(|_| FsError::InvalidName)?;
+    let new_norm_len = fs_normalize_path(new_name, cwd, &mut new_norm_buf)?;
+    let new_norm = core::str::from_utf8(&new_norm_buf[..new_norm_len]).map_err(|_| FsError::InvalidName)?;
+
+    if new_norm.is_empty() || new_norm.len() > MAX_FILENAME_LEN {
         return Err(FsError::InvalidName);
     }
     unsafe {
+        // Check if destination already exists (cannot overwrite existing file/dir via rename)
+        for file in FS.files.iter() {
+            if file.used && file.name_str() == new_norm {
+                return Err(FsError::AlreadyExists);
+            }
+        }
         for file in FS.files.iter_mut() {
-            if file.used && file.name_str() == old_name {
+            if file.used && file.name_str() == old_norm {
                 if file.read_only {
                     return Err(FsError::ReadOnly);
                 }
-                file.name_len = new_name.len();
-                file.name[..new_name.len()].copy_from_slice(new_name.as_bytes());
+                file.name_len = new_norm.len();
+                file.name[..new_norm.len()].copy_from_slice(new_norm.as_bytes());
                 file.modified_tsc = read_tsc_serialized();
                 return Ok(());
             }
@@ -757,11 +772,19 @@ pub fn fs_rename(old_name: &str, new_name: &str) -> Result<(), FsError> {
 }
 
 // Function: fs_copy
-// Description: Copy a file in LatencyFS.
+// Description: Copy a file in LatencyFS with full relative/absolute path resolution.
 // Worst-case execution time: ~1500 ns
 pub fn fs_copy(src_name: &str, dst_name: &str) -> Result<(), FsError> {
-    if let Some(data) = fs_read(src_name) {
-        fs_write(dst_name, data)
+    let mut src_norm_buf = [0u8; MAX_FILENAME_LEN];
+    let mut dst_norm_buf = [0u8; MAX_FILENAME_LEN];
+    let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
+    let src_norm_len = fs_normalize_path(src_name, cwd, &mut src_norm_buf)?;
+    let src_norm = core::str::from_utf8(&src_norm_buf[..src_norm_len]).map_err(|_| FsError::InvalidName)?;
+    let dst_norm_len = fs_normalize_path(dst_name, cwd, &mut dst_norm_buf)?;
+    let dst_norm = core::str::from_utf8(&dst_norm_buf[..dst_norm_len]).map_err(|_| FsError::InvalidName)?;
+
+    if let Some(data) = fs_read(src_norm) {
+        fs_write(dst_norm, data)
     } else {
         Err(FsError::FileNotFound)
     }

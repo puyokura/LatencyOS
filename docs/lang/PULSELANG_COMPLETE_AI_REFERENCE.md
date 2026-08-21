@@ -191,7 +191,7 @@ Before execution, the VM verifies:
 - Instructions are strictly 4-byte aligned (32-bit fixed instruction encoding).
 
 ### 25. Bytecode Versioning
-Version `2` (`0x0002`) is required in bytes 4-5 of the binary header.
+Version `3` (`0x0003`) is required in bytes 4-5 of the `PX64` binary header. (Legacy `PULS` stack bytecode uses version `2`).
 
 ### 26. Intrinsic ID ABI Specification
 - `1`: `NATIVE_PRINT` (`@print`)

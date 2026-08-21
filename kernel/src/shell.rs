@@ -1020,8 +1020,11 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             }
                             crate::lang::PX64_OP_LDC => {
                                 let const_idx = imm16 as usize;
-                                let const_val = if const_idx < const_count { const_pool[const_idx] } else { 0 };
-                                serial_println!("{:04x}:   17 {:02x} {:02x} {:02x}  LDC          {}, const[{}] ({})", op_ip, rd, rs1, rs2, rd_str, imm16, const_val);
+                                if const_idx < const_count {
+                                    serial_println!("{:04x}:   17 {:02x} {:02x} {:02x}  LDC          {}, const[{}] ({})", op_ip, rd, rs1, rs2, rd_str, imm16, const_pool[const_idx]);
+                                } else {
+                                    serial_println!("{:04x}:   17 {:02x} {:02x} {:02x}  LDC          {}, const[{}] (<out of bounds>)", op_ip, rd, rs1, rs2, rd_str, imm16);
+                                }
                             }
                             crate::lang::PX64_OP_ADDI => {
                                 serial_println!("{:04x}:   18 {:02x} {:02x} {:02x}  ADDI         {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2);
@@ -1330,9 +1333,20 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                 print_formatted_time(s5_lat);
                 serial_println!(" |=================================");
                 let total = 150 + 120 + 450 + s3_lat + 1200 + s5_lat;
+                let budget_ns = 8_000_000u64; // 8.00 ms target
                 serial_print!("total e2e:         ");
                 print_formatted_time(total);
-                serial_println!(" (budget: 8.00ms, margin: optimal)");
+                if total <= budget_ns {
+                    let margin_ns = budget_ns - total;
+                    serial_print!(" (budget: 8.00ms, margin: +");
+                    print_formatted_time(margin_ns);
+                    serial_println!(", status: PASS)");
+                } else {
+                    let excess_ns = total - budget_ns;
+                    serial_print!(" (budget: 8.00ms, excess: +");
+                    print_formatted_time(excess_ns);
+                    serial_println!(", status: EXCEEDED)");
+                }
             }
         }
 

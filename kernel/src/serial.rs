@@ -186,12 +186,18 @@ pub fn init_serial() {
     SERIAL.init();
 }
 
+static PRINT_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 // Function: _print
-// Description: Print formatted arguments to COM1 serial port.
+// Description: Print formatted arguments to COM1 serial port with atomic lock synchronization.
 // Worst-case execution time: ~5000 ns + 1000 ns * formatted length
 pub fn _print(args: fmt::Arguments) {
+    while PRINT_LOCK.compare_exchange_weak(false, true, core::sync::atomic::Ordering::Acquire, core::sync::atomic::Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
     let mut writer = SerialWriter;
     let _ = writer.write_fmt(args);
+    PRINT_LOCK.store(false, core::sync::atomic::Ordering::Release);
 }
 
 #[macro_export]
