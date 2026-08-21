@@ -5,4 +5,9 @@ edition = "2021"
 
 [dependencies]
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }

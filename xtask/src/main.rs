@@ -1504,11 +1504,43 @@ fn bundle_standalone_exe() {
 
     let exe_size_mb = std::fs::metadata(&out_exe).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
     println!("================================================================================");
-    println!("[xtask] SUCCESS: Single standalone executable generated!");
+    println!("[xtask] SUCCESS: Windows standalone executable generated!");
     println!("[xtask] Location: {}", out_exe.display());
     println!("[xtask] File Size: {:.2} MB", exe_size_mb);
     println!("[xtask] Portable: 100% self-contained (zero host dependencies, no install required)");
     println!("================================================================================");
+
+    // 6. Cross-compile standalone Linux runner into dist/LatencyOS-linux (x86_64-unknown-linux-musl)
+    println!("[xtask] Compiling standalone Linux runner into dist/LatencyOS-linux...");
+    let mut linux_cmd = Command::new(&cargo);
+    linux_cmd.current_dir(&root)
+        .env("PATH", get_augmented_path())
+        .env("LATENCYOS_RUNTIME_ZIP", &runtime_zip_path)
+        .arg("build")
+        .arg("--package")
+        .arg("runner")
+        .arg("--target")
+        .arg("x86_64-unknown-linux-musl")
+        .arg("--release");
+
+    match linux_cmd.status() {
+        Ok(status) if status.success() => {
+            let linux_runner_elf = root.join("target").join("x86_64-unknown-linux-musl").join("release").join("runner");
+            let out_linux = dist_dir.join("LatencyOS-linux");
+            if std::fs::copy(&linux_runner_elf, &out_linux).is_ok() {
+                let linux_size_mb = std::fs::metadata(&out_linux).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+                println!("================================================================================");
+                println!("[xtask] SUCCESS: Linux standalone executable generated!");
+                println!("[xtask] Location: {}", out_linux.display());
+                println!("[xtask] File Size: {:.2} MB", linux_size_mb);
+                println!("[xtask] Portable: Self-contained kernel + auto-QEMU/KVM detection");
+                println!("================================================================================");
+            }
+        }
+        _ => {
+            println!("[xtask] NOTICE: Linux cross-compilation skipped/failed. Preserving Windows-optimized release binary.");
+        }
+    }
 }
 
 fn test_standalone_exe() {
