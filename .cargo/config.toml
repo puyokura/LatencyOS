@@ -7,9 +7,3 @@ rustflags = [
     "-C", "link-arg=-no-pie",
     "-C", "link-arg=-nmagic",
 ]
-
-[target.x86_64-unknown-linux-musl]
-linker = "rust-lld"
-rustflags = [
-    "-C", "link-arg=-nostdlib",
-]

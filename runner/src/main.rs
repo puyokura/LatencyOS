@@ -7,25 +7,12 @@ use std::process::{Command, Stdio};
 const RUNTIME_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime.zip"));
 
 fn get_runtime_cache_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        if let Ok(local_appdata) = env::var("LOCALAPPDATA") {
-            PathBuf::from(local_appdata).join("LatencyOS").join("runtime")
-        } else if let Ok(temp) = env::var("TEMP") {
-            PathBuf::from(temp).join("LatencyOS_runtime")
-        } else {
-            env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(".latencyos_runtime")
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if let Ok(xdg) = env::var("XDG_DATA_HOME") {
-            PathBuf::from(xdg).join("LatencyOS").join("runtime")
-        } else if let Ok(home) = env::var("HOME") {
-            PathBuf::from(home).join(".local").join("share").join("LatencyOS").join("runtime")
-        } else {
-            PathBuf::from("/tmp").join("LatencyOS_runtime")
-        }
+    if let Ok(local_appdata) = env::var("LOCALAPPDATA") {
+        PathBuf::from(local_appdata).join("LatencyOS").join("runtime")
+    } else if let Ok(temp) = env::var("TEMP") {
+        PathBuf::from(temp).join("LatencyOS_runtime")
+    } else {
+        env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(".latencyos_runtime")
     }
 }
 
@@ -53,14 +40,13 @@ unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> i32 {
     }
 }
 
-#[cfg(windows)]
 struct ConsoleGuard {
     active: bool,
 }
 
-#[cfg(windows)]
 impl ConsoleGuard {
     fn new() -> Self {
+        #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
             use windows_sys::Win32::System::Console::{
@@ -97,10 +83,10 @@ impl ConsoleGuard {
     }
 }
 
-#[cfg(windows)]
 impl Drop for ConsoleGuard {
     fn drop(&mut self) {
         if self.active {
+            #[cfg(windows)]
             unsafe {
                 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
                 use windows_sys::Win32::System::Console::{
@@ -124,38 +110,6 @@ impl Drop for ConsoleGuard {
     }
 }
 
-#[cfg(unix)]
-struct ConsoleGuard {
-    saved_termios: Option<libc::termios>,
-}
-
-#[cfg(unix)]
-impl ConsoleGuard {
-    fn new() -> Self {
-        unsafe {
-            let mut termios: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(libc::STDIN_FILENO, &mut termios) == 0 {
-                let saved = termios;
-                libc::cfmakeraw(&mut termios);
-                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &termios);
-                return Self { saved_termios: Some(saved) };
-            }
-        }
-        Self { saved_termios: None }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ConsoleGuard {
-    fn drop(&mut self) {
-        if let Some(ref saved) = self.saved_termios {
-            unsafe {
-                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
-            }
-        }
-    }
-}
-
 fn unpack_runtime(target_dir: &Path) -> Result<(), String> {
     if RUNTIME_ZIP.is_empty() {
         return Err("Embedded runtime archive is empty. Build with 'cargo xtask bundle'.".into());
@@ -165,9 +119,10 @@ fn unpack_runtime(target_dir: &Path) -> Result<(), String> {
 
     let payload_hash = compute_payload_hash(RUNTIME_ZIP);
     let tag_file = target_dir.join("runtime.tag");
+    let qemu_exe = target_dir.join("qemu-system-x86_64.exe");
     let kernel_bin = target_dir.join("kernel");
 
-    if tag_file.exists() && kernel_bin.exists() {
+    if tag_file.exists() && qemu_exe.exists() && kernel_bin.exists() {
         if let Ok(content) = fs::read_to_string(&tag_file) {
             if content.trim() == format!("{:x}", payload_hash) {
                 // Cached runtime is up to date
@@ -205,47 +160,6 @@ fn unpack_runtime(target_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn find_qemu(target_dir: &Path) -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        let exe = target_dir.join("qemu-system-x86_64.exe");
-        if exe.exists() {
-            return Ok(exe);
-        }
-        if let Ok(path_var) = env::var("PATH") {
-            for dir in env::split_paths(&path_var) {
-                let p = dir.join("qemu-system-x86_64.exe");
-                if p.exists() {
-                    return Ok(p);
-                }
-            }
-        }
-        Err(format!("qemu-system-x86_64.exe not found in {} or system PATH", target_dir.display()))
-    }
-    #[cfg(not(windows))]
-    {
-        let local_exe = target_dir.join("qemu-system-x86_64");
-        if local_exe.exists() {
-            return Ok(local_exe);
-        }
-        if let Ok(path_var) = env::var("PATH") {
-            for dir in env::split_paths(&path_var) {
-                let p = dir.join("qemu-system-x86_64");
-                if p.exists() {
-                    return Ok(p);
-                }
-            }
-        }
-        for loc in &["/usr/bin/qemu-system-x86_64", "/usr/local/bin/qemu-system-x86_64"] {
-            let p = PathBuf::from(loc);
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-        Err("qemu-system-x86_64 not found. Please install QEMU via package manager (e.g. 'sudo apt install qemu-system-x86')".into())
-    }
-}
-
 fn main() {
     let _guard = ConsoleGuard::new();
 
@@ -256,17 +170,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    let qemu_exe = match find_qemu(&target_dir) {
-        Ok(exe) => exe,
-        Err(err) => {
-            eprintln!("[LatencyOS Error] {}", err);
-            std::process::exit(1);
-        }
-    };
-
+    let qemu_exe = target_dir.join("qemu-system-x86_64.exe");
     let kernel_bin = target_dir.join("kernel");
     let share_dir = target_dir.join("share");
 
+    if !qemu_exe.exists() {
+        eprintln!("[LatencyOS Error] qemu-system-x86_64.exe not found at {}", qemu_exe.display());
+        std::process::exit(1);
+    }
     if !kernel_bin.exists() {
         eprintln!("[LatencyOS Error] Kernel binary not found at {}", kernel_bin.display());
         std::process::exit(1);
@@ -296,13 +207,6 @@ fn main() {
         .arg("-display")
         .arg("none")
         .arg("-no-reboot");
-
-    #[cfg(target_os = "linux")]
-    {
-        if fs::metadata("/dev/kvm").is_ok() {
-            cmd.arg("-enable-kvm");
-        }
-    }
 
     if share_dir.exists() {
         cmd.arg("-L").arg(&share_dir);
