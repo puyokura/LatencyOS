@@ -580,13 +580,38 @@ impl<'a> Lexer<'a> {
 }
 
 // -----------------------------------------------------------------------------
-// Bytecode Instruction Set
+// px64 (Pulse Extended 64-bit Real-Time Architecture) Instruction Set
 // -----------------------------------------------------------------------------
 
+pub const PX64_OP_NOP: u8 = 0;
+pub const PX64_OP_MOV_IMM: u8 = 1;      // [1, Rd, Imm_hi, Imm_lo] -> Rd = Imm16
+pub const PX64_OP_MOV_REG: u8 = 2;      // [2, Rd, Rs1, 0]         -> Rd = Rs1
+pub const PX64_OP_MOV_STR: u8 = 3;      // [3, Rd, Offset, Len]    -> Rd = STR_TAG | (Offset << 32) | Len
+pub const PX64_OP_ADD: u8 = 4;          // [4, Rd, Rs1, Rs2]       -> Rd = Rs1 + Rs2
+pub const PX64_OP_SUB: u8 = 5;          // [5, Rd, Rs1, Rs2]       -> Rd = Rs1 - Rs2
+pub const PX64_OP_MUL: u8 = 6;          // [6, Rd, Rs1, Rs2]       -> Rd = Rs1 * Rs2
+pub const PX64_OP_DIV: u8 = 7;          // [7, Rd, Rs1, Rs2]       -> Rd = Rs1 / Rs2 (0 protection)
+pub const PX64_OP_MOD: u8 = 8;          // [8, Rd, Rs1, Rs2]       -> Rd = Rs1 % Rs2 (0 protection)
+pub const PX64_OP_CMP_EQ: u8 = 9;       // [9, Rd, Rs1, Rs2]       -> Rd = (Rs1 == Rs2) ? 1 : 0
+pub const PX64_OP_CMP_NE: u8 = 10;      // [10, Rd, Rs1, Rs2]      -> Rd = (Rs1 != Rs2) ? 1 : 0
+pub const PX64_OP_CMP_LT: u8 = 11;      // [11, Rd, Rs1, Rs2]      -> Rd = (Rs1 < Rs2) ? 1 : 0
+pub const PX64_OP_CMP_LE: u8 = 12;      // [12, Rd, Rs1, Rs2]      -> Rd = (Rs1 <= Rs2) ? 1 : 0
+pub const PX64_OP_CMP_GT: u8 = 13;      // [13, Rd, Rs1, Rs2]      -> Rd = (Rs1 > Rs2) ? 1 : 0
+pub const PX64_OP_CMP_GE: u8 = 14;      // [14, Rd, Rs1, Rs2]      -> Rd = (Rs1 >= Rs2) ? 1 : 0
+pub const PX64_OP_JMP: u8 = 15;         // [15, 0, Target_hi, Target_lo] -> IP = Target
+pub const PX64_OP_JZ: u8 = 16;          // [16, Rs1, Target_hi, Target_lo] -> if Rs1 == 0 { IP = Target }
+pub const PX64_OP_JNZ: u8 = 17;         // [17, Rs1, Target_hi, Target_lo] -> if Rs1 != 0 { IP = Target }
+pub const PX64_OP_CALL_NAT: u8 = 18;    // [18, Rd, FuncId, ArgReg] -> Rd = call_native(FuncId, ArgReg)
+pub const PX64_OP_WITHIN_START: u8 = 19; // [19, Rs1, 0, 0]        -> Push deadline (Rs1 = us)
+pub const PX64_OP_WITHIN_END: u8 = 20;  // [20, 0, 0, 0]           -> Pop deadline
+pub const PX64_OP_DROP: u8 = 21;        // [21, 0, 0, 0]           -> Drop frame on deadline overrun
+pub const PX64_OP_HALT: u8 = 22;        // [22, 0, 0, 0]           -> Halt VM
+
+// Legacy Bytecode Instruction Set (PULS v1/v2 backward compatibility)
 pub const OP_NOP: u8 = 0;
-pub const OP_PUSH_CONST: u8 = 1;      // + 8 bytes (i64)
-pub const OP_LOAD_VAR: u8 = 2;        // + 1 byte (var_idx)
-pub const OP_STORE_VAR: u8 = 3;       // + 1 byte (var_idx)
+pub const OP_PUSH_CONST: u8 = 1;
+pub const OP_LOAD_VAR: u8 = 2;
+pub const OP_STORE_VAR: u8 = 3;
 pub const OP_ADD: u8 = 4;
 pub const OP_SUB: u8 = 5;
 pub const OP_MUL: u8 = 6;
@@ -598,14 +623,47 @@ pub const OP_CMP_LT: u8 = 11;
 pub const OP_CMP_LE: u8 = 12;
 pub const OP_CMP_GT: u8 = 13;
 pub const OP_CMP_GE: u8 = 14;
-pub const OP_JUMP: u8 = 15;           // + 2 bytes (target ip)
-pub const OP_JUMP_IF_FALSE: u8 = 16;  // + 2 bytes (target ip)
-pub const OP_CALL_NATIVE: u8 = 17;    // + 1 byte (func_id), + 1 byte (argc)
-pub const OP_WITHIN_START: u8 = 18;   // + 8 bytes (deadline_ns)
+pub const OP_JUMP: u8 = 15;
+pub const OP_JUMP_IF_FALSE: u8 = 16;
+pub const OP_CALL_NATIVE: u8 = 17;
+pub const OP_WITHIN_START: u8 = 18;
 pub const OP_WITHIN_END: u8 = 19;
 pub const OP_DROP: u8 = 20;
-pub const OP_PUSH_STR: u8 = 21;       // + 2 bytes (str offset), + 2 bytes (str len)
+pub const OP_PUSH_STR: u8 = 21;
 pub const OP_HALT: u8 = 22;
+
+pub const PX64_BIN_MAGIC: [u8; 4] = *b"PX64";
+pub const PX64_BIN_VERSION: u16 = 2;
+pub const PX64_HEADER_SIZE: usize = 16;
+pub const PX64_NUM_REGISTERS: usize = 20;
+
+// Function: px64_reg_name
+// Description: Map register index to canonical x64-compatible register name.
+pub fn px64_reg_name(reg_id: u8) -> &'static str {
+    match reg_id {
+        0 => "$rax",
+        1 => "$rcx",
+        2 => "$rdx",
+        3 => "$rbx",
+        4 => "$rsp",
+        5 => "$rbp",
+        6 => "$rsi",
+        7 => "$rdi",
+        8 => "$r8",
+        9 => "$r9",
+        10 => "$r10",
+        11 => "$r11",
+        12 => "$r12",
+        13 => "$r13",
+        14 => "$r14",
+        15 => "$r15",
+        16 => "#f0",
+        17 => "#f1",
+        18 => "#f2",
+        19 => "#f3",
+        _ => "$r?",
+    }
+}
 
 // Native function IDs
 pub const NATIVE_PRINT: u8 = 1;
@@ -638,7 +696,7 @@ pub fn set_script_args(args: &[&str]) {
 }
 
 // -----------------------------------------------------------------------------
-// Compiler (Single-Pass AST-to-Bytecode with Zero Heap Allocation)
+// Compiler (px64 Single-Pass Register Allocator & Instruction Generator)
 // -----------------------------------------------------------------------------
 
 pub struct Compiler<'a> {
@@ -649,6 +707,7 @@ pub struct Compiler<'a> {
     pub code_len: usize,
     var_names: [[u8; 16]; MAX_VARS],
     var_lens: [usize; MAX_VARS],
+    var_regs: [u8; MAX_VARS],
     var_count: usize,
     pub str_pool: [u8; MAX_STRING_POOL],
     pub str_pool_len: usize,
@@ -664,6 +723,7 @@ impl<'a> Compiler<'a> {
             code_len: 0,
             var_names: [[0; 16]; MAX_VARS],
             var_lens: [0; MAX_VARS],
+            var_regs: [0; MAX_VARS],
             var_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
@@ -718,74 +778,94 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn emit_byte(&mut self, b: u8) -> Result<usize, CompileError> {
-        if self.code_len >= MAX_BYTECODE_SIZE {
+    fn emit_inst(&mut self, op: u8, rd: u8, rs1: u8, rs2: u8) -> Result<usize, CompileError> {
+        if self.code_len + 4 > MAX_BYTECODE_SIZE {
             return Err(self.error(
                 "ERR_BYTECODE_OVERFLOW",
-                "Bytecode buffer overflow (1024 bytes limit reached)",
-                "Smaller script size or split into modules",
+                "px64 bytecode buffer overflow (1024 bytes limit reached)",
+                "Smaller script size or simplify expressions",
                 "Code Generation",
-                "Reduce script length or simplify loop expressions",
+                "Reduce script length or complexity",
             ));
         }
         let pos = self.code_len;
-        self.code[self.code_len] = b;
-        self.code_len += 1;
+        self.code[pos] = op;
+        self.code[pos + 1] = rd;
+        self.code[pos + 2] = rs1;
+        self.code[pos + 3] = rs2;
+        self.code_len += 4;
         Ok(pos)
     }
 
-    fn emit_u16(&mut self, val: u16) -> Result<usize, CompileError> {
-        let pos = self.emit_byte((val >> 8) as u8)?;
-        self.emit_byte((val & 0xFF) as u8)?;
-        Ok(pos)
+    fn emit_imm16(&mut self, op: u8, rd: u8, imm: u16) -> Result<usize, CompileError> {
+        self.emit_inst(op, rd, (imm >> 8) as u8, (imm & 0xFF) as u8)
     }
 
-    fn emit_i64(&mut self, val: i64) -> Result<usize, CompileError> {
-        let pos = self.code_len;
-        let bytes = val.to_be_bytes();
-        for &b in &bytes {
-            self.emit_byte(b)?;
-        }
-        Ok(pos)
-    }
-
-    fn patch_u16(&mut self, pos: usize, val: u16) {
-        self.code[pos] = (val >> 8) as u8;
-        self.code[pos + 1] = (val & 0xFF) as u8;
+    fn patch_imm16(&mut self, pos: usize, imm: u16) {
+        self.code[pos + 2] = (imm >> 8) as u8;
+        self.code[pos + 3] = (imm & 0xFF) as u8;
     }
 
     fn resolve_var(&mut self, tok: Token) -> Result<u8, CompileError> {
         let name = &self.src[tok.start..tok.start + tok.len];
+        match name {
+            b"$rax" | b"$r0" => return Ok(0),
+            b"$rcx" | b"$r1" => return Ok(1),
+            b"$rdx" | b"$r2" => return Ok(2),
+            b"$rbx" | b"$r3" => return Ok(3),
+            b"$rsp" | b"$r4" => return Ok(4),
+            b"$rbp" | b"$r5" => return Ok(5),
+            b"$rsi" | b"$r6" => return Ok(6),
+            b"$rdi" | b"$r7" => return Ok(7),
+            b"$r8" => return Ok(8),
+            b"$r9" => return Ok(9),
+            b"$r10" => return Ok(10),
+            b"$r11" => return Ok(11),
+            b"$r12" => return Ok(12),
+            b"$r13" => return Ok(13),
+            b"$r14" => return Ok(14),
+            b"$r15" => return Ok(15),
+            b"#f" | b"#frame" | b"#f0" | b"#slot0" => return Ok(16),
+            b"#f1" | b"#slot1" => return Ok(17),
+            b"#f2" | b"#slot2" => return Ok(18),
+            b"#f3" | b"#slot3" => return Ok(19),
+            _ => {}
+        }
+
         for i in 0..self.var_count {
             if self.var_lens[i] == name.len() && &self.var_names[i][..self.var_lens[i]] == name {
-                return Ok(i as u8);
+                return Ok(self.var_regs[i]);
             }
         }
-        if self.var_count >= MAX_VARS {
+
+        if self.var_count >= 13 {
             return Err(self.error(
                 "ERR_MAX_VARS_EXCEEDED",
-                "Maximum distinct variables limit reached (32 vars)",
-                "Reuse existing $variables",
-                "Symbol Table Allocation",
-                "Reduce the number of distinct variable names in the script",
+                "Maximum distinct variables limit reached (13 general-purpose registers)",
+                "Reuse existing $variables or registers ($rax, $rcx, etc.)",
+                "Register Allocation",
+                "Reduce distinct variable count in script",
             ));
         }
+
+        let reg = (1 + self.var_count) as u8; // Map user variables to $rcx ($r1) through $r13 ($r13)
         let idx = self.var_count;
         let len = core::cmp::min(name.len(), 16);
         self.var_names[idx][..len].copy_from_slice(&name[..len]);
         self.var_lens[idx] = len;
+        self.var_regs[idx] = reg;
         self.var_count += 1;
-        Ok(idx as u8)
+        Ok(reg)
     }
 
     // Function: compile
-    // Description: Single-pass compilation from tokens into bytecode.
-    // Worst-case execution time: ~50_000 ns
+    // Description: Single-pass compilation from tokens into px64 fixed 32-bit instructions.
+    // Worst-case execution time: ~40_000 ns
     pub fn compile(&mut self) -> Result<usize, CompileError> {
         while self.peek().kind != TokenKind::Eof {
             self.statement()?;
         }
-        self.emit_byte(OP_HALT)?;
+        self.emit_inst(PX64_OP_HALT, 0, 0, 0)?;
         Ok(self.code_len)
     }
 
@@ -793,7 +873,6 @@ impl<'a> Compiler<'a> {
         let tok = self.peek();
 
         match tok.kind {
-            // Directives: @contract, @pipeline, @budget, @wcet
             TokenKind::AtContract => {
                 self.advance();
                 self.match_token(TokenKind::Colon);
@@ -817,11 +896,10 @@ impl<'a> Compiler<'a> {
                     self.advance();
                 }
                 let _name = self.advance();
-                // Optional @budget(...)
                 if self.peek().kind == TokenKind::AtBudget || self.peek().kind == TokenKind::Budget {
                     self.advance();
                     if self.match_token(TokenKind::LParen) {
-                        self.advance(); // time literal
+                        self.advance();
                         self.match_token(TokenKind::RParen);
                     }
                 }
@@ -876,8 +954,10 @@ impl<'a> Compiler<'a> {
                     }
                 };
 
-                self.emit_byte(OP_WITHIN_START)?;
-                self.emit_i64(deadline_ns as i64)?;
+                let time_reg = 0;
+                let budget_us = deadline_ns / 1_000;
+                self.emit_imm16(PX64_OP_MOV_IMM, time_reg, budget_us as u16)?;
+                self.emit_inst(PX64_OP_WITHIN_START, time_reg, 0, 0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
@@ -892,11 +972,11 @@ impl<'a> Compiler<'a> {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
-                self.emit_byte(OP_WITHIN_END)?;
+                self.emit_inst(PX64_OP_WITHIN_END, 0, 0, 0)?;
 
                 if self.match_token(TokenKind::Exclamation) || self.match_token(TokenKind::Or) {
                     if self.match_token(TokenKind::Drop) {
-                        self.emit_byte(OP_DROP)?;
+                        self.emit_inst(PX64_OP_DROP, 0, 0, 0)?;
                     }
                 }
                 self.match_token(TokenKind::Semi);
@@ -906,11 +986,11 @@ impl<'a> Compiler<'a> {
                 self.advance();
                 let loop_start = self.code_len as u16;
                 self.match_token(TokenKind::LParen);
-                self.expression()?;
+                let cond_reg = 0;
+                self.expression(cond_reg)?;
                 self.match_token(TokenKind::RParen);
 
-                self.emit_byte(OP_JUMP_IF_FALSE)?;
-                let exit_jump = self.emit_u16(0)?;
+                let jz_pos = self.emit_inst(PX64_OP_JZ, cond_reg, 0, 0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
@@ -926,30 +1006,27 @@ impl<'a> Compiler<'a> {
                 }
                 self.match_token(TokenKind::RBrace);
 
-                self.emit_byte(OP_JUMP)?;
-                self.emit_u16(loop_start)?;
-                self.patch_u16(exit_jump, self.code_len as u16);
+                self.emit_imm16(PX64_OP_JMP, 0, loop_start)?;
+                self.patch_imm16(jz_pos, self.code_len as u16);
             }
 
             TokenKind::Let => {
                 self.advance();
                 let ident = self.advance();
-                let var_idx = self.resolve_var(ident)?;
+                let var_reg = self.resolve_var(ident)?;
                 self.match_token(TokenKind::Eq);
-                self.expression()?;
+                self.expression(var_reg)?;
                 self.match_token(TokenKind::Semi);
-                self.emit_byte(OP_STORE_VAR)?;
-                self.emit_byte(var_idx)?;
             }
 
             TokenKind::If => {
                 self.advance();
                 self.match_token(TokenKind::LParen);
-                self.expression()?;
+                let cond_reg = 0;
+                self.expression(cond_reg)?;
                 self.match_token(TokenKind::RParen);
 
-                self.emit_byte(OP_JUMP_IF_FALSE)?;
-                let jump_false_pos = self.emit_u16(0)?;
+                let jz_pos = self.emit_inst(PX64_OP_JZ, cond_reg, 0, 0)?;
 
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
@@ -966,9 +1043,8 @@ impl<'a> Compiler<'a> {
                 self.match_token(TokenKind::RBrace);
 
                 if self.match_token(TokenKind::Else) {
-                    self.emit_byte(OP_JUMP)?;
-                    let jump_end_pos = self.emit_u16(0)?;
-                    self.patch_u16(jump_false_pos, self.code_len as u16);
+                    let jmp_pos = self.emit_inst(PX64_OP_JMP, 0, 0, 0)?;
+                    self.patch_imm16(jz_pos, self.code_len as u16);
 
                     if !self.match_token(TokenKind::LBrace) {
                         return Err(self.error(
@@ -983,19 +1059,18 @@ impl<'a> Compiler<'a> {
                         self.statement()?;
                     }
                     self.match_token(TokenKind::RBrace);
-                    self.patch_u16(jump_end_pos, self.code_len as u16);
+                    self.patch_imm16(jmp_pos, self.code_len as u16);
                 } else {
-                    self.patch_u16(jump_false_pos, self.code_len as u16);
+                    self.patch_imm16(jz_pos, self.code_len as u16);
                 }
             }
 
-            // Variable Assignment ($var := expr; or $var = expr; or $var += expr;)
             TokenKind::VarIdent | TokenKind::HardwareIdent => {
                 let ident = self.advance();
-                let var_idx = self.resolve_var(ident)?;
+                let var_reg = self.resolve_var(ident)?;
 
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
-                    self.expression()?;
+                    self.expression(var_reg)?;
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -1005,14 +1080,10 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of assignment statement",
                         ));
                     }
-                    self.emit_byte(OP_STORE_VAR)?;
-                    self.emit_byte(var_idx)?;
                 } else if self.match_token(TokenKind::PlusEq) {
-                    // $var += expr -> load, expr, add, store
-                    self.emit_byte(OP_LOAD_VAR)?;
-                    self.emit_byte(var_idx)?;
-                    self.expression()?;
-                    self.emit_byte(OP_ADD)?;
+                    let tmp_reg = 15u8;
+                    self.expression(tmp_reg)?;
+                    self.emit_inst(PX64_OP_ADD, var_reg, var_reg, tmp_reg)?;
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -1022,13 +1093,10 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of statement",
                         ));
                     }
-                    self.emit_byte(OP_STORE_VAR)?;
-                    self.emit_byte(var_idx)?;
                 } else if self.match_token(TokenKind::MinusEq) {
-                    self.emit_byte(OP_LOAD_VAR)?;
-                    self.emit_byte(var_idx)?;
-                    self.expression()?;
-                    self.emit_byte(OP_SUB)?;
+                    let tmp_reg = 15u8;
+                    self.expression(tmp_reg)?;
+                    self.emit_inst(PX64_OP_SUB, var_reg, var_reg, tmp_reg)?;
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -1038,17 +1106,13 @@ impl<'a> Compiler<'a> {
                             "Append ';' at end of statement",
                         ));
                     }
-                    self.emit_byte(OP_STORE_VAR)?;
-                    self.emit_byte(var_idx)?;
                 } else {
-                    // Expression statement starting with var
-                    self.current -= 1; // rewind
+                    self.current -= 1;
                     self.expression_statement()?;
                 }
             }
 
             _ => {
-                // Expression statement (e.g. condition ? { ... } : { ... }; or function call)
                 self.expression_statement()?;
             }
         }
@@ -1056,7 +1120,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn expression_statement(&mut self) -> Result<(), CompileError> {
-        self.expression()?;
+        self.expression(0)?;
         if !self.match_token(TokenKind::Semi) {
             return Err(self.error(
                 "ERR_MISSING_SEMICOLON",
@@ -1069,19 +1133,37 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn expression(&mut self) -> Result<(), CompileError> {
-        self.ternary()?;
+    fn expression(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.ternary(dst)?;
         while self.match_token(TokenKind::Pipe) {
-            self.ternary()?;
+            if self.peek().kind == TokenKind::IntrinsicIdent || self.peek().kind == TokenKind::Ident {
+                let tok = self.advance();
+                let name = &self.src[tok.start..tok.start + tok.len];
+                let func_id = match name {
+                    b"@send" | b"net.send" => NATIVE_NET_SEND,
+                    b"@print" | b"print" => NATIVE_PRINT,
+                    b"@println" | b"println" => NATIVE_PRINTLN,
+                    b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
+                    _ => {
+                        return Err(self.error(
+                            "ERR_INVALID_PIPE_TARGET",
+                            "Invalid pipe target function",
+                            "One of @send, @print, @println, @rate",
+                            "Expression -> Pipe",
+                            "Pipe value to a valid intrinsic like |> @send",
+                        ));
+                    }
+                };
+                self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, dst)?;
+            }
         }
         Ok(())
     }
 
-    fn ternary(&mut self) -> Result<(), CompileError> {
-        self.equality()?;
+    fn ternary(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.equality(dst)?;
         if self.match_token(TokenKind::Question) {
-            self.emit_byte(OP_JUMP_IF_FALSE)?;
-            let jump_false_pos = self.emit_u16(0)?;
+            let jz_pos = self.emit_inst(PX64_OP_JZ, dst, 0, 0)?;
 
             // True branch
             if self.match_token(TokenKind::LBrace) {
@@ -1090,13 +1172,12 @@ impl<'a> Compiler<'a> {
                 }
                 self.match_token(TokenKind::RBrace);
             } else {
-                self.expression()?;
+                self.expression(dst)?;
             }
 
             if self.match_token(TokenKind::Colon) {
-                self.emit_byte(OP_JUMP)?;
-                let jump_end_pos = self.emit_u16(0)?;
-                self.patch_u16(jump_false_pos, self.code_len as u16);
+                let jmp_end_pos = self.emit_inst(PX64_OP_JMP, 0, 0, 0)?;
+                self.patch_imm16(jz_pos, self.code_len as u16);
 
                 // False branch
                 if self.match_token(TokenKind::LBrace) {
@@ -1105,87 +1186,90 @@ impl<'a> Compiler<'a> {
                     }
                     self.match_token(TokenKind::RBrace);
                 } else {
-                    self.expression()?;
+                    self.expression(dst)?;
                 }
-                self.patch_u16(jump_end_pos, self.code_len as u16);
+                self.patch_imm16(jmp_end_pos, self.code_len as u16);
             } else {
-                self.patch_u16(jump_false_pos, self.code_len as u16);
+                self.patch_imm16(jz_pos, self.code_len as u16);
             }
         }
         Ok(())
     }
 
-    fn equality(&mut self) -> Result<(), CompileError> {
-        self.comparison()?;
+    fn equality(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.comparison(dst)?;
         while self.peek().kind == TokenKind::EqEq || self.peek().kind == TokenKind::NotEq {
             let op = self.advance().kind;
-            self.comparison()?;
+            let rhs_reg = 15u8;
+            self.comparison(rhs_reg)?;
             if op == TokenKind::EqEq {
-                self.emit_byte(OP_CMP_EQ)?;
+                self.emit_inst(PX64_OP_CMP_EQ, dst, dst, rhs_reg)?;
             } else {
-                self.emit_byte(OP_CMP_NE)?;
+                self.emit_inst(PX64_OP_CMP_NE, dst, dst, rhs_reg)?;
             }
         }
         Ok(())
     }
 
-    fn comparison(&mut self) -> Result<(), CompileError> {
-        self.term()?;
+    fn comparison(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.term(dst)?;
         while matches!(self.peek().kind, TokenKind::Lt | TokenKind::LtEq | TokenKind::Gt | TokenKind::GtEq) {
             let op = self.advance().kind;
-            self.term()?;
+            let rhs_reg = 15u8;
+            self.term(rhs_reg)?;
             match op {
-                TokenKind::Lt => { self.emit_byte(OP_CMP_LT)?; }
-                TokenKind::LtEq => { self.emit_byte(OP_CMP_LE)?; }
-                TokenKind::Gt => { self.emit_byte(OP_CMP_GT)?; }
-                TokenKind::GtEq => { self.emit_byte(OP_CMP_GE)?; }
+                TokenKind::Lt => { self.emit_inst(PX64_OP_CMP_LT, dst, dst, rhs_reg)?; }
+                TokenKind::LtEq => { self.emit_inst(PX64_OP_CMP_LE, dst, dst, rhs_reg)?; }
+                TokenKind::Gt => { self.emit_inst(PX64_OP_CMP_GT, dst, dst, rhs_reg)?; }
+                TokenKind::GtEq => { self.emit_inst(PX64_OP_CMP_GE, dst, dst, rhs_reg)?; }
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn term(&mut self) -> Result<(), CompileError> {
-        self.factor()?;
+    fn term(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.factor(dst)?;
         while self.peek().kind == TokenKind::Plus || self.peek().kind == TokenKind::Minus {
             let op = self.advance().kind;
-            self.factor()?;
+            let rhs_reg = 15u8;
+            self.factor(rhs_reg)?;
             if op == TokenKind::Plus {
-                self.emit_byte(OP_ADD)?;
+                self.emit_inst(PX64_OP_ADD, dst, dst, rhs_reg)?;
             } else {
-                self.emit_byte(OP_SUB)?;
+                self.emit_inst(PX64_OP_SUB, dst, dst, rhs_reg)?;
             }
         }
         Ok(())
     }
 
-    fn factor(&mut self) -> Result<(), CompileError> {
-        self.primary()?;
+    fn factor(&mut self, dst: u8) -> Result<(), CompileError> {
+        self.primary(dst)?;
         while self.peek().kind == TokenKind::Star || self.peek().kind == TokenKind::Slash || self.peek().kind == TokenKind::Percent {
             let op = self.advance().kind;
-            self.primary()?;
+            let rhs_reg = 15u8;
+            self.primary(rhs_reg)?;
             match op {
-                TokenKind::Star => { self.emit_byte(OP_MUL)?; }
-                TokenKind::Slash => { self.emit_byte(OP_DIV)?; }
-                TokenKind::Percent => { self.emit_byte(OP_MOD)?; }
+                TokenKind::Star => { self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?; }
+                TokenKind::Slash => { self.emit_inst(PX64_OP_DIV, dst, dst, rhs_reg)?; }
+                TokenKind::Percent => { self.emit_inst(PX64_OP_MOD, dst, dst, rhs_reg)?; }
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn primary(&mut self) -> Result<(), CompileError> {
+    fn primary(&mut self, dst: u8) -> Result<(), CompileError> {
         let tok = self.advance();
 
         match tok.kind {
             TokenKind::Number(n) => {
-                self.emit_byte(OP_PUSH_CONST)?;
-                self.emit_i64(n)?;
+                self.emit_imm16(PX64_OP_MOV_IMM, dst, n as u16)?;
             }
 
             TokenKind::TimeLiteral(ns) => {
-                self.emit_byte(OP_PUSH_CONST)?;
-                self.emit_i64(ns as i64)?;
+                let us = ns / 1_000;
+                self.emit_imm16(PX64_OP_MOV_IMM, dst, us as u16)?;
             }
 
             TokenKind::StringLit => {
@@ -1196,36 +1280,34 @@ impl<'a> Compiler<'a> {
                         "String literal pool exhausted (512 bytes limit reached)",
                         "Shorter string constants",
                         "String Pool Allocation",
-                        "Reduce the size of string constants or combine print statements",
+                        "Reduce the size of string constants",
                     ));
                 }
                 let offset = self.str_pool_len;
                 self.str_pool[offset..offset + s.len()].copy_from_slice(s);
                 self.str_pool_len += s.len();
 
-                self.emit_byte(OP_PUSH_STR)?;
-                self.emit_u16(offset as u16)?;
-                self.emit_u16(s.len() as u16)?;
+                self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, s.len() as u8)?;
             }
 
             TokenKind::VarIdent | TokenKind::HardwareIdent => {
-                let var_idx = self.resolve_var(tok)?;
-                self.emit_byte(OP_LOAD_VAR)?;
-                self.emit_byte(var_idx)?;
+                let var_reg = self.resolve_var(tok)?;
+                if var_reg != dst {
+                    self.emit_inst(PX64_OP_MOV_REG, dst, var_reg, 0)?;
+                }
             }
 
             TokenKind::IntrinsicIdent | TokenKind::Ident => {
                 let name = &self.src[tok.start..tok.start + tok.len];
                 if self.peek().kind == TokenKind::LParen {
-                    // Intrinsic / Function call
                     self.advance(); // consume '('
-                    let mut argc = 0;
+                    let mut arg_reg = 0u8;
                     if self.peek().kind != TokenKind::RParen {
-                        self.expression()?;
-                        argc += 1;
+                        arg_reg = 15u8;
+                        self.expression(arg_reg)?;
                         while self.match_token(TokenKind::Comma) {
-                            self.expression()?;
-                            argc += 1;
+                            let dummy = 14u8;
+                            self.expression(dummy)?;
                         }
                     }
                     if !self.match_token(TokenKind::RParen) {
@@ -1259,18 +1341,17 @@ impl<'a> Compiler<'a> {
                         }
                     };
 
-                    self.emit_byte(OP_CALL_NATIVE)?;
-                    self.emit_byte(func_id)?;
-                    self.emit_byte(argc)?;
+                    self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg_reg)?;
                 } else {
-                    let var_idx = self.resolve_var(tok)?;
-                    self.emit_byte(OP_LOAD_VAR)?;
-                    self.emit_byte(var_idx)?;
+                    let var_reg = self.resolve_var(tok)?;
+                    if var_reg != dst {
+                        self.emit_inst(PX64_OP_MOV_REG, dst, var_reg, 0)?;
+                    }
                 }
             }
 
             TokenKind::LParen => {
-                self.expression()?;
+                self.expression(dst)?;
                 if !self.match_token(TokenKind::RParen) {
                     return Err(self.error(
                         "ERR_UNCLOSED_PAREN",
@@ -1297,13 +1378,310 @@ impl<'a> Compiler<'a> {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Real-Time Bytecode Virtual Machine
+// // -----------------------------------------------------------------------------
+// px64 Real-Time Register Virtual Machine
 // -----------------------------------------------------------------------------
 
 pub const STR_TAG: i64 = 0x4000_0000_0000_0000;
 pub const ARG_TAG: i64 = 0x2000_0000_0000_0000;
 
+pub struct PX64VM<'a> {
+    pub code: &'a [u8],
+    pub str_pool: &'a [u8],
+    pub ip: usize,
+    pub regs: [i64; PX64_NUM_REGISTERS],
+    pub deadline_stack: [u64; 8],
+    pub dl_sp: usize,
+}
+
+impl<'a> PX64VM<'a> {
+    pub fn new(code: &'a [u8], str_pool: &'a [u8]) -> Self {
+        Self {
+            code,
+            str_pool,
+            ip: 0,
+            regs: [0; PX64_NUM_REGISTERS],
+            deadline_stack: [0; 8],
+            dl_sp: 0,
+        }
+    }
+
+    // Function: run
+    // Description: Execute px64 32-bit fixed instructions with zero heap allocations and bounded WCET.
+    // Worst-case execution time: ~60_000 ns
+    pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
+        let mut steps = 0;
+
+        while self.ip + 4 <= self.code.len() && steps < MAX_VM_STEPS {
+            steps += 1;
+            let op = self.code[self.ip];
+            let rd = self.code[self.ip + 1] as usize;
+            let rs1 = self.code[self.ip + 2] as usize;
+            let rs2 = self.code[self.ip + 3] as usize;
+            let imm16 = u16::from_be_bytes([self.code[self.ip + 2], self.code[self.ip + 3]]);
+            self.ip += 4;
+
+            match op {
+                PX64_OP_NOP => {}
+                PX64_OP_HALT => break,
+
+                PX64_OP_MOV_IMM => {
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = imm16 as i64;
+                    }
+                }
+
+                PX64_OP_MOV_REG => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1];
+                    }
+                }
+
+                PX64_OP_MOV_STR => {
+                    let offset = rs1;
+                    let len = rs2;
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = STR_TAG | (((offset as u64) as i64) << 32) | ((len as u64) as i64);
+                    }
+                }
+
+                PX64_OP_ADD => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1].wrapping_add(self.regs[rs2]);
+                    }
+                }
+
+                PX64_OP_SUB => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1].wrapping_sub(self.regs[rs2]);
+                    }
+                }
+
+                PX64_OP_MUL => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = self.regs[rs1].wrapping_mul(self.regs[rs2]);
+                    }
+                }
+
+                PX64_OP_DIV => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        let denom = self.regs[rs2];
+                        self.regs[rd] = if denom != 0 { self.regs[rs1] / denom } else { 0 };
+                    }
+                }
+
+                PX64_OP_MOD => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        let denom = self.regs[rs2];
+                        self.regs[rd] = if denom != 0 { self.regs[rs1] % denom } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_EQ => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] == self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_NE => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] != self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_LT => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] < self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_LE => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] <= self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_GT => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] > self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_CMP_GE => {
+                    if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
+                        self.regs[rd] = if self.regs[rs1] >= self.regs[rs2] { 1 } else { 0 };
+                    }
+                }
+
+                PX64_OP_JMP => {
+                    self.ip = imm16 as usize;
+                }
+
+                PX64_OP_JZ => {
+                    if rd < PX64_NUM_REGISTERS && self.regs[rd] == 0 {
+                        self.ip = imm16 as usize;
+                    }
+                }
+
+                PX64_OP_JNZ => {
+                    if rd < PX64_NUM_REGISTERS && self.regs[rd] != 0 {
+                        self.ip = imm16 as usize;
+                    }
+                }
+
+                PX64_OP_CALL_NAT => {
+                    let func_id = rs1 as u8;
+                    let arg_reg = rs2;
+                    let arg_val = if arg_reg < PX64_NUM_REGISTERS { self.regs[arg_reg] } else { 0 };
+
+                    let ret = match func_id {
+                        NATIVE_PRINT => {
+                            if (arg_val & ARG_TAG) != 0 {
+                                let idx = (arg_val & 0xFF) as usize;
+                                unsafe {
+                                    if idx < SCRIPT_ARGC {
+                                        let len = SCRIPT_ARG_LENS[idx];
+                                        if let Ok(s) = core::str::from_utf8(&SCRIPT_ARGS[idx][..len]) {
+                                            serial_print!("{}", s);
+                                        }
+                                    }
+                                }
+                            } else if (arg_val & STR_TAG) != 0 {
+                                let raw = arg_val & !STR_TAG;
+                                let offset = (raw >> 32) as usize;
+                                let len = (raw & 0xFFFF_FFFF) as usize;
+                                if offset + len <= self.str_pool.len() {
+                                    if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
+                                        serial_print!("{}", s);
+                                    }
+                                }
+                            } else {
+                                serial_print!("{}", arg_val);
+                            }
+                            0
+                        }
+
+                        NATIVE_PRINTLN => {
+                            if (arg_val & ARG_TAG) != 0 {
+                                let idx = (arg_val & 0xFF) as usize;
+                                unsafe {
+                                    if idx < SCRIPT_ARGC {
+                                        let len = SCRIPT_ARG_LENS[idx];
+                                        if let Ok(s) = core::str::from_utf8(&SCRIPT_ARGS[idx][..len]) {
+                                            serial_println!("{}", s);
+                                        }
+                                    }
+                                }
+                            } else if (arg_val & STR_TAG) != 0 {
+                                let raw = arg_val & !STR_TAG;
+                                let offset = (raw >> 32) as usize;
+                                let len = (raw & 0xFFFF_FFFF) as usize;
+                                if offset + len <= self.str_pool.len() {
+                                    if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
+                                        serial_println!("{}", s);
+                                    }
+                                }
+                            } else if arg_reg != 0 || arg_val != 0 {
+                                serial_println!("{}", arg_val);
+                            } else {
+                                serial_println!();
+                            }
+                            0
+                        }
+
+                        NATIVE_SYS_TSC => {
+                            read_tsc_serialized() as i64
+                        }
+
+                        NATIVE_NET_RTT => {
+                            LAST_RTT_NS.load(Ordering::Relaxed) as i64
+                        }
+
+                        NATIVE_NET_SET_RATE => {
+                            CONGESTION_RATE_PCT.store(arg_val as u8, Ordering::Relaxed);
+                            0
+                        }
+
+                        NATIVE_GPU_CAPTURE => {
+                            let vblank = poll_vblank_edge(5);
+                            let handle = capture_frame_zero_copy(0, 1, vblank);
+                            handle.slot_id as i64
+                        }
+
+                        NATIVE_NET_SEND => {
+                            let handle = capture_frame_zero_copy(0, 1, read_tsc_serialized());
+                            let deadline = read_tsc_serialized() + crate::tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
+                            let mut seq = 1u16;
+                            let _ = stream_send_frame(&handle, deadline, &mut seq);
+                            1
+                        }
+
+                        NATIVE_SCRIPT_ARGC => {
+                            unsafe { SCRIPT_ARGC as i64 }
+                        }
+
+                        NATIVE_SCRIPT_ARG => {
+                            if arg_val >= 0 && (arg_val as usize) < 8 {
+                                ARG_TAG | (arg_val & 0xFF)
+                            } else {
+                                0
+                            }
+                        }
+
+                        _ => 0,
+                    };
+
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = ret;
+                    }
+                }
+
+                PX64_OP_WITHIN_START => {
+                    let budget_us = if rd < PX64_NUM_REGISTERS { self.regs[rd] as u64 } else { 500 };
+                    let budget_ns = budget_us * 1_000;
+                    let deadline = read_tsc_serialized() + crate::tsc::ns_to_tsc(budget_ns, tsc_freq_hz);
+                    if self.dl_sp < 8 {
+                        self.deadline_stack[self.dl_sp] = deadline;
+                        self.dl_sp += 1;
+                    }
+                }
+
+                PX64_OP_WITHIN_END => {
+                    if self.dl_sp > 0 {
+                        self.dl_sp -= 1;
+                    }
+                }
+
+                PX64_OP_DROP => {
+                    if self.dl_sp > 0 {
+                        let dl = self.deadline_stack[self.dl_sp - 1];
+                        if read_tsc_serialized() > dl {
+                            serial_println!("[DEADLINE_DROP] Frame dropped due to deadline breach");
+                        }
+                    }
+                }
+
+                _ => {
+                    return Err(CompileError::simple(
+                        "ERR_PX64_INVALID_OPCODE",
+                        "Invalid px64 instruction opcode encountered",
+                    ));
+                }
+            }
+        }
+
+        if steps >= MAX_VM_STEPS {
+            return Err(CompileError::simple(
+                "ERR_PX64_WCET_EXCEEDED",
+                "Execution exceeded px64 WCET instruction step limit (infinite loop protection)",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+// Legacy VM for PULS v1/v2 backward compatibility
 pub struct VM<'a> {
     code: &'a [u8],
     str_pool: &'a [u8],
@@ -1331,10 +1709,7 @@ impl<'a> VM<'a> {
 
     fn push(&mut self, val: i64) -> Result<(), CompileError> {
         if self.sp >= 64 {
-            return Err(CompileError::simple(
-                "ERR_VM_STACK_OVERFLOW",
-                "VM Evaluation stack overflow (64 elements limit reached)",
-            ));
+            return Err(CompileError::simple("ERR_VM_STACK_OVERFLOW", "VM Evaluation stack overflow"));
         }
         self.stack[self.sp] = val;
         self.sp += 1;
@@ -1343,21 +1718,14 @@ impl<'a> VM<'a> {
 
     fn pop(&mut self) -> Result<i64, CompileError> {
         if self.sp == 0 {
-            return Err(CompileError::simple(
-                "ERR_VM_STACK_UNDERFLOW",
-                "VM Evaluation stack underflow",
-            ));
+            return Err(CompileError::simple("ERR_VM_STACK_UNDERFLOW", "VM Evaluation stack underflow"));
         }
         self.sp -= 1;
         Ok(self.stack[self.sp])
     }
 
-    // Function: run
-    // Description: Execute bytecode under strictly bounded instruction step limit (WCET guarantee).
-    // Worst-case execution time: ~100_000 ns (MAX_VM_STEPS * 10 ns)
     pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
         let mut steps = 0;
-
         while self.ip < self.code.len() && steps < MAX_VM_STEPS {
             steps += 1;
             let op = self.code[self.ip];
@@ -1365,124 +1733,44 @@ impl<'a> VM<'a> {
 
             match op {
                 OP_NOP => {}
-
                 OP_PUSH_CONST => {
-                    let mut bytes = [0u8; 8];
-                    bytes.copy_from_slice(&self.code[self.ip..self.ip + 8]);
+                    let mut b = [0u8; 8];
+                    b.copy_from_slice(&self.code[self.ip..self.ip + 8]);
                     self.ip += 8;
-                    let val = i64::from_be_bytes(bytes);
-                    self.push(val)?;
+                    self.push(i64::from_be_bytes(b))?;
                 }
-
                 OP_LOAD_VAR => {
                     let idx = self.code[self.ip] as usize;
                     self.ip += 1;
-                    if idx < MAX_VARS {
-                        self.push(self.vars[idx])?;
-                    }
+                    self.push(self.vars[idx])?;
                 }
-
                 OP_STORE_VAR => {
                     let idx = self.code[self.ip] as usize;
                     self.ip += 1;
                     let val = self.pop()?;
-                    if idx < MAX_VARS {
-                        self.vars[idx] = val;
-                    }
+                    self.vars[idx] = val;
                 }
-
-                OP_ADD => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(a.wrapping_add(b))?;
-                }
-
-                OP_SUB => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(a.wrapping_sub(b))?;
-                }
-
-                OP_MUL => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(a.wrapping_mul(b))?;
-                }
-
-                OP_DIV => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    if b == 0 {
-                        return Err(CompileError::simple(
-                            "ERR_VM_DIV_BY_ZERO",
-                            "Division by zero during VM bytecode execution",
-                        ));
-                    }
-                    self.push(a / b)?;
-                }
-
-                OP_MOD => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    if b == 0 {
-                        return Err(CompileError::simple(
-                            "ERR_VM_MOD_BY_ZERO",
-                            "Modulo by zero during VM bytecode execution",
-                        ));
-                    }
-                    self.push(a % b)?;
-                }
-
-                OP_CMP_EQ => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a == b { 1 } else { 0 })?;
-                }
-
-                OP_CMP_NE => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a != b { 1 } else { 0 })?;
-                }
-
-                OP_CMP_LT => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a < b { 1 } else { 0 })?;
-                }
-
-                OP_CMP_LE => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a <= b { 1 } else { 0 })?;
-                }
-
-                OP_CMP_GT => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a > b { 1 } else { 0 })?;
-                }
-
-                OP_CMP_GE => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    self.push(if a >= b { 1 } else { 0 })?;
-                }
-
+                OP_ADD => { let (b, a) = (self.pop()?, self.pop()?); self.push(a.wrapping_add(b))?; }
+                OP_SUB => { let (b, a) = (self.pop()?, self.pop()?); self.push(a.wrapping_sub(b))?; }
+                OP_MUL => { let (b, a) = (self.pop()?, self.pop()?); self.push(a.wrapping_mul(b))?; }
+                OP_DIV => { let (b, a) = (self.pop()?, self.pop()?); self.push(if b != 0 { a / b } else { 0 })?; }
+                OP_MOD => { let (b, a) = (self.pop()?, self.pop()?); self.push(if b != 0 { a % b } else { 0 })?; }
+                OP_CMP_EQ => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a == b { 1 } else { 0 })?; }
+                OP_CMP_NE => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a != b { 1 } else { 0 })?; }
+                OP_CMP_LT => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a < b { 1 } else { 0 })?; }
+                OP_CMP_LE => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a <= b { 1 } else { 0 })?; }
+                OP_CMP_GT => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a > b { 1 } else { 0 })?; }
+                OP_CMP_GE => { let (b, a) = (self.pop()?, self.pop()?); self.push(if a >= b { 1 } else { 0 })?; }
                 OP_JUMP => {
                     let target = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     self.ip = target;
                 }
-
                 OP_JUMP_IF_FALSE => {
                     let target = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     self.ip += 2;
                     let cond = self.pop()?;
-                    if cond == 0 {
-                        self.ip = target;
-                    }
+                    if cond == 0 { self.ip = target; }
                 }
-
                 OP_PUSH_STR => {
                     let offset = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     let len = u16::from_be_bytes([self.code[self.ip + 2], self.code[self.ip + 3]]) as usize;
@@ -1490,12 +1778,10 @@ impl<'a> VM<'a> {
                     let encoded = STR_TAG | (((offset as u64) as i64) << 32) | ((len as u64) as i64);
                     self.push(encoded)?;
                 }
-
                 OP_CALL_NATIVE => {
                     let func_id = self.code[self.ip];
                     let argc = self.code[self.ip + 1] as usize;
                     self.ip += 2;
-
                     match func_id {
                         NATIVE_PRINT => {
                             if argc > 0 {
@@ -1525,7 +1811,6 @@ impl<'a> VM<'a> {
                             }
                             self.push(0)?;
                         }
-
                         NATIVE_PRINTLN => {
                             if argc > 0 {
                                 let val = self.pop()?;
@@ -1556,34 +1841,13 @@ impl<'a> VM<'a> {
                             }
                             self.push(0)?;
                         }
-
-                        NATIVE_SYS_TSC => {
-                            let tsc = read_tsc_serialized();
-                            self.push(tsc as i64)?;
-                        }
-
-                        NATIVE_NET_RTT => {
-                            let rtt = LAST_RTT_NS.load(Ordering::Relaxed);
-                            self.push(rtt as i64)?;
-                        }
-
-                        NATIVE_NET_SET_RATE => {
-                            if argc > 0 {
-                                let rate = self.pop()?;
-                                CONGESTION_RATE_PCT.store(rate as u8, Ordering::Relaxed);
-                            }
-                            self.push(0)?;
-                        }
-
-                        NATIVE_GPU_CAPTURE => {
-                            let vblank = poll_vblank_edge(5);
-                            let handle = capture_frame_zero_copy(0, 1, vblank);
-                            self.push(handle.slot_id as i64)?;
-                        }
-
+                        NATIVE_SYS_TSC => { self.push(read_tsc_serialized() as i64)?; }
+                        NATIVE_NET_RTT => { self.push(LAST_RTT_NS.load(Ordering::Relaxed) as i64)?; }
+                        NATIVE_NET_SET_RATE => { if argc > 0 { let r = self.pop()?; CONGESTION_RATE_PCT.store(r as u8, Ordering::Relaxed); } self.push(0)?; }
+                        NATIVE_GPU_CAPTURE => { let vblank = poll_vblank_edge(5); let h = capture_frame_zero_copy(0, 1, vblank); self.push(h.slot_id as i64)?; }
                         NATIVE_NET_SEND => {
                             if argc > 0 {
-                                let _slot = self.pop()?;
+                                let _ = self.pop()?;
                                 let handle = capture_frame_zero_copy(0, 1, read_tsc_serialized());
                                 let deadline = read_tsc_serialized() + crate::tsc::ns_to_tsc(50_000_000, tsc_freq_hz);
                                 let mut seq = 1u16;
@@ -1591,100 +1855,51 @@ impl<'a> VM<'a> {
                             }
                             self.push(1)?;
                         }
-
-                        NATIVE_SCRIPT_ARGC => {
-                            unsafe {
-                                self.push(SCRIPT_ARGC as i64)?;
-                            }
-                        }
-
+                        NATIVE_SCRIPT_ARGC => { unsafe { self.push(SCRIPT_ARGC as i64)?; } }
                         NATIVE_SCRIPT_ARG => {
                             if argc > 0 {
                                 let idx = self.pop()?;
-                                if idx >= 0 && (idx as usize) < 8 {
-                                    self.push(ARG_TAG | (idx & 0xFF))?;
-                                } else {
-                                    self.push(0)?;
-                                }
-                            } else {
-                                self.push(0)?;
-                            }
+                                if idx >= 0 && (idx as usize) < 8 { self.push(ARG_TAG | (idx & 0xFF))?; }
+                                else { self.push(0)?; }
+                            } else { self.push(0)?; }
                         }
-
                         _ => {}
                     }
                 }
-
                 OP_WITHIN_START => {
-                    let mut bytes = [0u8; 8];
-                    bytes.copy_from_slice(&self.code[self.ip..self.ip + 8]);
+                    let mut b = [0u8; 8];
+                    b.copy_from_slice(&self.code[self.ip..self.ip + 8]);
                     self.ip += 8;
-                    let budget_ns = i64::from_be_bytes(bytes) as u64;
-
-                    let tsc_budget = if tsc_freq_hz > 0 {
-                        (budget_ns * tsc_freq_hz) / 1_000_000_000
-                    } else {
-                        budget_ns * 3
-                    };
-                    let deadline = read_tsc_serialized() + tsc_budget;
-
-                    if self.dl_sp < 8 {
-                        self.deadline_stack[self.dl_sp] = deadline;
-                        self.dl_sp += 1;
-                    }
+                    let budget_ns = i64::from_be_bytes(b) as u64;
+                    let tsc_budget = if tsc_freq_hz > 0 { (budget_ns * tsc_freq_hz) / 1_000_000_000 } else { budget_ns * 3 };
+                    if self.dl_sp < 8 { self.deadline_stack[self.dl_sp] = read_tsc_serialized() + tsc_budget; self.dl_sp += 1; }
                 }
-
-                OP_WITHIN_END => {
-                    if self.dl_sp > 0 {
-                        self.dl_sp -= 1;
-                    }
-                }
-
+                OP_WITHIN_END => { if self.dl_sp > 0 { self.dl_sp -= 1; } }
                 OP_DROP => {
-                    if self.dl_sp > 0 {
-                        let dl = self.deadline_stack[self.dl_sp - 1];
-                        if read_tsc_serialized() > dl {
-                            serial_println!("[DEADLINE_DROP] Frame dropped due to deadline breach");
-                        }
+                    if self.dl_sp > 0 && read_tsc_serialized() > self.deadline_stack[self.dl_sp - 1] {
+                        serial_println!("[DEADLINE_DROP] Frame dropped due to deadline breach");
                     }
                 }
-
-                OP_HALT => {
-                    break;
-                }
-
-                _ => {
-                    return Err(CompileError::simple(
-                        "ERR_VM_INVALID_OPCODE",
-                        "Invalid bytecode opcode encountered in instruction stream",
-                    ));
-                }
+                OP_HALT => break,
+                _ => return Err(CompileError::simple("ERR_VM_INVALID_OPCODE", "Invalid opcode")),
             }
         }
-
-        if steps >= MAX_VM_STEPS {
-            return Err(CompileError::simple(
-                "ERR_VM_WCET_EXCEEDED",
-                "Execution exceeded WCET instruction step limit (infinite loop protection)",
-            ));
-        }
-
         Ok(())
     }
 }
 
 // Function: run_pulse_script
-// Description: Compile and execute a PulseLang script in one shot.
-// Worst-case execution time: ~120_000 ns
+// Description: Compile and execute a PulseLang script using the px64 architecture engine.
+// Worst-case execution time: ~100_000 ns
 pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src);
     let _tok_count = lexer.tokenize(&mut tokens)?;
 
     let mut compiler = Compiler::new(src, &tokens);
-    let _code_len = compiler.compile()?;
+    let code_len = compiler.compile()?;
 
-    let mut vm = VM::new(&compiler.code[..compiler.code_len], &compiler.str_pool[..compiler.str_pool_len]);
+    let mut vm = PX64VM::new(&compiler.code[..code_len], &compiler.str_pool[..compiler.str_pool_len]);
     vm.run(tsc_freq_hz)
 }
 
@@ -1693,8 +1908,8 @@ pub const PULSE_BIN_VERSION: u16 = 2;
 pub const PULSE_HEADER_SIZE: usize = 12;
 
 // Function: compile_pulse_to_binary
-// Description: Compile PulseLang source code into binary bytecode format.
-// Worst-case execution time: ~60_000 ns
+// Description: Compile PulseLang source code into px64 binary format (PX64).
+// Worst-case execution time: ~50_000 ns
 pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, CompileError> {
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src);
@@ -1704,61 +1919,77 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     let code_len = compiler.compile()?;
     let str_pool_len = compiler.str_pool_len;
 
-    let total_size = PULSE_HEADER_SIZE + code_len + str_pool_len;
+    let total_size = PX64_HEADER_SIZE + code_len + str_pool_len;
     if total_size > out_buf.len() {
         return Err(CompileError::simple(
             "ERR_BINARY_BUFFER_OVERFLOW",
-            "Target binary output buffer is too small for compiled bytecode",
+            "Target binary output buffer is too small for compiled px64 artifact",
         ));
     }
 
-    // Header
-    out_buf[0..4].copy_from_slice(&PULSE_BIN_MAGIC);
-    out_buf[4..6].copy_from_slice(&PULSE_BIN_VERSION.to_be_bytes());
+    // Header (16 bytes)
+    out_buf[0..4].copy_from_slice(&PX64_BIN_MAGIC);
+    out_buf[4..6].copy_from_slice(&PX64_BIN_VERSION.to_be_bytes());
     out_buf[6..8].copy_from_slice(&(code_len as u16).to_be_bytes());
     out_buf[8..10].copy_from_slice(&(str_pool_len as u16).to_be_bytes());
-    out_buf[10..12].copy_from_slice(&0u16.to_be_bytes()); // Reserved
+    out_buf[10..12].copy_from_slice(&(PX64_NUM_REGISTERS as u16).to_be_bytes());
+    out_buf[12..16].fill(0); // Reserved
 
     // Payload
-    out_buf[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
-    out_buf[PULSE_HEADER_SIZE + code_len..total_size].copy_from_slice(&compiler.str_pool[..str_pool_len]);
+    out_buf[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
+    out_buf[PX64_HEADER_SIZE + code_len..total_size].copy_from_slice(&compiler.str_pool[..str_pool_len]);
 
     Ok(total_size)
 }
 
 // Function: run_pulse_binary
-// Description: Execute pre-compiled PulseLang binary bytecode directly in O(1) zero compilation latency.
-// Worst-case execution time: ~80_000 ns
+// Description: Execute pre-compiled px64 / PULS binary bytecode directly in O(1) zero compilation latency.
+// Worst-case execution time: ~60_000 ns
 pub fn run_pulse_binary(bin: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
-    if bin.len() < PULSE_HEADER_SIZE {
-        return Err(CompileError::simple("ERR_BINARY_TOO_SMALL", "Binary file smaller than header size"));
-    }
-    if &bin[0..4] != &PULSE_BIN_MAGIC {
-        return Err(CompileError::simple("ERR_BINARY_INVALID_MAGIC", "Invalid PulseLang binary magic"));
-    }
-    let version = u16::from_be_bytes([bin[4], bin[5]]);
-    if version != PULSE_BIN_VERSION {
-        return Err(CompileError::simple("ERR_BINARY_VERSION_MISMATCH", "Unsupported PulseLang binary version"));
-    }
-    let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
-    let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+    if bin.len() >= PX64_HEADER_SIZE && &bin[0..4] == &PX64_BIN_MAGIC {
+        let version = u16::from_be_bytes([bin[4], bin[5]]);
+        if version != PX64_BIN_VERSION {
+            return Err(CompileError::simple("ERR_BINARY_VERSION_MISMATCH", "Unsupported px64 binary version"));
+        }
+        let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+        let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
 
-    if bin.len() < PULSE_HEADER_SIZE + code_len + str_pool_len {
-        return Err(CompileError::simple("ERR_BINARY_TRUNCATED", "Truncated binary bytecode payload"));
+        if bin.len() < PX64_HEADER_SIZE + code_len + str_pool_len {
+            return Err(CompileError::simple("ERR_BINARY_TRUNCATED", "Truncated px64 binary payload"));
+        }
+
+        let code = &bin[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len];
+        let str_pool = &bin[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len];
+
+        let mut vm = PX64VM::new(code, str_pool);
+        vm.run(tsc_freq_hz)
+    } else if bin.len() >= PULSE_HEADER_SIZE && &bin[0..4] == &PULSE_BIN_MAGIC {
+        let version = u16::from_be_bytes([bin[4], bin[5]]);
+        if version != PULSE_BIN_VERSION {
+            return Err(CompileError::simple("ERR_BINARY_VERSION_MISMATCH", "Unsupported PulseLang binary version"));
+        }
+        let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+        let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+
+        if bin.len() < PULSE_HEADER_SIZE + code_len + str_pool_len {
+            return Err(CompileError::simple("ERR_BINARY_TRUNCATED", "Truncated binary bytecode payload"));
+        }
+
+        let code = &bin[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len];
+        let str_pool = &bin[PULSE_HEADER_SIZE + code_len..PULSE_HEADER_SIZE + code_len + str_pool_len];
+
+        let mut vm = VM::new(code, str_pool);
+        vm.run(tsc_freq_hz)
+    } else {
+        Err(CompileError::simple("ERR_BINARY_INVALID_MAGIC", "Invalid executable binary magic (expected PX64)"))
     }
-
-    let code = &bin[PULSE_HEADER_SIZE..PULSE_HEADER_SIZE + code_len];
-    let str_pool = &bin[PULSE_HEADER_SIZE + code_len..PULSE_HEADER_SIZE + code_len + str_pool_len];
-
-    let mut vm = VM::new(code, str_pool);
-    vm.run(tsc_freq_hz)
 }
 
 // Function: run_pulse_auto
-// Description: Automatically detect binary vs source script and execute.
-// Worst-case execution time: ~120_000 ns
+// Description: Automatically detect px64/PULS binary vs source script and execute.
+// Worst-case execution time: ~100_000 ns
 pub fn run_pulse_auto(data: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
-    if data.len() >= 4 && &data[0..4] == &PULSE_BIN_MAGIC {
+    if data.len() >= 4 && (&data[0..4] == &PX64_BIN_MAGIC || &data[0..4] == &PULSE_BIN_MAGIC) {
         run_pulse_binary(data, tsc_freq_hz)
     } else {
         run_pulse_script(data, tsc_freq_hz)

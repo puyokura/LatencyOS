@@ -871,12 +871,123 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             if file_path.is_empty() {
                 serial_println!("disasm: missing operand");
             } else if let Some(data) = crate::fs::fs_read(file_path) {
-                if data.len() < crate::lang::PULSE_HEADER_SIZE || &data[0..4] != &crate::lang::PULSE_BIN_MAGIC {
-                    serial_println!("disasm: '{}' is not a valid PulseLang binary file", file_path);
-                } else {
+                if data.len() >= crate::lang::PX64_HEADER_SIZE && &data[0..4] == &crate::lang::PX64_BIN_MAGIC {
+                    let version = u16::from_be_bytes([data[4], data[5]]);
                     let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
                     let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
-                    serial_println!("=== PulseLang Bytecode Disassembly: {} ===", file_path);
+                    let num_regs = u16::from_be_bytes([data[10], data[11]]);
+                    serial_println!("=== px64 Real-Time Architecture Disassembly: {} ===", file_path);
+                    serial_println!(
+                        "Magic: PX64 | Version: {} | Code: {} B | Registers: {} GPRs+HW | StringPool: {} B",
+                        version, code_len, num_regs, str_pool_len
+                    );
+                    serial_println!("OFFSET  HEX          INSTRUCTION  OPERANDS");
+                    serial_println!("---------------------------------------------------------------");
+                    let code = &data[crate::lang::PX64_HEADER_SIZE..crate::lang::PX64_HEADER_SIZE + code_len];
+                    let mut ip = 0;
+                    while ip + 4 <= code.len() {
+                        let op_ip = ip;
+                        let op = code[ip];
+                        let rd = code[ip + 1];
+                        let rs1 = code[ip + 2];
+                        let rs2 = code[ip + 3];
+                        let imm16 = u16::from_be_bytes([rs1, rs2]);
+                        let rd_str = crate::lang::px64_reg_name(rd);
+                        let rs1_str = crate::lang::px64_reg_name(rs1);
+                        let rs2_str = crate::lang::px64_reg_name(rs2);
+                        ip += 4;
+
+                        match op {
+                            crate::lang::PX64_OP_NOP => {
+                                serial_println!("{:04x}:   00 00 00 00  NOP", op_ip);
+                            }
+                            crate::lang::PX64_OP_MOV_IMM => {
+                                serial_println!("{:04x}:   01 {:02x} {:02x} {:02x}  MOV          {}, {}", op_ip, rd, rs1, rs2, rd_str, imm16);
+                            }
+                            crate::lang::PX64_OP_MOV_REG => {
+                                serial_println!("{:04x}:   02 {:02x} {:02x} 00  MOV          {}, {}", op_ip, rd, rs1, rd_str, rs1_str);
+                            }
+                            crate::lang::PX64_OP_MOV_STR => {
+                                serial_println!("{:04x}:   03 {:02x} {:02x} {:02x}  MOVS         {}, str[offset:{}, len:{}]", op_ip, rd, rs1, rs2, rd_str, rs1, rs2);
+                            }
+                            crate::lang::PX64_OP_ADD => {
+                                serial_println!("{:04x}:   04 {:02x} {:02x} {:02x}  ADD          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_SUB => {
+                                serial_println!("{:04x}:   05 {:02x} {:02x} {:02x}  SUB          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_MUL => {
+                                serial_println!("{:04x}:   06 {:02x} {:02x} {:02x}  MUL          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_DIV => {
+                                serial_println!("{:04x}:   07 {:02x} {:02x} {:02x}  DIV          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_MOD => {
+                                serial_println!("{:04x}:   08 {:02x} {:02x} {:02x}  MOD          {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_EQ => {
+                                serial_println!("{:04x}:   09 {:02x} {:02x} {:02x}  CMPEQ        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_NE => {
+                                serial_println!("{:04x}:   0a {:02x} {:02x} {:02x}  CMPNE        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_LT => {
+                                serial_println!("{:04x}:   0b {:02x} {:02x} {:02x}  CMPLT        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_LE => {
+                                serial_println!("{:04x}:   0c {:02x} {:02x} {:02x}  CMPLE        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_GT => {
+                                serial_println!("{:04x}:   0d {:02x} {:02x} {:02x}  CMPGT        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_CMP_GE => {
+                                serial_println!("{:04x}:   0e {:02x} {:02x} {:02x}  CMPGE        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str);
+                            }
+                            crate::lang::PX64_OP_JMP => {
+                                serial_println!("{:04x}:   0f 00 {:02x} {:02x}  JMP          0x{:04x}", op_ip, rs1, rs2, imm16);
+                            }
+                            crate::lang::PX64_OP_JZ => {
+                                serial_println!("{:04x}:   10 {:02x} {:02x} {:02x}  JZ           {}, 0x{:04x}", op_ip, rd, rs1, rs2, rd_str, imm16);
+                            }
+                            crate::lang::PX64_OP_JNZ => {
+                                serial_println!("{:04x}:   11 {:02x} {:02x} {:02x}  JNZ          {}, 0x{:04x}", op_ip, rd, rs1, rs2, rd_str, imm16);
+                            }
+                            crate::lang::PX64_OP_CALL_NAT => {
+                                let func_name = match rs1 {
+                                    crate::lang::NATIVE_PRINT => "@print",
+                                    crate::lang::NATIVE_PRINTLN => "@println",
+                                    crate::lang::NATIVE_SYS_TSC => "@tsc",
+                                    crate::lang::NATIVE_NET_RTT => "@rtt",
+                                    crate::lang::NATIVE_NET_SET_RATE => "@rate",
+                                    crate::lang::NATIVE_GPU_CAPTURE => "@capture",
+                                    crate::lang::NATIVE_NET_SEND => "@send",
+                                    crate::lang::NATIVE_SCRIPT_ARGC => "@argc",
+                                    crate::lang::NATIVE_SCRIPT_ARG => "@arg",
+                                    _ => "@native",
+                                };
+                                serial_println!("{:04x}:   12 {:02x} {:02x} {:02x}  CALL_NAT     {} = {}({})", op_ip, rd, rs1, rs2, rd_str, func_name, rs2_str);
+                            }
+                            crate::lang::PX64_OP_WITHIN_START => {
+                                serial_println!("{:04x}:   13 {:02x} 00 00  WITHIN_START budget:{}", op_ip, rd, rd_str);
+                            }
+                            crate::lang::PX64_OP_WITHIN_END => {
+                                serial_println!("{:04x}:   14 00 00 00  WITHIN_END", op_ip);
+                            }
+                            crate::lang::PX64_OP_DROP => {
+                                serial_println!("{:04x}:   15 00 00 00  DROP", op_ip);
+                            }
+                            crate::lang::PX64_OP_HALT => {
+                                serial_println!("{:04x}:   16 00 00 00  HALT", op_ip);
+                            }
+                            _ => {
+                                serial_println!("{:04x}:   {:02x} {:02x} {:02x} {:02x}  UNKNOWN", op_ip, op, rd, rs1, rs2);
+                            }
+                        }
+                    }
+                } else if data.len() >= crate::lang::PULSE_HEADER_SIZE && &data[0..4] == &crate::lang::PULSE_BIN_MAGIC {
+                    let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
+                    let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
+                    serial_println!("=== Legacy PulseLang Bytecode Disassembly: {} ===", file_path);
                     serial_println!("Magic: PULS | Version: 2 | Code: {} B | StringPool: {} B", code_len, str_pool_len);
                     serial_println!("OFFSET  OPCODE              OPERANDS");
                     serial_println!("---------------------------------------------------");
@@ -979,6 +1090,8 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                             _ => serial_println!("{:04x}:   UNKNOWN ({})", op_ip, op),
                         }
                     }
+                } else {
+                    serial_println!("disasm: '{}' is not a valid px64 or PulseLang binary file", file_path);
                 }
             } else {
                 serial_println!("disasm: cannot access '{}': No such file or directory", arg);

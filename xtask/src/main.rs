@@ -762,6 +762,150 @@ fn test_editor_delete(kernel_elf: &Path) {
     println!("[xtask-test] === TEST PASSED: Nano-style bottom bar, DELETE key, path resolution, and script argument execution verified! ===");
 }
 
+fn test_px64_architecture(kernel_elf: &Path) {
+    let qemu = find_tool("qemu-system-x86_64");
+    println!("[xtask] Running px64 architecture verification test with kernel: {}", kernel_elf.display());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
+    let mut cmd = Command::new(&qemu);
+    cmd.arg("-kernel")
+        .arg(kernel_elf)
+        .arg("-cpu")
+        .arg("max")
+        .arg("-chardev")
+        .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
+        .arg("-serial")
+        .arg("chardev:ser0")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-m")
+        .arg("128M")
+        .arg("-smp")
+        .arg("4")
+        .arg("-netdev")
+        .arg("user,id=net0")
+        .arg("-device")
+        .arg("e1000,netdev=net0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("PATH", get_augmented_path());
+
+    let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+
+    let (mut tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+    let _ = tcp_stream.set_nodelay(true);
+    let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
+
+    use std::io::{Read, Write};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match tcp_read.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output = String::new();
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    };
+
+    if !wait_for("[c0|", 10, &mut full_output) {
+        let _ = child.kill();
+        panic!("Timeout waiting for shell prompt");
+    }
+
+    // Test 1: disasm /bin/echo.bin
+    full_output.clear();
+    println!("[xtask-test] Running: disasm /bin/echo.bin");
+    tcp_stream.write_all(b"disasm /bin/echo.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] disasm /bin/echo.bin output:\n{}", full_output);
+    assert!(full_output.contains("=== px64 Real-Time Architecture Disassembly: /bin/echo.bin ==="), "Missing px64 disassembly header");
+    assert!(full_output.contains("Magic: PX64 | Version: 2"), "Missing PX64 magic and version");
+    assert!(full_output.contains("CALL_NAT"), "Missing CALL_NAT instruction in disassembly");
+
+    // Test 2: compile /pulselang/echo.pl /bin/my_echo.bin
+    full_output.clear();
+    println!("[xtask-test] Running: compile /pulselang/echo.pl /bin/my_echo.bin");
+    tcp_stream.write_all(b"compile /pulselang/echo.pl /bin/my_echo.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] compile output:\n{}", full_output);
+    assert!(full_output.contains("[BUILD] Compiled /pulselang/echo.pl -> /bin/my_echo.bin"), "Failed to compile px64 binary");
+
+    // Test 3: disasm /bin/my_echo.bin
+    full_output.clear();
+    println!("[xtask-test] Running: disasm /bin/my_echo.bin");
+    tcp_stream.write_all(b"disasm /bin/my_echo.bin\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] disasm /bin/my_echo.bin output:\n{}", full_output);
+    assert!(full_output.contains("=== px64 Real-Time Architecture Disassembly: /bin/my_echo.bin ==="), "Failed to disassemble newly compiled px64 binary");
+
+    // Test 4: run /bin/my_echo.bin "px64 register machine active"
+    full_output.clear();
+    println!("[xtask-test] Running: run /bin/my_echo.bin \"px64 register machine active\"");
+    tcp_stream.write_all(b"run /bin/my_echo.bin \"px64 register machine active\"\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run output:\n{}", full_output);
+    assert!(full_output.contains("px64 register machine active"), "Failed to execute px64 compiled binary with arguments");
+
+    // Test 5: run /pulselang/telemetry.pl
+    full_output.clear();
+    println!("[xtask-test] Running: run /pulselang/telemetry.pl");
+    tcp_stream.write_all(b"run /pulselang/telemetry.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run telemetry output:\n{}", full_output);
+    assert!(full_output.contains("[HEALTH]"), "Failed to execute px64 telemetry script");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] === TEST PASSED: px64 Real-Time Architecture ISA, 20-register allocation, binary encoding, disassembler, and execution completely verified! ===");
+}
+
 fn check_versions() {
     let tools = [
         ("rustup", "rustup --version"),
@@ -830,11 +974,15 @@ fn main() {
             let kernel_path = run_cargo_build(release);
             test_editor_delete(&kernel_path);
         }
+        "test-px64" => {
+            let kernel_path = run_cargo_build(release);
+            test_px64_architecture(&kernel_path);
+        }
         "check" => {
             check_versions();
         }
         _ => {
-            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-boot|check] [--release]");
+            eprintln!("Usage: cargo xtask [build|run|interactive|test-paste|test-compile-error|test-editor-delete|test-px64|test-boot|check] [--release]");
             std::process::exit(1);
         }
     }

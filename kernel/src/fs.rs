@@ -217,6 +217,7 @@ $argc > 0 ? {
         let _ = fs_create_internal("/pulselang/filter.pl", filter_src, false);
         let _ = fs_create_internal("/pulselang/jitter.pl", jitter_src, false);
         let _ = fs_create_internal("/pulselang/telemetry.pl", telemetry_src, false);
+        let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
 
         // 2. Pre-compiled standalone .bin binaries in /bin/
         let mut bin_buf = [0u8; 1024];
@@ -234,6 +235,9 @@ $argc > 0 ? {
         }
         if let Ok(sz) = crate::lang::compile_pulse_to_binary(telemetry_src, &mut bin_buf) {
             let _ = fs_create_internal("/bin/telemetry.bin", &bin_buf[..sz], false);
+        }
+        if let Ok(sz) = crate::lang::compile_pulse_to_binary(echo_src, &mut bin_buf) {
+            let _ = fs_create_internal("/bin/echo.bin", &bin_buf[..sz], false);
         }
     }
 }
