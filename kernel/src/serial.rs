@@ -124,6 +124,7 @@ impl SerialPort {
     // Function: is_data_ready
     // Description: Check if incoming data is available in RX ring buffer or hardware FIFO.
     // Worst-case execution time: ~15 ns
+    #[allow(dead_code)]
     #[inline]
     pub fn is_data_ready(&self) -> bool {
         unsafe {

@@ -115,6 +115,7 @@ where
         const ENABLE_ECHO_INPUT: u32 = 0x0004;
         const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
         const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
+        const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
         let stdin = GetStdHandle(STD_INPUT_HANDLE);
         let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -135,9 +136,9 @@ where
         // Install handler that ignores host Ctrl+C so raw 0x03 reaches guest
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
 
-        // Put stdin in unbuffered, non-echo mode with native Windows QuickEdit & Ctrl+V clipboard paste enabled
-        let raw_in_mode = (in_mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
-            | ENABLE_PROCESSED_INPUT
+        // Put stdin in raw, non-echo, non-processed mode so Ctrl+S / Ctrl+Q / Ctrl+C reach guest directly without XOFF freeze
+        let raw_in_mode = (in_mode & !(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT))
+            | ENABLE_VIRTUAL_TERMINAL_INPUT
             | ENABLE_QUICK_EDIT_MODE
             | ENABLE_EXTENDED_FLAGS;
         SetConsoleMode(stdin, raw_in_mode);
@@ -195,36 +196,7 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .env("PATH", get_augmented_path());
 
         if !capture_output {
-            cmd.stdin(Stdio::piped());
-            cmd.stdout(Stdio::inherit());
-            cmd.stderr(Stdio::inherit());
-
-            let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
-            let mut qemu_stdin = child.stdin.take().expect("Failed to open QEMU stdin");
-
-            // Proxy host stdin with micro-paced chunking (8 bytes / 1.5ms) to guarantee QEMU 16550 UART FIFO never overflows during clipboard paste
-            std::thread::spawn(move || {
-                use std::io::{Read, Write};
-                let mut host_stdin = std::io::stdin();
-                let mut buf = [0u8; 512];
-                loop {
-                    match host_stdin.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            for chunk in buf[..n].chunks(8) {
-                                if qemu_stdin.write_all(chunk).is_err() {
-                                    break;
-                                }
-                                let _ = qemu_stdin.flush();
-                                std::thread::sleep(Duration::from_micros(1500));
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-
-            let status = child.wait().expect("Failed to wait on QEMU");
+            let status = cmd.status().expect("Failed to run QEMU");
             println!("[xtask] QEMU exited with status: {}", status);
             None
         } else {

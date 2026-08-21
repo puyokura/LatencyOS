@@ -688,15 +688,12 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
         EDITOR.redraw();
 
         let mut last_was_cr = false;
+        let mut line_changed = false;
+        let mut structure_changed = false;
         let mut cursor_only = false;
 
         while EDITOR.is_running {
-            let mut got_input = false;
-            let mut line_changed = false;
-            let mut structure_changed = false;
-
             while let Some(b) = SERIAL.read_byte_nonblocking() {
-                got_input = true;
 
                 match EDITOR.esc_state {
                     EditorEscState::Normal => {
@@ -978,16 +975,21 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                 }
             }
 
-            // Redraw only after the incoming UART RX queue is fully drained
-            if got_input && !SERIAL.is_data_ready() && EDITOR.is_running {
+            // Redraw immediately when input has occurred and hardware FIFO is drained
+            if (structure_changed || line_changed || cursor_only) && EDITOR.is_running {
                 if structure_changed {
                     EDITOR.redraw();
+                    structure_changed = false;
+                    line_changed = false;
+                    cursor_only = false;
                 } else if line_changed {
                     EDITOR.redraw_current_line();
+                    line_changed = false;
+                    cursor_only = false;
                 } else if cursor_only {
                     EDITOR.update_cursor_only();
+                    cursor_only = false;
                 }
-                cursor_only = false;
             }
 
             core::hint::spin_loop();
