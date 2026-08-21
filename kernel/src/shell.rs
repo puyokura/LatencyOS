@@ -876,12 +876,13 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                     let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
                     let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
                     let num_regs = u16::from_be_bytes([data[10], data[11]]);
-                    serial_println!("=== px64 Real-Time Architecture Disassembly: {} ===", file_path);
+                    serial_println!("=== [px64 Virtual Register Machine Disassembly] {} ===", file_path);
+                    serial_println!("NOTE: Registers ($rax..$r15, #f0..#f3) are px64 VM virtual registers, not host CPU GPRs.");
                     serial_println!(
                         "Magic: PX64 | Version: {} | Code: {} B | Registers: {} GPRs+HW | StringPool: {} B",
                         version, code_len, num_regs, str_pool_len
                     );
-                    serial_println!("OFFSET  HEX          INSTRUCTION  OPERANDS");
+                    serial_println!("OFFSET  HEX          INSTRUCTION  OPERANDS (px64 Virtual Registers)");
                     serial_println!("---------------------------------------------------------------");
                     let code = &data[crate::lang::PX64_HEADER_SIZE..crate::lang::PX64_HEADER_SIZE + code_len];
                     let mut ip = 0;

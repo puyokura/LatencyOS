@@ -848,7 +848,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
     println!("[xtask-test] disasm /bin/echo.bin output:\n{}", full_output);
-    assert!(full_output.contains("=== px64 Real-Time Architecture Disassembly: /bin/echo.bin ==="), "Missing px64 disassembly header");
+    assert!(full_output.contains("=== [px64 Virtual Register Machine Disassembly] /bin/echo.bin ==="), "Missing px64 disassembly header");
     assert!(full_output.contains("Magic: PX64 | Version: 2"), "Missing PX64 magic and version");
     assert!(full_output.contains("CALL_NAT"), "Missing CALL_NAT instruction in disassembly");
 
@@ -874,7 +874,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
     println!("[xtask-test] disasm /bin/my_echo.bin output:\n{}", full_output);
-    assert!(full_output.contains("=== px64 Real-Time Architecture Disassembly: /bin/my_echo.bin ==="), "Failed to disassemble newly compiled px64 binary");
+    assert!(full_output.contains("=== [px64 Virtual Register Machine Disassembly] /bin/my_echo.bin ==="), "Failed to disassemble newly compiled px64 binary");
 
     // Test 4: run /bin/my_echo.bin "px64 register machine active"
     full_output.clear();
