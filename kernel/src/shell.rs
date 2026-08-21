@@ -703,41 +703,42 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "cat" => {
-            if arg.is_empty() {
+            let file_path = arg.split_whitespace().next().unwrap_or("");
+            if file_path.is_empty() {
                 serial_println!("cat: missing operand");
-            } else if let Some(data) = crate::fs::fs_read(arg) {
-                for &b in data {
-                    if b == b'\t' {
-                        serial_print!("    ");
-                    } else {
-                        SERIAL.send_byte(b);
-                    }
+            } else if let Some(data) = crate::fs::fs_read(file_path) {
+                if let Ok(s) = core::str::from_utf8(data) {
+                    serial_print!("{}", s);
+                } else {
+                    serial_println!("[binary data: {} bytes]", data.len());
                 }
                 if !data.is_empty() && data[data.len() - 1] != b'\n' {
                     serial_println!();
                 }
             } else {
-                serial_println!("cat: {}: No such file or directory", arg);
+                serial_println!("cat: {}: No such file or directory", file_path);
             }
         }
 
         "edit" => {
-            let filename = if arg.is_empty() { "untitled.pl" } else { arg };
+            let filename = arg.split_whitespace().next().unwrap_or("untitled.pl");
             crate::editor::start_editor(filename, tsc_freq_hz);
         }
 
         "run" | "exec" => {
-            if arg.is_empty() {
-                serial_println!("run: missing operand");
-            } else if let Some(data) = crate::fs::fs_read(arg) {
+            let mut parts = arg.split_whitespace();
+            let script_path = parts.next().unwrap_or("");
+            if script_path.is_empty() {
+                serial_println!("run: missing operand (usage: run <file.pl|file.bin> [args...])");
+            } else if let Some(data) = crate::fs::fs_read(script_path) {
                 match crate::lang::run_pulse_auto(data, tsc_freq_hz) {
                     Ok(()) => {}
                     Err(err) => {
-                        crate::lang::print_compile_diagnostic(data, arg, &err);
+                        crate::lang::print_compile_diagnostic(data, script_path, &err);
                     }
                 }
             } else {
-                serial_println!("run: cannot access '{}': No such file or directory", arg);
+                serial_println!("run: cannot access '{}': No such file or directory", script_path);
             }
         }
 
@@ -787,15 +788,16 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "disasm" | "objdump" => {
-            if arg.is_empty() {
+            let file_path = arg.split_whitespace().next().unwrap_or("");
+            if file_path.is_empty() {
                 serial_println!("disasm: missing operand");
-            } else if let Some(data) = crate::fs::fs_read(arg) {
+            } else if let Some(data) = crate::fs::fs_read(file_path) {
                 if data.len() < crate::lang::PULSE_HEADER_SIZE || &data[0..4] != &crate::lang::PULSE_BIN_MAGIC {
-                    serial_println!("disasm: '{}' is not a valid PulseLang binary file", arg);
+                    serial_println!("disasm: '{}' is not a valid PulseLang binary file", file_path);
                 } else {
                     let code_len = u16::from_be_bytes([data[6], data[7]]) as usize;
                     let str_pool_len = u16::from_be_bytes([data[8], data[9]]) as usize;
-                    serial_println!("=== PulseLang Bytecode Disassembly: {} ===", arg);
+                    serial_println!("=== PulseLang Bytecode Disassembly: {} ===", file_path);
                     serial_println!("Magic: PULS | Version: 2 | Code: {} B | StringPool: {} B", code_len, str_pool_len);
                     serial_println!("OFFSET  OPCODE              OPERANDS");
                     serial_println!("---------------------------------------------------");

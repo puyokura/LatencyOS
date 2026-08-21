@@ -339,14 +339,15 @@ impl PulseEditor {
         let (row, col) = self.get_row_col();
         // Update top line
         serial_print!(
-            "\x1b[H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
+            "\x1b[1;1H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
             self.filename_str(),
             self.buf_len,
             row,
             col
         );
         // Move cursor to editing position
-        serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
+        let cursor_screen_row = core::cmp::min(row + 1, 22);
+        serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
     }
 
     // Function: redraw_current_line
@@ -358,145 +359,151 @@ impl PulseEditor {
 
         // Update top line
         serial_print!(
-            "\x1b[H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
+            "\x1b[1;1H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K",
             self.filename_str(),
             self.buf_len,
             row,
             col
         );
 
-        // Position at start of current row (row + 1 because top header is row 1)
-        serial_print!("\x1b[{};1H\x1b[90m{:3} |\x1b[0m ", row + 1, row);
+        let screen_row = row + 1;
+        if screen_row <= 22 {
+            // Position at start of current row
+            serial_print!("\x1b[{};1H\x1b[90m{:3} |\x1b[0m ", screen_row, row);
 
-        let mut line_end = self.buf_len;
-        for idx in line_start..self.buf_len {
-            if self.buffer[idx] == b'\n' {
-                line_end = idx;
-                break;
-            }
-        }
-
-        let mut in_comment = false;
-        let mut in_string = false;
-        let mut i = line_start;
-        while i < line_end {
-            let b = self.buffer[i];
-
-            if b == b'\t' {
-                serial_print!("    ");
-                i += 1;
-                continue;
-            }
-
-            if !in_string && b == b'/' && i + 1 < line_end && self.buffer[i + 1] == b'/' {
-                in_comment = true;
-                serial_print!("\x1b[90m");
-            }
-
-            if !in_comment && b == b'"' {
-                if in_string {
-                    serial_print!("\"\x1b[0m");
-                    in_string = false;
-                    i += 1;
-                    continue;
-                } else {
-                    in_string = true;
-                    serial_print!("\x1b[32m\"");
-                    i += 1;
-                    continue;
+            let mut line_end = self.buf_len;
+            for idx in line_start..self.buf_len {
+                if self.buffer[idx] == b'\n' {
+                    line_end = idx;
+                    break;
                 }
             }
 
-            if in_comment || in_string {
+            let mut in_comment = false;
+            let mut in_string = false;
+            let mut i = line_start;
+            while i < line_end {
+                let b = self.buffer[i];
+
+                if b == b'\t' {
+                    serial_print!("    ");
+                    i += 1;
+                    continue;
+                }
+
+                if !in_string && b == b'/' && i + 1 < line_end && self.buffer[i + 1] == b'/' {
+                    in_comment = true;
+                    serial_print!("\x1b[90m");
+                }
+
+                if !in_comment && b == b'"' {
+                    if in_string {
+                        serial_print!("\"\x1b[0m");
+                        in_string = false;
+                        i += 1;
+                        continue;
+                    } else {
+                        in_string = true;
+                        serial_print!("\x1b[32m\"");
+                        i += 1;
+                        continue;
+                    }
+                }
+
+                if in_comment || in_string {
+                    SERIAL.send_byte(b);
+                    i += 1;
+                    continue;
+                }
+
+                if b == b'@' {
+                    let len = self.get_word_len(i);
+                    serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                    i += len;
+                    continue;
+                }
+
+                if b == b'$' {
+                    let len = self.get_word_len(i);
+                    serial_print!("\x1b[1;32m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                    i += len;
+                    continue;
+                }
+
+                if b == b'#' {
+                    let len = self.get_word_len(i);
+                    serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
+                    i += len;
+                    continue;
+                }
+
+                if (b == b':' || b == b'+' || b == b'-') && i + 1 < line_end && self.buffer[i + 1] == b'=' {
+                    serial_print!("\x1b[1;33m{}{}\x1b[0m", b as char, '=' as char);
+                    i += 2;
+                    continue;
+                }
+
+                if b == b'|' && i + 1 < line_end && self.buffer[i + 1] == b'>' {
+                    serial_print!("\x1b[1;33m|>\x1b[0m");
+                    i += 2;
+                    continue;
+                }
+
+                if b.is_ascii_digit() {
+                    let len = self.get_time_literal_len(i);
+                    let actual_len = core::cmp::min(len, line_end - i);
+                    let is_time = actual_len > 2
+                        && (self.buffer[i + actual_len - 2..i + actual_len] == *b"us"
+                            || self.buffer[i + actual_len - 2..i + actual_len] == *b"ns"
+                            || self.buffer[i + actual_len - 2..i + actual_len] == *b"ms");
+                    if is_time {
+                        serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
+                    } else {
+                        serial_print!("\x1b[33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
+                    }
+                    i += actual_len;
+                    continue;
+                }
+
+                if b == b'{' || b == b'}' || b == b'(' || b == b')' || b == b'[' || b == b']' {
+                    serial_print!("\x1b[1;37m{}\x1b[0m", b as char);
+                    i += 1;
+                    continue;
+                }
+
                 SERIAL.send_byte(b);
                 i += 1;
-                continue;
             }
 
-            if b == b'@' {
-                let len = self.get_word_len(i);
-                serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
-                i += len;
-                continue;
-            }
-
-            if b == b'$' {
-                let len = self.get_word_len(i);
-                serial_print!("\x1b[1;32m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
-                i += len;
-                continue;
-            }
-
-            if b == b'#' {
-                let len = self.get_word_len(i);
-                serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..core::cmp::min(i + len, line_end)]).unwrap_or(""));
-                i += len;
-                continue;
-            }
-
-            if (b == b':' || b == b'+' || b == b'-') && i + 1 < line_end && self.buffer[i + 1] == b'=' {
-                serial_print!("\x1b[1;33m{}{}\x1b[0m", b as char, '=' as char);
-                i += 2;
-                continue;
-            }
-
-            if b == b'|' && i + 1 < line_end && self.buffer[i + 1] == b'>' {
-                serial_print!("\x1b[1;33m|>\x1b[0m");
-                i += 2;
-                continue;
-            }
-
-            if b.is_ascii_digit() {
-                let len = self.get_time_literal_len(i);
-                let actual_len = core::cmp::min(len, line_end - i);
-                let is_time = actual_len > 2
-                    && (self.buffer[i + actual_len - 2..i + actual_len] == *b"us"
-                        || self.buffer[i + actual_len - 2..i + actual_len] == *b"ns"
-                        || self.buffer[i + actual_len - 2..i + actual_len] == *b"ms");
-                if is_time {
-                    serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
-                } else {
-                    serial_print!("\x1b[33m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + actual_len]).unwrap_or(""));
-                }
-                i += actual_len;
-                continue;
-            }
-
-            if b == b'{' || b == b'}' || b == b'(' || b == b')' || b == b'[' || b == b']' {
-                serial_print!("\x1b[1;37m{}\x1b[0m", b as char);
-                i += 1;
-                continue;
-            }
-
-            SERIAL.send_byte(b);
-            i += 1;
+            // Clear rest of current line
+            serial_print!("\x1b[0m\x1b[K");
         }
 
-        // Clear rest of current line and reposition cursor
-        serial_print!("\x1b[0m\x1b[K\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
+        // Reposition cursor
+        let cursor_screen_row = core::cmp::min(row + 1, 22);
+        serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
         self.needs_redraw = false;
     }
 
     // Function: redraw
-    // Description: Render full editor screen smoothly using line-by-line clear (No \x1b[2J full-screen flash).
+    // Description: Render full editor screen smoothly with nano-style fixed bottom shortcuts bar and zero residual lines.
     // Worst-case execution time: ~40_000 ns
     pub fn redraw(&mut self) {
-        serial_print!("\x1b[H");
-
         let (row, col) = self.get_row_col();
 
-        // Top Status Header (Inverted Bar)
+        // 1. Top Status Header (Row 1)
         serial_print!(
-            "\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K\r\n",
+            "\x1b[1;1H\x1b[7m LatencyOS PulseEditor | File: {:16} | Size: {:4}B | Line: {:2} Col: {:2} \x1b[0m\x1b[K\r\n",
             self.filename_str(),
             self.buf_len,
             row,
             col
         );
 
-        // Render code lines with syntax coloring and line numbers
+        // 2. Render code lines (Rows 2..22)
         let mut line_num = 1;
-        serial_print!("\x1b[90m{:3} |\x1b[0m ", line_num);
+        let mut screen_row = 2;
+        serial_print!("\x1b[2;1H\x1b[90m{:3} |\x1b[0m ", line_num);
 
         let mut in_comment = false;
         let mut in_string = false;
@@ -507,9 +514,17 @@ impl PulseEditor {
 
             if b == b'\n' {
                 line_num += 1;
+                screen_row += 1;
                 in_comment = false;
                 in_string = false;
-                serial_print!("\x1b[0m\x1b[K\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
+                if screen_row <= 22 {
+                    serial_print!("\x1b[0m\x1b[K\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
+                }
+                i += 1;
+                continue;
+            }
+
+            if screen_row > 22 {
                 i += 1;
                 continue;
             }
@@ -610,20 +625,33 @@ impl PulseEditor {
             i += 1;
         }
 
-        // Empty bottom line and status bar
-        serial_print!("\x1b[0m\x1b[K\r\n\r\n");
-        let status = self.status_str();
-        if !status.is_empty() {
-            serial_print!("\x1b[33m[MSG] {}\x1b[0m\x1b[K\r\n", status);
-        } else {
-            serial_print!("\x1b[K\r\n");
+        // Clear remaining characters on the last rendered code line
+        if screen_row <= 22 {
+            serial_print!("\x1b[0m\x1b[K\r\n");
+            screen_row += 1;
         }
 
-        // Footer Navigation Bar
-        serial_print!("\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J");
+        // 3. Fill any unused rows up to row 22 (nano-style empty lines)
+        while screen_row <= 22 {
+            serial_print!("\x1b[{};1H\x1b[90m  ~ |\x1b[0m \x1b[K\r\n", screen_row);
+            screen_row += 1;
+        }
 
-        // Reposition terminal cursor at the exact editing position and make it visible
-        serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
+        // 4. Fixed Row 23: Status Message Line
+        serial_print!("\x1b[23;1H");
+        let status = self.status_str();
+        if !status.is_empty() {
+            serial_print!("\x1b[33m[MSG] {}\x1b[0m\x1b[K", status);
+        } else {
+            serial_print!("\x1b[K");
+        }
+
+        // 5. Fixed Row 24: Nano-style Keybinding Footer Bar (Pinned at Screen Bottom)
+        serial_print!("\x1b[24;1H\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J");
+
+        // 6. Reposition terminal cursor at current editing position and make visible
+        let cursor_screen_row = core::cmp::min(row + 1, 22);
+        serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
 
         self.needs_redraw = false;
     }
@@ -958,6 +986,13 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 } else if params[0] == 200 || params[0] == 201 {
                                     structure_changed = true;
                                 }
+                                EDITOR.esc_state = EditorEscState::Normal;
+                            }
+
+                            // VT100 DCH (Delete Character)
+                            b'P' => {
+                                EDITOR.delete_char_under_cursor();
+                                structure_changed = true;
                                 EDITOR.esc_state = EditorEscState::Normal;
                             }
 

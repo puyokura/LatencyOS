@@ -151,7 +151,14 @@ $tsc := @tsc();
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 "#;
 
-        // 6. readme.txt - Plain text guide
+        // 6. echo.pl - Quick message printer script
+        let echo_src = br#"// echo.pl - Simple PulseLang Echo Script
+@contract: @wcet(1us) @budget(10us);
+@println("LatencyOS PulseLang Real-Time Script Engine Active");
+"#;
+        let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
+
+        // 7. readme.txt - Plain text guide
         let readme_txt = br#"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)
 ===================================================
 - Files are statically allocated in L1/L2 cache with zero fragmentation.

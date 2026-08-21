@@ -654,12 +654,31 @@ fn test_editor_delete(kernel_elf: &Path) {
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
-    // Send 30 backspaces to delete line 4 and line 3
-    for _ in 0..30 {
+    // Move cursor to Line 1 (Up 3 times, Home)
+    tcp_stream.write_all(b"\x1b[A\x1b[A\x1b[A\x1b[H").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Send DELETE key (\x1b[3~) 7 times to delete "Line 1 "
+    for _ in 0..7 {
+        tcp_stream.write_all(b"\x1b[3~").unwrap();
+    }
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Move to end of file (Down 3 times, End), send 25 Backspaces to delete line 4 and 3
+    tcp_stream.write_all(b"\x1b[B\x1b[B\x1b[B\x1b[F").unwrap();
+    for _ in 0..25 {
         tcp_stream.write_all(&[0x08]).unwrap();
     }
     tcp_stream.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Check that nano-style bottom bar \x1b[24;1H is rendered
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(full_output.contains("\x1b[24;1H\x1b[7m [^S / F2 Save]"), "Missing nano-style fixed bottom shortcuts bar at row 24!");
 
     // Save and Quit
     tcp_stream.write_all(&[0x13]).unwrap(); // ^S
@@ -679,16 +698,29 @@ fn test_editor_delete(kernel_elf: &Path) {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
-
     println!("[xtask-test] Result file content:\n{}", full_output);
 
-    assert!(full_output.contains("Line 1 Alpha"), "Missing Line 1 Alpha");
+    assert!(full_output.contains("Beta"), "Missing Beta after DELETE key deletion");
+    assert!(!full_output.contains("Line 2 Beta"), "DELETE key failed to delete 'Line 2 ' prefix!");
     assert!(!full_output.contains("Gamma"), "Ghost character 'Gamma' was not cleanly deleted!");
     assert!(!full_output.contains("Delta"), "Ghost character 'Delta' was not cleanly deleted!");
 
-    println!("[xtask-test] === TEST PASSED: Editor delete cleans all lines with 0 leftover ghost characters! ===");
+    // Test: run echo.pl "text" with arguments
+    full_output.clear();
+    println!("[xtask-test] Running: run echo.pl \"text\"");
+    tcp_stream.write_all(b"run echo.pl \"text\"\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run echo.pl output:\n{}", full_output);
+    assert!(full_output.contains("LatencyOS PulseLang Real-Time Script Engine Active"), "Failed to run echo.pl with args");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    println!("[xtask-test] === TEST PASSED: Nano-style bottom bar, DELETE key, and script argument execution verified! ===");
 }
 
 fn check_versions() {

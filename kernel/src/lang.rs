@@ -1278,6 +1278,8 @@ impl<'a> Compiler<'a> {
 // Real-Time Bytecode Virtual Machine
 // -----------------------------------------------------------------------------
 
+pub const STR_TAG: i64 = 0x4000_0000_0000_0000;
+
 pub struct VM<'a> {
     code: &'a [u8],
     str_pool: &'a [u8],
@@ -1461,7 +1463,7 @@ impl<'a> VM<'a> {
                     let offset = u16::from_be_bytes([self.code[self.ip], self.code[self.ip + 1]]) as usize;
                     let len = u16::from_be_bytes([self.code[self.ip + 2], self.code[self.ip + 3]]) as usize;
                     self.ip += 4;
-                    let encoded = ((offset as i64) << 32) | (len as i64);
+                    let encoded = STR_TAG | (((offset as u64) as i64) << 32) | ((len as u64) as i64);
                     self.push(encoded)?;
                 }
 
@@ -1474,9 +1476,10 @@ impl<'a> VM<'a> {
                         NATIVE_PRINT => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val >> 32) != 0 && (val as u32) < MAX_STRING_POOL as u32 {
-                                    let offset = (val >> 32) as usize;
-                                    let len = (val & 0xFFFFFFFF) as usize;
+                                if (val & STR_TAG) != 0 {
+                                    let raw = val & !STR_TAG;
+                                    let offset = (raw >> 32) as usize;
+                                    let len = (raw & 0xFFFF_FFFF) as usize;
                                     if offset + len <= self.str_pool.len() {
                                         if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
                                             serial_print!("{}", s);
@@ -1492,9 +1495,10 @@ impl<'a> VM<'a> {
                         NATIVE_PRINTLN => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val >> 32) != 0 && (val as u32) < MAX_STRING_POOL as u32 {
-                                    let offset = (val >> 32) as usize;
-                                    let len = (val & 0xFFFFFFFF) as usize;
+                                if (val & STR_TAG) != 0 {
+                                    let raw = val & !STR_TAG;
+                                    let offset = (raw >> 32) as usize;
+                                    let len = (raw & 0xFFFF_FFFF) as usize;
                                     if offset + len <= self.str_pool.len() {
                                         if let Ok(s) = core::str::from_utf8(&self.str_pool[offset..offset + len]) {
                                             serial_println!("{}", s);
