@@ -186,6 +186,25 @@ fn main() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral local port");
     let port = listener.local_addr().expect("Failed to get port").port();
 
+    let mut smp_val = "4".to_string();
+    let mut mem_val = "128M".to_string();
+    let mut extra_args = Vec::new();
+
+    let mut args_iter = env::args().skip(1);
+    while let Some(arg) = args_iter.next() {
+        if arg == "-smp" || arg == "--smp" || arg == "--cores" {
+            if let Some(val) = args_iter.next() {
+                smp_val = val;
+            }
+        } else if arg == "-m" || arg == "--mem" {
+            if let Some(val) = args_iter.next() {
+                mem_val = val;
+            }
+        } else {
+            extra_args.push(arg);
+        }
+    }
+
     let mut cmd = Command::new(&qemu_exe);
     cmd.current_dir(&target_dir)
         .arg("-kernel")
@@ -193,9 +212,9 @@ fn main() {
         .arg("-cpu")
         .arg("max")
         .arg("-smp")
-        .arg("4")
+        .arg(&smp_val)
         .arg("-m")
-        .arg("128M")
+        .arg(&mem_val)
         .arg("-netdev")
         .arg("user,id=net0")
         .arg("-device")
@@ -213,7 +232,7 @@ fn main() {
     }
 
     // Forward additional CLI flags if specified
-    for arg in env::args().skip(1) {
+    for arg in extra_args {
         cmd.arg(arg);
     }
 

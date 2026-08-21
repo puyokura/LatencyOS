@@ -22,6 +22,7 @@ mod serial;
 mod shell;
 mod smp;
 mod tsc;
+pub mod vfs;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;

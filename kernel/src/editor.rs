@@ -762,6 +762,48 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                 structure_changed = true;
                             }
 
+                            // Ctrl+Y: Page Up (20 lines up)
+                            0x19 => {
+                                for _ in 0..20 {
+                                    EDITOR.move_cursor_up();
+                                }
+                                structure_changed = true;
+                            }
+
+                            // Ctrl+V: Page Down (20 lines down)
+                            0x16 => {
+                                for _ in 0..20 {
+                                    EDITOR.move_cursor_down();
+                                }
+                                structure_changed = true;
+                            }
+
+                            // Ctrl+K: Cut current line
+                            0x0B => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                let mut end = start;
+                                while end < EDITOR.buf_len && EDITOR.buffer[end] != b'\n' {
+                                    end += 1;
+                                }
+                                if end < EDITOR.buf_len && EDITOR.buffer[end] == b'\n' {
+                                    end += 1;
+                                }
+                                let count = end - start;
+                                if count > 0 {
+                                    EDITOR.cursor = start;
+                                    for i in start..EDITOR.buf_len - count {
+                                        EDITOR.buffer[i] = EDITOR.buffer[i + count];
+                                    }
+                                    EDITOR.buf_len -= count;
+                                }
+                                structure_changed = true;
+                            }
+
+                            // Ctrl+U: Uncut (Redraw)
+                            0x15 => {
+                                structure_changed = true;
+                            }
+
                             // Tab: Insert 4 spaces
                             b'\t' => {
                                 EDITOR.insert_str(b"    ");
@@ -1020,6 +1062,16 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
                                     }
                                     EDITOR.cursor = end;
                                     cursor_only = true;
+                                } else if params[0] == 5 { // Page Up (5~)
+                                    for _ in 0..20 {
+                                        EDITOR.move_cursor_up();
+                                    }
+                                    structure_changed = true;
+                                } else if params[0] == 6 { // Page Down (6~)
+                                    for _ in 0..20 {
+                                        EDITOR.move_cursor_down();
+                                    }
+                                    structure_changed = true;
                                 } else if params[0] == 200 || params[0] == 201 {
                                     structure_changed = true;
                                 }

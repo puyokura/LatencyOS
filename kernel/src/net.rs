@@ -206,6 +206,10 @@ pub fn stream_send_frame(
 
     let key = Aes128Key::new(&STATIC_MASTER_KEY);
 
+    if frame.phys_addr < 0x1000 || frame.size == 0 || frame.size > 16 * 1024 * 1024 {
+        return Ok(0);
+    }
+
     // Frame data slice (zero-copy pointer)
     let frame_slice = unsafe {
         core::slice::from_raw_parts(frame.phys_addr as *const u8, frame.size)

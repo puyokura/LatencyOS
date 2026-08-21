@@ -770,19 +770,20 @@ pub enum HandleState {
     Consumed,
 }
 
+pub static mut COMPILER_CODE: [u8; MAX_BYTECODE_SIZE] = [0; MAX_BYTECODE_SIZE];
+pub static mut COMPILER_STR_POOL: [u8; MAX_STRING_POOL] = [0; MAX_STRING_POOL];
+pub static mut COMPILER_CONST_POOL: [i64; MAX_CONST_POOL] = [0; MAX_CONST_POOL];
+pub static mut COMPILER_VAR_NAMES: [[u8; 16]; MAX_VARS] = [[0; 16]; MAX_VARS];
+
 pub struct Compiler<'a> {
     src: &'a [u8],
     tokens: &'a [Token],
     current: usize,
-    pub code: [u8; MAX_BYTECODE_SIZE],
     pub code_len: usize,
-    var_names: [[u8; 16]; MAX_VARS],
     var_lens: [usize; MAX_VARS],
     var_regs: [u8; MAX_VARS],
     var_count: usize,
-    pub str_pool: [u8; MAX_STRING_POOL],
     pub str_pool_len: usize,
-    pub const_pool: [i64; MAX_CONST_POOL],
     pub const_pool_len: usize,
     temp_depth: u8,
     handle_states: [HandleState; 4],
@@ -790,19 +791,23 @@ pub struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     pub fn new(src: &'a [u8], tokens: &'a [Token]) -> Self {
+        unsafe {
+            COMPILER_CODE.fill(0);
+            COMPILER_STR_POOL.fill(0);
+            COMPILER_CONST_POOL.fill(0);
+            for v in COMPILER_VAR_NAMES.iter_mut() {
+                v.fill(0);
+            }
+        }
         Self {
             src,
             tokens,
             current: 0,
-            code: [0; MAX_BYTECODE_SIZE],
             code_len: 0,
-            var_names: [[0; 16]; MAX_VARS],
             var_lens: [0; MAX_VARS],
             var_regs: [0; MAX_VARS],
             var_count: 0,
-            str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
-            const_pool: [0; MAX_CONST_POOL],
             const_pool_len: 0,
             temp_depth: 0,
             handle_states: [HandleState::Unallocated; 4],
@@ -831,24 +836,26 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn add_constant(&mut self, val: i64) -> Result<u16, CompileError> {
-        for i in 0..self.const_pool_len {
-            if self.const_pool[i] == val {
-                return Ok(i as u16);
+        unsafe {
+            for i in 0..self.const_pool_len {
+                if COMPILER_CONST_POOL[i] == val {
+                    return Ok(i as u16);
+                }
             }
+            if self.const_pool_len >= MAX_CONST_POOL {
+                return Err(self.error(
+                    "ERR_CONST_POOL_FULL",
+                    "64-bit constant pool exhausted (64 entries limit reached)",
+                    "Fewer unique 64-bit constants",
+                    "Constant Pool Allocation",
+                    "Reduce large constant literals",
+                ));
+            }
+            let idx = self.const_pool_len;
+            COMPILER_CONST_POOL[idx] = val;
+            self.const_pool_len += 1;
+            Ok(idx as u16)
         }
-        if self.const_pool_len >= MAX_CONST_POOL {
-            return Err(self.error(
-                "ERR_CONST_POOL_FULL",
-                "64-bit constant pool exhausted (64 entries limit reached)",
-                "Fewer unique 64-bit constants",
-                "Constant Pool Allocation",
-                "Reduce large constant literals",
-            ));
-        }
-        let idx = self.const_pool_len;
-        self.const_pool[idx] = val;
-        self.const_pool_len += 1;
-        Ok(idx as u16)
     }
 
     fn peek(&self) -> Token {
@@ -910,10 +917,12 @@ impl<'a> Compiler<'a> {
             ));
         }
         let pos = self.code_len;
-        self.code[pos] = op;
-        self.code[pos + 1] = rd;
-        self.code[pos + 2] = rs1;
-        self.code[pos + 3] = rs2;
+        unsafe {
+            COMPILER_CODE[pos] = op;
+            COMPILER_CODE[pos + 1] = rd;
+            COMPILER_CODE[pos + 2] = rs1;
+            COMPILER_CODE[pos + 3] = rs2;
+        }
         self.code_len += 4;
         Ok(pos)
     }
@@ -923,8 +932,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn patch_imm16(&mut self, pos: usize, imm: u16) {
-        self.code[pos + 2] = (imm >> 8) as u8;
-        self.code[pos + 3] = (imm & 0xFF) as u8;
+        unsafe {
+            COMPILER_CODE[pos + 2] = (imm >> 8) as u8;
+            COMPILER_CODE[pos + 3] = (imm & 0xFF) as u8;
+        }
     }
 
     fn resolve_var(&mut self, tok: Token) -> Result<u8, CompileError> {
@@ -953,30 +964,32 @@ impl<'a> Compiler<'a> {
             _ => {}
         }
 
-        for i in 0..self.var_count {
-            if self.var_lens[i] == name.len() && &self.var_names[i][..self.var_lens[i]] == name {
-                return Ok(self.var_regs[i]);
+        unsafe {
+            for i in 0..self.var_count {
+                if self.var_lens[i] == name.len() && &COMPILER_VAR_NAMES[i][..self.var_lens[i]] == name {
+                    return Ok(self.var_regs[i]);
+                }
             }
-        }
 
-        if self.var_count >= 13 {
-            return Err(self.error(
-                "ERR_MAX_VARS_EXCEEDED",
-                "Maximum distinct variables limit reached (13 general-purpose registers)",
-                "Reuse existing $variables or registers ($rax, $rcx, etc.)",
-                "Register Allocation",
-                "Reduce distinct variable count in script",
-            ));
-        }
+            if self.var_count >= 13 {
+                return Err(self.error(
+                    "ERR_MAX_VARS_EXCEEDED",
+                    "Maximum distinct variables limit reached (13 general-purpose registers)",
+                    "Reuse existing $variables or registers ($rax, $rcx, etc.)",
+                    "Register Allocation",
+                    "Reduce distinct variable count in script",
+                ));
+            }
 
-        let reg = (1 + self.var_count) as u8; // Map user variables to $rcx ($r1) through $r13 ($r13)
-        let idx = self.var_count;
-        let len = core::cmp::min(name.len(), 16);
-        self.var_names[idx][..len].copy_from_slice(&name[..len]);
-        self.var_lens[idx] = len;
-        self.var_regs[idx] = reg;
-        self.var_count += 1;
-        Ok(reg)
+            let reg = (1 + self.var_count) as u8; // Map user variables to $rcx ($r1) through $r13 ($r13)
+            let idx = self.var_count;
+            let len = core::cmp::min(name.len(), 16);
+            COMPILER_VAR_NAMES[idx][..len].copy_from_slice(&name[..len]);
+            self.var_lens[idx] = len;
+            self.var_regs[idx] = reg;
+            self.var_count += 1;
+            Ok(reg)
+        }
     }
 
     // Function: compile
@@ -1541,7 +1554,9 @@ impl<'a> Compiler<'a> {
                     ));
                 }
                 let offset = self.str_pool_len;
-                self.str_pool[offset..offset + s.len()].copy_from_slice(s);
+                unsafe {
+                    COMPILER_STR_POOL[offset..offset + s.len()].copy_from_slice(s);
+                }
                 self.str_pool_len += s.len();
 
                 self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, s.len() as u8)?;
@@ -2313,38 +2328,46 @@ impl<'a> VM<'a> {
     }
 }
 
+static mut COMPILER_TOKENS: [Token; MAX_TOKENS] = [Token::empty(); MAX_TOKENS];
+
 // Function: run_pulse_script
 // Description: Compile and execute a PulseLang script using the px64 architecture engine.
 // Worst-case execution time: ~100_000 ns
 pub fn run_pulse_script(src: &[u8], tsc_freq_hz: u64) -> Result<(), CompileError> {
-    let mut tokens = [Token::empty(); MAX_TOKENS];
+    let tokens = unsafe { &mut COMPILER_TOKENS };
+    for tok in tokens.iter_mut() {
+        *tok = Token::empty();
+    }
     let mut lexer = Lexer::new(src);
-    let _tok_count = lexer.tokenize(&mut tokens)?;
+    let _tok_count = lexer.tokenize(tokens)?;
 
-    let mut compiler = Compiler::new(src, &tokens);
+    let mut compiler = Compiler::new(src, tokens);
     let code_len = compiler.compile()?;
 
     let mut vm = PX64VM::new(
-        &compiler.code[..code_len],
-        &compiler.str_pool[..compiler.str_pool_len],
-        &compiler.const_pool[..compiler.const_pool_len],
+        unsafe { &COMPILER_CODE[..code_len] },
+        unsafe { &COMPILER_STR_POOL[..compiler.str_pool_len] },
+        unsafe { &COMPILER_CONST_POOL[..compiler.const_pool_len] },
     );
     vm.run(tsc_freq_hz)
 }
 
-pub const PULSE_BIN_MAGIC: [u8; 4] = *b"PULS";
-pub const PULSE_BIN_VERSION: u16 = 2;
-pub const PULSE_HEADER_SIZE: usize = 12;
+pub const PULSE_BIN_MAGIC: [u8; 4] = *b"PX64";
+pub const PULSE_BIN_VERSION: u16 = 3;
+pub const PULSE_HEADER_SIZE: usize = 16;
 
 // Function: compile_pulse_to_binary
 // Description: Compile PulseLang source code into px64 binary format (PX64).
 // Worst-case execution time: ~50_000 ns
 pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, CompileError> {
-    let mut tokens = [Token::empty(); MAX_TOKENS];
+    let tokens = unsafe { &mut COMPILER_TOKENS };
+    for tok in tokens.iter_mut() {
+        *tok = Token::empty();
+    }
     let mut lexer = Lexer::new(src);
-    let _tok_count = lexer.tokenize(&mut tokens)?;
+    let _tok_count = lexer.tokenize(tokens)?;
 
-    let mut compiler = Compiler::new(src, &tokens);
+    let mut compiler = Compiler::new(src, tokens);
     let code_len = compiler.compile()?;
     let str_pool_len = compiler.str_pool_len;
     let const_pool_count = compiler.const_pool_len;
@@ -2368,11 +2391,11 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     out_buf[14..16].fill(0); // Reserved
 
     // Payload: Code + String Pool + Constant Pool
-    out_buf[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
-    out_buf[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len].copy_from_slice(&compiler.str_pool[..str_pool_len]);
+    out_buf[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len].copy_from_slice(unsafe { &COMPILER_CODE[..code_len] });
+    out_buf[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len].copy_from_slice(unsafe { &COMPILER_STR_POOL[..str_pool_len] });
 
     let const_start = PX64_HEADER_SIZE + code_len + str_pool_len;
-    for (i, &c) in compiler.const_pool[..const_pool_count].iter().enumerate() {
+    for (i, &c) in unsafe { &COMPILER_CONST_POOL[..const_pool_count] }.iter().enumerate() {
         out_buf[const_start + i * 8..const_start + (i + 1) * 8].copy_from_slice(&c.to_be_bytes());
     }
 

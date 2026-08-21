@@ -67,8 +67,8 @@ impl SerialPort {
             outb(self.base + 1, 0x00);
             // 8 bits, no parity, 1 stop bit (8N1)
             outb(self.base + 3, 0x03);
-            // Enable FIFO, clear TX/RX queues, 14-byte threshold (0xC7) for maximum burst throughput
-            outb(self.base + 2, 0xC7);
+            // Enable FIFO, clear TX/RX queues, 1-byte threshold (0x07) for immediate byte availability
+            outb(self.base + 2, 0x07);
             // Set RTS/DSR, Auxiliary Output 2 (0x0B)
             outb(self.base + 4, 0x0B);
         }
@@ -81,9 +81,11 @@ impl SerialPort {
     pub unsafe fn drain_rx_internal(&self) {
         while (inb(self.base + 5) & 0x01) != 0 {
             let b = inb(self.base);
-            let next_head = (RX_HEAD + 1) % RX_BUF_SIZE;
-            if next_head != RX_TAIL {
-                RX_BUFFER[RX_HEAD] = b;
+            let head = RX_HEAD % RX_BUF_SIZE;
+            let tail = RX_TAIL % RX_BUF_SIZE;
+            let next_head = (head + 1) % RX_BUF_SIZE;
+            if next_head != tail {
+                RX_BUFFER[head] = b;
                 RX_HEAD = next_head;
             }
         }
@@ -129,7 +131,7 @@ impl SerialPort {
     pub fn is_data_ready(&self) -> bool {
         unsafe {
             self.drain_rx_internal();
-            RX_HEAD != RX_TAIL
+            (RX_HEAD % RX_BUF_SIZE) != (RX_TAIL % RX_BUF_SIZE)
         }
     }
 
@@ -140,9 +142,11 @@ impl SerialPort {
     pub fn read_byte_nonblocking(&self) -> Option<u8> {
         unsafe {
             self.drain_rx_internal();
-            if RX_HEAD != RX_TAIL {
-                let b = RX_BUFFER[RX_TAIL];
-                RX_TAIL = (RX_TAIL + 1) % RX_BUF_SIZE;
+            let head = RX_HEAD % RX_BUF_SIZE;
+            let tail = RX_TAIL % RX_BUF_SIZE;
+            if head != tail {
+                let b = RX_BUFFER[tail];
+                RX_TAIL = (tail + 1) % RX_BUF_SIZE;
                 Some(b)
             } else {
                 None

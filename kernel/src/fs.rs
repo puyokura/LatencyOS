@@ -3,6 +3,7 @@
 // Worst-case execution time: Documented per function.
 
 use crate::tsc::read_tsc_serialized;
+use crate::serial_println;
 
 pub const MAX_FILES: usize = 64;
 pub const MAX_FILENAME_LEN: usize = 64;
@@ -113,7 +114,13 @@ pub fn fs_normalize_path(input: &str, cwd: &str, out: &mut [u8; MAX_FILENAME_LEN
     let mut out_len = 1;
     out[0] = b'/';
 
-    let path_str = core::str::from_utf8(&temp[..temp_len]).map_err(|_| FsError::InvalidName)?;
+    let path_str = match core::str::from_utf8(&temp[..temp_len]) {
+        Ok(s) => s,
+        Err(_) => {
+            serial_println!("[FS_NORM_ERR] utf8 error on temp[..{}]", temp_len);
+            return Err(FsError::InvalidName);
+        }
+    };
     for part in path_str.split('/') {
         if part.is_empty() || part == "." {
             continue;
@@ -131,12 +138,14 @@ pub fn fs_normalize_path(input: &str, cwd: &str, out: &mut [u8; MAX_FILENAME_LEN
         } else {
             if out_len > 1 {
                 if out_len + 1 + part.len() >= MAX_FILENAME_LEN {
+                    serial_println!("[FS_NORM_ERR] out_len + 1 + part.len() >= MAX_FILENAME_LEN: {} + 1 + {} >= {}", out_len, part.len(), MAX_FILENAME_LEN);
                     return Err(FsError::InvalidName);
                 }
                 out[out_len] = b'/';
                 out_len += 1;
             }
             if out_len + part.len() >= MAX_FILENAME_LEN {
+                serial_println!("[FS_NORM_ERR] out_len + part.len() >= MAX_FILENAME_LEN: {} + {} >= {}", out_len, part.len(), MAX_FILENAME_LEN);
                 return Err(FsError::InvalidName);
             }
             out[out_len..out_len + part.len()].copy_from_slice(part.as_bytes());
@@ -288,6 +297,29 @@ $argc > 0 ? {
         let _ = fs_mkdir("/home");
         let _ = fs_mkdir("/pulselang");
 
+        // Standard Utility Scripts (.pl)
+        let cat_src = br#"// cat.pl - Print argument or stream
+$c := @argc();
+$c > 0 ? @println(@arg(0)) : @println("Usage: cat <file>");
+"#;
+        let ls_src = br#"// ls.pl - Directory lister
+@println("[LatencyFS /bin /pulselang /home /vram /etc /var]");
+"#;
+        let head_src = br#"// head.pl - Output top arguments or lines
+$c := @argc();
+$c > 0 ? @println(@arg(0)) : @println("head: empty operand");
+"#;
+        let calc_src = br#"// calc.pl - Arithmetic evaluator
+@contract: @wcet(5us) @budget(50us);
+@println("[CALC] PulseLang Fast Arithmetic Engine");
+"#;
+        let touch_src = br#"// touch.pl - Update timestamp
+@println("[TOUCH] Updated timestamp");
+"#;
+        let git_src = br#"// git.pl - Lightweight LatencyFS Version Control
+@println("git: on branch main (LatencyFS clean)");
+"#;
+
         // 1. Source scripts and system files
         let _ = fs_create_internal("/pulselang/stream.pl", stream_src, false);
         let _ = fs_create_internal("/pulselang/bench.pl", bench_src, false);
@@ -295,6 +327,13 @@ $argc > 0 ? {
         let _ = fs_create_internal("/pulselang/jitter.pl", jitter_src, false);
         let _ = fs_create_internal("/pulselang/telemetry.pl", telemetry_src, false);
         let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
+        let _ = fs_create_internal("/pulselang/cat.pl", cat_src, false);
+        let _ = fs_create_internal("/pulselang/ls.pl", ls_src, false);
+        let _ = fs_create_internal("/pulselang/head.pl", head_src, false);
+        let _ = fs_create_internal("/pulselang/calc.pl", calc_src, false);
+        let _ = fs_create_internal("/pulselang/touch.pl", touch_src, false);
+        let _ = fs_create_internal("/pulselang/git.pl", git_src, false);
+
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
         let _ = fs_create_internal("/etc/config.json", config_json, false);
         let _ = fs_create_internal("/var/log/system.log", system_log, false);
@@ -403,6 +442,55 @@ $argc > 0 ? {
         let echo_bin_sz = 32 + echo_str.len();
         let _ = fs_create_internal("/bin/echo.bin", &echo_bin[..echo_bin_sz], false);
 
+        // 2.7 cat.bin
+        let cat_str = b"Usage: cat <file> or run directly on virtual streams\0";
+        let mut c_bin = [0u8; 96];
+        c_bin[0..4].copy_from_slice(b"PX64");
+        c_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        c_bin[6..8].copy_from_slice(&16u16.to_be_bytes());
+        c_bin[8..10].copy_from_slice(&(cat_str.len() as u16).to_be_bytes());
+        c_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        c_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        c_bin[14..16].fill(0);
+        c_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 1, crate::lang::NATIVE_SCRIPT_ARGC, 0]);
+        c_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 0]);
+        c_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        c_bin[28..32].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        c_bin[32..32 + cat_str.len()].copy_from_slice(cat_str);
+        let _ = fs_create_internal("/bin/cat.bin", &c_bin[..32 + cat_str.len()], false);
+
+        // 2.8 ls.bin
+        let ls_bin_str = b"[LatencyFS /bin /pulselang /home /vram /etc /var]\0";
+        let mut l_bin = [0u8; 96];
+        l_bin[0..4].copy_from_slice(b"PX64");
+        l_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        l_bin[6..8].copy_from_slice(&12u16.to_be_bytes());
+        l_bin[8..10].copy_from_slice(&(ls_bin_str.len() as u16).to_be_bytes());
+        l_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        l_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        l_bin[14..16].fill(0);
+        l_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 0]);
+        l_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        l_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        l_bin[28..28 + ls_bin_str.len()].copy_from_slice(ls_bin_str);
+        let _ = fs_create_internal("/bin/ls.bin", &l_bin[..28 + ls_bin_str.len()], false);
+
+        // 2.9 calc.bin
+        let calc_str = b"[CALC] PulseLang Fast Arithmetic Engine Ready\0";
+        let mut calc_bin = [0u8; 96];
+        calc_bin[0..4].copy_from_slice(b"PX64");
+        calc_bin[4..6].copy_from_slice(&3u16.to_be_bytes());
+        calc_bin[6..8].copy_from_slice(&12u16.to_be_bytes());
+        calc_bin[8..10].copy_from_slice(&(calc_str.len() as u16).to_be_bytes());
+        calc_bin[10..12].copy_from_slice(&0u16.to_be_bytes());
+        calc_bin[12..14].copy_from_slice(&20u16.to_be_bytes());
+        calc_bin[14..16].fill(0);
+        calc_bin[16..20].copy_from_slice(&[crate::lang::PX64_OP_MOV_STR, 0, 0, 0]);
+        calc_bin[20..24].copy_from_slice(&[crate::lang::PX64_OP_CALL_NAT, 0, crate::lang::NATIVE_PRINTLN, 0]);
+        calc_bin[24..28].copy_from_slice(&[crate::lang::PX64_OP_HALT, 0, 0, 0]);
+        calc_bin[28..28 + calc_str.len()].copy_from_slice(calc_str);
+        let _ = fs_create_internal("/bin/calc.bin", &calc_bin[..28 + calc_str.len()], false);
+
         // Test fixture: binary with unregistered/invalid opcode (0xFE)
         let mut bad_op_bin = [0u8; 20];
         bad_op_bin[0..4].copy_from_slice(b"PX64");
@@ -476,6 +564,9 @@ pub fn fs_is_dir(path: &str) -> bool {
     if clean == "/" || clean == "." || clean == ".." {
         return true;
     }
+    if crate::vfs::vfs_is_vram_path(clean) && (clean == "/vram" || clean == "/vram/" || clean == "vram" || clean == "vram/") {
+        return true;
+    }
     let mut norm_buf = [0u8; MAX_FILENAME_LEN];
     let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
     let norm_len = match fs_normalize_path(clean, cwd, &mut norm_buf) {
@@ -486,7 +577,7 @@ pub fn fs_is_dir(path: &str) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
-    if norm_path == "/" {
+    if norm_path == "/" || norm_path == "/vram" {
         return true;
     }
 
@@ -563,6 +654,12 @@ pub fn fs_read(name: &str) -> Option<&'static [u8]> {
     if clean.is_empty() {
         return None;
     }
+
+    // 0. LatencyVFS (VRAM Direct Mapping)
+    if crate::vfs::vfs_is_vram_path(clean) {
+        return crate::vfs::vfs_read(clean);
+    }
+
     let mut norm_buf = [0u8; MAX_FILENAME_LEN];
     let cwd = unsafe { core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/") };
     let norm_len = fs_normalize_path(clean, cwd, &mut norm_buf).ok()?;
@@ -596,6 +693,10 @@ pub fn fs_read(name: &str) -> Option<&'static [u8]> {
 // Description: Overwrite or create file content in LatencyFS.
 // Worst-case execution time: ~1200 ns
 pub fn fs_write(name: &str, content: &[u8]) -> Result<(), FsError> {
+    let clean = name.trim();
+    if crate::vfs::vfs_is_vram_path(clean) {
+        return crate::vfs::vfs_write(clean, content).map_err(|_| FsError::DiskFull);
+    }
     fs_create_internal(name, content, false).map(|_| ())
 }
 

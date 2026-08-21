@@ -187,7 +187,9 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
                 CORE_LOOP_COUNT[idx].fetch_add(1, Ordering::Relaxed);
                 let freq = crate::tsc::GLOBAL_TSC_FREQ_HZ.load(Ordering::Relaxed);
                 crate::shell::poll_shell(freq);
-                core::hint::spin_loop();
+                for _ in 0..16 {
+                    core::hint::spin_loop();
+                }
             }
         }
 
@@ -218,7 +220,9 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
                     slot_id = ((slot_id as usize + 1) % NUM_FRAME_SLOTS) as u8;
                 }
 
-                core::hint::spin_loop();
+                for _ in 0..16 {
+                    core::hint::spin_loop();
+                }
             }
         }
 
@@ -237,9 +241,11 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
 
                     // Forward to Network Domain via SPSC Ring Buffer
                     let _ = ENCODE_TO_NET_RING.push(frame_handle);
+                } else {
+                    for _ in 0..16 {
+                        core::hint::spin_loop();
+                    }
                 }
-
-                core::hint::spin_loop();
             }
         }
 
@@ -268,9 +274,11 @@ pub fn run_role_loop(core_id: u8, role: CoreRole) -> ! {
                         NETWORK_FRAMES_SENT.fetch_add(1, Ordering::Release);
                         LAST_NET_BYTES_SENT.store(bytes as u64, Ordering::Relaxed);
                     }
+                } else {
+                    for _ in 0..16 {
+                        core::hint::spin_loop();
+                    }
                 }
-
-                core::hint::spin_loop();
             }
         }
     }
