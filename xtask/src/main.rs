@@ -900,6 +900,51 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] run telemetry output:\n{}", full_output);
     assert!(full_output.contains("[HEALTH]"), "Failed to execute px64 telemetry script");
 
+    // Test 6: Pure arithmetic infinite loop -> ERR_PX64_WCET_EXCEEDED (10,000 steps triggered)
+    full_output.clear();
+    println!("[xtask-test] Creating and running pure arithmetic infinite loop (/loop_calc.pl)...");
+    tcp_stream.write_all(b"edit /loop_calc.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"let $a = 0;\r\nwhile (1) {\r\n  $a += 1;\r\n}\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    tcp_stream.write_all(b"run /loop_calc.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run /loop_calc.pl output:\n{}", full_output);
+    assert!(full_output.contains("ERR_PX64_WCET_EXCEEDED"), "Pure arithmetic loop must trigger ERR_PX64_WCET_EXCEEDED at 10,000 steps");
+
+    // Test 7: Adversarial @capture() infinite loop -> ERR_PX64_TIMEOUT_EXCEEDED (5.0ms wall-clock timeout triggered)
+    full_output.clear();
+    println!("[xtask-test] Creating and running adversarial @capture() infinite loop (/loop_cap.pl)...");
+    tcp_stream.write_all(b"edit /loop_cap.pl\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"while (1) {\r\n  let $f = @capture();\r\n}\r\n").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
+    std::thread::sleep(Duration::from_millis(200));
+    while let Ok(_) = rx.try_recv() {}
+
+    full_output.clear();
+    let cap_start = Instant::now();
+    tcp_stream.write_all(b"run /loop_cap.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    let cap_elapsed = cap_start.elapsed();
+    println!("[xtask-test] run /loop_cap.pl output:\n{}", full_output);
+    println!("[xtask-test] Elapsed host time for /loop_cap.pl: {:?}", cap_elapsed);
+    assert!(full_output.contains("ERR_PX64_TIMEOUT_EXCEEDED"), "Adversarial @capture() loop must trigger ERR_PX64_TIMEOUT_EXCEEDED at wall-clock deadline");
+
     let _ = child.kill();
     let _ = child.wait();
 

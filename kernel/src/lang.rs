@@ -16,6 +16,7 @@ pub const MAX_BYTECODE_SIZE: usize = 1024;
 pub const MAX_VARS: usize = 32;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;
+pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 5_000_000; // 5.0 ms (5,000,000 ns) wall-clock hard limit
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -1410,9 +1411,25 @@ impl<'a> PX64VM<'a> {
     // Description: Execute px64 32-bit fixed instructions with zero heap allocations and bounded WCET.
     // Worst-case execution time: ~60_000 ns
     pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
+        let start_tsc = read_tsc_serialized();
+        let timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
         let mut steps = 0;
 
-        while self.ip + 4 <= self.code.len() && steps < MAX_VM_STEPS {
+        while self.ip + 4 <= self.code.len() {
+            if steps >= MAX_VM_STEPS {
+                return Err(CompileError::simple(
+                    "ERR_PX64_WCET_EXCEEDED",
+                    "Execution exceeded px64 WCET instruction step limit (infinite loop protection)",
+                ));
+            }
+
+            if read_tsc_serialized() > timeout_tsc {
+                return Err(CompileError::simple(
+                    "ERR_PX64_TIMEOUT_EXCEEDED",
+                    "Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)",
+                ));
+            }
+
             steps += 1;
             let op = self.code[self.ip];
             let rd = self.code[self.ip + 1] as usize;
@@ -1725,8 +1742,24 @@ impl<'a> VM<'a> {
     }
 
     pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
+        let start_tsc = read_tsc_serialized();
+        let timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
         let mut steps = 0;
-        while self.ip < self.code.len() && steps < MAX_VM_STEPS {
+        while self.ip < self.code.len() {
+            if steps >= MAX_VM_STEPS {
+                return Err(CompileError::simple(
+                    "ERR_PX64_WCET_EXCEEDED",
+                    "Execution exceeded px64 WCET instruction step limit (infinite loop protection)",
+                ));
+            }
+
+            if read_tsc_serialized() > timeout_tsc {
+                return Err(CompileError::simple(
+                    "ERR_PX64_TIMEOUT_EXCEEDED",
+                    "Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)",
+                ));
+            }
+
             steps += 1;
             let op = self.code[self.ip];
             self.ip += 1;
