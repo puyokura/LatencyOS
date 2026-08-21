@@ -1,5 +1,4 @@
 use std::env;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -165,9 +164,13 @@ where
     f()
 }
 
+
 fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Option<String> {
     let qemu = find_tool("qemu-system-x86_64");
     println!("[xtask] Launching QEMU with kernel: {}", kernel_elf.display());
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
 
     save_and_restore_console_mode(|| {
         let mut cmd = Command::new(&qemu);
@@ -175,8 +178,10 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .arg(kernel_elf)
             .arg("-cpu")
             .arg("max")
+            .arg("-chardev")
+            .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
             .arg("-serial")
-            .arg("stdio")
+            .arg("chardev:ser0")
             .arg("-display")
             .arg("none")
             .arg("-no-reboot")
@@ -188,24 +193,59 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .arg("user,id=net0")
             .arg("-device")
             .arg("e1000,netdev=net0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .env("PATH", get_augmented_path());
 
+        let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
+
+        // Accept connection from QEMU serial socket
+        let (tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+        let _ = tcp_stream.set_nodelay(true);
+
         if !capture_output {
-            let status = cmd.status().expect("Failed to run QEMU");
+            use std::io::{Read, Write};
+            let mut s_read = tcp_stream.try_clone().expect("Failed to clone TCP stream");
+            let mut s_write = tcp_stream;
+
+            // Spawn socket -> stdout forwarder thread
+            std::thread::spawn(move || {
+                let mut out = std::io::stdout();
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = s_read.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    let _ = out.write_all(&buf[..n]);
+                    let _ = out.flush();
+                }
+            });
+
+            // Interactive stdin -> socket forwarder thread
+            std::thread::spawn(move || {
+                let mut input = std::io::stdin();
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = input.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    if s_write.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                    let _ = s_write.flush();
+                }
+            });
+
+            let status = child.wait().expect("Failed to wait on QEMU");
             println!("[xtask] QEMU exited with status: {}", status);
             None
         } else {
-            cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::piped());
-
-            let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
-            let stdout = child.stdout.take().expect("Failed to capture stdout");
-            let reader = BufReader::new(stdout);
-
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(tcp_stream);
             let mut output_lines = Vec::new();
             let start_time = Instant::now();
 
-            // Read lines in non-blocking fashion with timeout
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 for line in reader.lines() {
@@ -223,7 +263,6 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
                     let is_complete = line.contains("LatencyOS 0.0.5") || line.contains("[c0|") || line.contains("latencyos") || line.contains("initialization complete");
                     output_lines.push(line);
                     if is_complete {
-                        // Small delay to allow prompt to output
                         std::thread::sleep(Duration::from_millis(300));
                         break;
                     }
@@ -247,18 +286,18 @@ fn test_paste(kernel_elf: &Path) {
     let qemu = find_tool("qemu-system-x86_64");
     println!("[xtask] Running automated paste test with kernel: {}", kernel_elf.display());
 
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+
     let mut cmd = Command::new(&qemu);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x00000200);
-    }
     cmd.arg("-kernel")
         .arg(kernel_elf)
         .arg("-cpu")
         .arg("max")
+        .arg("-chardev")
+        .arg(format!("socket,id=ser0,host=127.0.0.1,port={},server=off,reconnect-ms=100", port))
         .arg("-serial")
-        .arg("stdio")
+        .arg("chardev:ser0")
         .arg("-display")
         .arg("none")
         .arg("-no-reboot")
@@ -270,23 +309,25 @@ fn test_paste(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .env("PATH", get_augmented_path());
 
     let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
-    let mut stdin = child.stdin.take().expect("Failed to open stdin");
-    let mut stdout = child.stdout.take().expect("Failed to open stdout");
 
-    use std::io::Write;
-    use std::io::Read;
+    // Accept connection from QEMU serial socket
+    let (mut tcp_stream, _) = listener.accept().expect("Failed to accept QEMU serial connection");
+    let _ = tcp_stream.set_nodelay(true);
+    let mut tcp_read = tcp_stream.try_clone().expect("Failed to clone stream");
+
+    use std::io::{Read, Write};
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = [0u8; 1024];
         loop {
-            match stdout.read(&mut buf) {
+            match tcp_read.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     if tx.send(buf[..n].to_vec()).is_err() {
@@ -313,14 +354,6 @@ fn test_paste(kernel_elf: &Path) {
         false
     };
 
-    let write_paced = |w: &mut std::process::ChildStdin, data: &[u8]| {
-        for chunk in data.chunks(8) {
-            w.write_all(chunk).unwrap();
-            w.flush().unwrap();
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    };
-
     println!("[xtask-test] Waiting for shell prompt...");
     if !wait_for("[c0|", 10, &mut full_output) {
         let _ = child.kill();
@@ -331,7 +364,8 @@ fn test_paste(kernel_elf: &Path) {
     // Send edit command
     println!("[xtask-test] Opening editor: edit /home/paste_test.pl");
     full_output.clear();
-    write_paced(&mut stdin, b"edit /home/paste_test.pl\r\n");
+    tcp_stream.write_all(b"edit /home/paste_test.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
 
     if !wait_for("PulseEditor", 5, &mut full_output) {
         let _ = child.kill();
@@ -339,22 +373,40 @@ fn test_paste(kernel_elf: &Path) {
     }
     println!("[xtask-test] PulseEditor is open!");
 
-    // Multi-line PulseLang script test
-    let test_script = "@contract: @wcet(100us) @budget(500us);\r\n@pipeline: StreamNetwork @budget(5ms);\r\n$sum := 0;\r\n$rtt := @rtt();\r\n#f := @capture();\r\n@println(\"Pasting worked perfectly!\");\r\n";
+    // Multi-line large PulseLang script test with comments and headers
+    let test_script = concat!(
+        "// ========================================================\r\n",
+        "// PulseLang v2 High-Performance Streaming Benchmark Script\r\n",
+        "// ========================================================\r\n",
+        "@contract: @wcet(100us) @budget(500us);\r\n",
+        "@pipeline: StreamNetwork @budget(5ms);\r\n",
+        "\r\n",
+        "$frame_count := 0;\r\n",
+        "$sum_latency := 0;\r\n",
+        "\r\n",
+        "#f := @capture();\r\n",
+        "$rtt := @rtt();\r\n",
+        "@println(\"Pasting long code worked completely with zero loss!\");\r\n",
+        "// End of Script\r\n"
+    );
 
-    println!("[xtask-test] Pasting multi-line PulseLang code into editor...");
+    println!("[xtask-test] Pasting large multi-line PulseLang script in a single burst...");
     full_output.clear();
-    write_paced(&mut stdin, test_script.as_bytes());
-    std::thread::sleep(Duration::from_millis(300));
+    // Write ALL bytes in a single write call over TCP to test flow control buffer
+    tcp_stream.write_all(test_script.as_bytes()).unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
 
     // Send Save (^S = 0x13)
     println!("[xtask-test] Sending Save (^S)...");
-    write_paced(&mut stdin, &[0x13]);
-    std::thread::sleep(Duration::from_millis(100));
+    tcp_stream.write_all(&[0x13]).unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(150));
 
     // Send Quit (^Q = 0x11)
     println!("[xtask-test] Sending Quit (^Q)...");
-    write_paced(&mut stdin, &[0x11]);
+    tcp_stream.write_all(&[0x11]).unwrap();
+    tcp_stream.flush().unwrap();
 
     if !wait_for("[c0|", 5, &mut full_output) {
         let _ = child.kill();
@@ -364,8 +416,9 @@ fn test_paste(kernel_elf: &Path) {
     // Inspect file content with cat
     println!("[xtask-test] Running: cat /home/paste_test.pl");
     full_output.clear();
-    write_paced(&mut stdin, b"cat /home/paste_test.pl\r\n");
-    std::thread::sleep(Duration::from_millis(300));
+    tcp_stream.write_all(b"cat /home/paste_test.pl\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
@@ -374,16 +427,18 @@ fn test_paste(kernel_elf: &Path) {
     let _ = child.wait();
 
     println!("[xtask-test] File content output:\n{}", full_output);
-    if full_output.contains("@contract:")
-        && full_output.contains("@wcet(100us)")
-        && full_output.contains("@pipeline:")
-        && full_output.contains("$sum := 0;")
+    if full_output.contains("// ========================================================")
+        && full_output.contains("// PulseLang v2 High-Performance Streaming Benchmark Script")
+        && full_output.contains("@contract: @wcet(100us) @budget(500us);")
+        && full_output.contains("@pipeline: StreamNetwork @budget(5ms);")
+        && full_output.contains("$frame_count := 0;")
         && full_output.contains("$rtt := @rtt();")
-        && full_output.contains("@println(\"Pasting worked perfectly!\");")
+        && full_output.contains("@println(\"Pasting long code worked completely with zero loss!\");")
+        && full_output.contains("// End of Script")
     {
-        println!("[xtask-test] === TEST PASSED: Multi-line PulseLang code was completely pasted and saved! ===");
+        println!("[xtask-test] === TEST PASSED: Long code with comments and headers was 100% completely pasted and saved! ===");
     } else {
-        panic!("[xtask-test] === TEST FAILED: Missing lines in file content! Output was: {} ===", full_output);
+        panic!("[xtask-test] === TEST FAILED: Long code was truncated! Output was:\n{} ===", full_output);
     }
 }
 
