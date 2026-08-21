@@ -620,7 +620,7 @@ impl PulseEditor {
         }
 
         // Footer Navigation Bar
-        serial_print!("\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J\r\n");
+        serial_print!("\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J");
 
         // Reposition terminal cursor at the exact editing position and make it visible
         serial_print!("\x1b[{};{}H\x1b[?25h", row + 1, col + 6);
