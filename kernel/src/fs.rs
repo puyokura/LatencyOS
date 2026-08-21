@@ -172,10 +172,12 @@ pub fn fs_init() {
         // 1. stream.pl - Ultra-low-latency pipeline stream script
         let stream_src = br#"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
+@contract: @wcet(100us) @budget(500us);
+
 @on_vblank: {
     #f := @capture();
     @within(500us) {
-        $rtt := @rtt();
+        let $rtt = @rtt();
         $rtt > 200us ? @rate(80) : @rate(100);
         @send(#f);
     } !drop;
@@ -185,12 +187,14 @@ pub fn fs_init() {
         // 2. bench.pl - Micro-benchmark script
         let bench_src = br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
 @contract: @wcet(5us) @budget(50us);
-$t0 := @tsc();
-$sum := 0;
+
+let $t0 = @tsc();
+let mut $sum = 0;
 for $i in 0..100 {
     $sum += $i * 2;
 }
-$dt := @tsc() - $t0;
+let $dt = @tsc() - $t0;
+
 @println("[BENCH] Iterations: 100");
 @println("[RESULT] Sum:");
 @println($sum);
@@ -201,38 +205,41 @@ $dt := @tsc() - $t0;
         // 3. filter.pl - Packet filter and congestion controller
         let filter_src = br#"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
 @contract: @wcet(2us) @budget(100us);
-$rtt := @rtt();
+
+let $rtt = @rtt();
 @println("[FILTER] Measured RTT (ns):");
 @println($rtt);
-$rtt > 300us ? {
+if ($rtt > 300us) {
     @println("[ACTION] Congestion detected -> Rate: 60%");
     @rate(60);
-} : {
+} else {
     @println("[ACTION] Optimal latency -> Rate: 100%");
     @rate(100);
-};
+}
 "#;
 
         // 4. jitter.pl - Jitter analysis measuring cycle delta
         let jitter_src = br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
-$t1 := @tsc();
-$t2 := @tsc();
-$delta := $t2 - $t1;
+
+let $t1 = @tsc();
+let $t2 = @tsc();
+let $delta = $t2 - $t1;
 @println("[JITTER] Consecutive TSC Delta (Cycles):");
 @println($delta);
-$delta < 100 ? {
+if ($delta < 100) {
     @println("[STATUS] Determinism: Optimal (<100 cycles)");
-} : {
+} else {
     @println("[STATUS] Determinism: Jitter detected");
-};
+}
 "#;
 
         // 5. telemetry.pl - Real-Time Telemetry and Hardware Inspector
         let telemetry_src = br#"// telemetry.pl - Real-Time Hardware Telemetry
 @contract: @wcet(2us) @budget(20us);
-$rtt := @rtt();
-$tsc := @tsc();
+
+let $rtt = @rtt();
+let $tsc = @tsc();
 @println("=== LatencyOS Telemetry ===");
 @print("TSC: ");
 @println($tsc);
@@ -243,18 +250,21 @@ $tsc := @tsc();
         // 6. echo.pl - Quick message printer script with argument support
         let echo_src = br#"// echo.pl - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
-$argc := @argc();
-$argc > 0 ? {
-    $i := 0;
+
+let $argc = @argc();
+if ($argc > 0) {
+    let mut $i = 0;
     @while($i < $argc) {
         @print(@arg($i));
         $i += 1;
-        $i < $argc ? @print(" ") : @print("");
+        if ($i < $argc) {
+            @print(" ");
+        }
     }
     @println("");
-} : {
+} else {
     @println("LatencyOS PulseLang Real-Time Script Engine Active");
-};
+}
 "#;
 
         // 7. readme.txt - Plain text guide
@@ -299,24 +309,43 @@ $argc > 0 ? {
 
         // Standard Utility Scripts (.pl)
         let cat_src = br#"// cat.pl - Print argument or stream
-$c := @argc();
-$c > 0 ? @println(@arg(0)) : @println("Usage: cat <file>");
+@contract: @wcet(2us) @budget(20us);
+
+let $c = @argc();
+if ($c > 0) {
+    @println(@arg(0));
+} else {
+    @println("Usage: cat <file>");
+}
 "#;
         let ls_src = br#"// ls.pl - Directory lister
+@contract: @wcet(2us) @budget(20us);
+
 @println("[LatencyFS /bin /pulselang /home /vram /etc /var]");
 "#;
         let head_src = br#"// head.pl - Output top arguments or lines
-$c := @argc();
-$c > 0 ? @println(@arg(0)) : @println("head: empty operand");
+@contract: @wcet(2us) @budget(20us);
+
+let $c = @argc();
+if ($c > 0) {
+    @println(@arg(0));
+} else {
+    @println("head: empty operand");
+}
 "#;
         let calc_src = br#"// calc.pl - Arithmetic evaluator
 @contract: @wcet(5us) @budget(50us);
+
 @println("[CALC] PulseLang Fast Arithmetic Engine");
 "#;
         let touch_src = br#"// touch.pl - Update timestamp
+@contract: @wcet(2us) @budget(20us);
+
 @println("[TOUCH] Updated timestamp");
 "#;
         let git_src = br#"// git.pl - Lightweight LatencyFS Version Control
+@contract: @wcet(2us) @budget(20us);
+
 @println("git: on branch main (LatencyFS clean)");
 "#;
 
@@ -336,18 +365,21 @@ $c > 0 ? @println(@arg(0)) : @println("head: empty operand");
 
         let for_test_src = br#"// for_test.pl - Static Range For Loop Verification
 @contract: @wcet(10us) @budget(50us);
-$sum := 0;
+
+let mut $sum = 0;
 for $i in 0..10 {
     $sum += $i;
 }
 @println("[FOR_TEST] Sum 0..10:");
 @println($sum);
+@assert($sum == 45);
 "#;
         let _ = fs_create_internal("/pulselang/for_test.pl", for_test_src, false);
 
         let err_for_wcet_src = br#"// err_for_wcet.pl - Intentional Loop Bound Exceeded
 @contract: @wcet(100us) @budget(500us);
-$sum := 0;
+
+let mut $sum = 0;
 for $i in 0..3000 {
     $sum += $i;
 }
@@ -431,7 +463,7 @@ fn add($a, $b) -> i64 {
     return $a + $b;
 }
 
-fn clamp($val, $min_val, $max_val) -> i64 {
+fn clamp($val, $min_val, $max_val) -> i64 @requires($min_val <= $max_val) {
     if ($val < $min_val) {
         return $min_val;
     }
