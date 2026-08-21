@@ -100,8 +100,9 @@ $argc > 0 ? {
 
 ## 3. AI 向け機械可読エラー診断フォーマット
 
-コンパイルエラー発生時、PulseLang は AI エージェントが自律修復可能な構造化ログを出力します：
+エラー発生時、PulseLang は AI エージェントが自律修復可能な構造化ログを出力します。構文解析エラーと実行時エラー（タイムアウト・WCET超過等）でテンプレートが分離されています：
 
+### 3.1 コンパイル時構文エラー診断フォーマット
 ```text
 ==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
 [ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN
@@ -120,6 +121,20 @@ $argc > 0 ? {
   00000020: 28 35 30 30 75 73 29 3b 0a 24 78 20 3a 3d 20 3a  |(500us);.$x := :|
   00000030: 3d 20 34 32 3b 0a                                |= 42;.|
 [AI_REPAIR_HINT]: Replace invalid token with a valid variable name, number, or expression
+=============================================================================================
+```
+
+### 3.2 実行時エラー・タイムアウト診断フォーマット
+```text
+==================== [PULSELANG RUNTIME ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
+[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED
+[MESSAGE]: Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)
+[FILE]: /loop_cap.pl
+[EXECUTION_DOMAIN]: px64 Real-Time Register Virtual Machine
+[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation
+[TIMEOUT_LIMIT]: 5,000,000 ns (5.0 ms wall-clock)
+[ROOT_CAUSE]: Script execution exceeded 5.0ms wall-clock threshold (infinite loop or long-running intrinsics)
+[AI_REPAIR_HINT]: Bound while loops with finite counter or insert @within temporal deadline guards
 =============================================================================================
 ```
 

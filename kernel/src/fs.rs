@@ -143,12 +143,11 @@ $delta < 100 ? {
 @contract: @wcet(2us) @budget(20us);
 $rtt := @rtt();
 $tsc := @tsc();
-@println("=== LatencyOS Hardware Telemetry ===");
-@println("[CLOCK] Serialized TSC Ticks:");
+@println("=== LatencyOS Telemetry ===");
+@print("TSC: ");
 @println($tsc);
-@println("[NET] Active Round-Trip Time (ns):");
+@print("RTT(ns): ");
 @println($rtt);
-$rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 "#;
 
         // 6. echo.pl - Quick message printer script with argument support

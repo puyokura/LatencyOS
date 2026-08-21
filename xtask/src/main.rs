@@ -897,8 +897,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
-    println!("[xtask-test] run telemetry output:\n{}", full_output);
-    assert!(full_output.contains("[HEALTH]"), "Failed to execute px64 telemetry script");
+    assert!(full_output.contains("LatencyOS Telemetry"), "Failed to execute px64 telemetry script");
 
     // Test 6: Pure arithmetic infinite loop -> ERR_PX64_WCET_EXCEEDED (10,000 steps triggered)
     full_output.clear();

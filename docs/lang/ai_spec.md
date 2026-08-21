@@ -99,8 +99,9 @@ $argc > 0 ? {
 
 ## 3. AI-Actionable Machine-Readable Diagnostic Format
 
-When compilation fails, PulseLang emits structured, deterministic diagnostic logs specifically engineered for autonomous AI agents to repair code without human intervention:
+When an error occurs, PulseLang emits structured, deterministic diagnostic logs specifically engineered for autonomous AI agents to repair code without human intervention. Compile-time syntax errors and runtime VM execution faults use distinct, specialized templates:
 
+### 3.1 Compile-Time Syntax Diagnostic Format
 ```text
 ==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
 [ERROR_CODE]: <Machine readable error identifier: e.g. ERR_SYNTAX_UNEXPECTED_TOKEN>
@@ -118,6 +119,20 @@ When compilation fails, PulseLang emits structured, deterministic diagnostic log
 [HEX_DUMP (offset 0x...)]:
   <Hex and ASCII bytes around error offset>
 [AI_REPAIR_HINT]: <Precise, actionable repair recipe for the AI agent>
+=============================================================================================
+```
+
+### 3.2 Runtime Execution & Timeout Diagnostic Format
+```text
+==================== [PULSELANG RUNTIME ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
+[ERROR_CODE]: ERR_PX64_TIMEOUT_EXCEEDED
+[MESSAGE]: Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)
+[FILE]: <Target file path>
+[EXECUTION_DOMAIN]: px64 Real-Time Register Virtual Machine
+[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation
+[TIMEOUT_LIMIT]: 5,000,000 ns (5.0 ms wall-clock)
+[ROOT_CAUSE]: Script execution exceeded 5.0ms wall-clock threshold (infinite loop or long-running intrinsics)
+[AI_REPAIR_HINT]: Bound while loops with finite counter or insert @within temporal deadline guards
 =============================================================================================
 ```
 

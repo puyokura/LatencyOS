@@ -155,9 +155,14 @@ impl CompileError {
 }
 
 // Function: print_compile_diagnostic
-// Description: Emit comprehensive, structured, AI-actionable compiler diagnostic log.
+// Description: Emit comprehensive, structured, AI-actionable compiler or runtime diagnostic log.
 // Worst-case execution time: ~20_000 ns
 pub fn print_compile_diagnostic(src: &[u8], filename: &str, err: &CompileError) {
+    if is_runtime_error(err.code) {
+        print_runtime_diagnostic(filename, err);
+        return;
+    }
+
     serial_println!("==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================");
     serial_println!("[ERROR_CODE]: {}", err.code);
     serial_println!("[MESSAGE]: {}", err.message);
@@ -183,6 +188,50 @@ pub fn print_compile_diagnostic(src: &[u8], filename: &str, err: &CompileError) 
     print_byte_hex_dump(src, hex_start, hex_end);
 
     serial_println!("[AI_REPAIR_HINT]: {}", err.suggestion);
+    serial_println!("=============================================================================================");
+}
+
+fn is_runtime_error(code: &str) -> bool {
+    code.starts_with("ERR_PX64_") || code.starts_with("ERR_BINARY_") || code.starts_with("ERR_VM_")
+}
+
+fn print_runtime_diagnostic(filename: &str, err: &CompileError) {
+    serial_println!("==================== [PULSELANG RUNTIME ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================");
+    serial_println!("[ERROR_CODE]: {}", err.code);
+    serial_println!("[MESSAGE]: {}", err.message);
+    serial_println!("[FILE]: {}", filename);
+    serial_println!("[EXECUTION_DOMAIN]: px64 Real-Time Register Virtual Machine");
+
+    match err.code {
+        "ERR_PX64_TIMEOUT_EXCEEDED" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Wall-Clock Watchdog Deadline Violation");
+            serial_println!("[TIMEOUT_LIMIT]: 5,000,000 ns (5.0 ms wall-clock)");
+            serial_println!("[ROOT_CAUSE]: Script execution exceeded 5.0ms wall-clock threshold (infinite loop or long-running intrinsics)");
+            serial_println!("[AI_REPAIR_HINT]: Bound while loops with finite counter or insert @within temporal deadline guards");
+        }
+        "ERR_PX64_WCET_EXCEEDED" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Instruction Step Limit Exceeded");
+            serial_println!("[STEP_LIMIT]: 10,000 instruction steps (MAX_VM_STEPS)");
+            serial_println!("[ROOT_CAUSE]: Pure arithmetic or branching loop executed without terminating within 10,000 steps");
+            serial_println!("[AI_REPAIR_HINT]: Ensure loop condition decrements towards termination condition within 10,000 steps");
+        }
+        "ERR_BINARY_VERSION_MISMATCH" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Binary Version Incompatibility");
+            serial_println!("[EXPECTED_VERSION]: PX64 Version 2");
+            serial_println!("[ROOT_CAUSE]: Binary was compiled with an incompatible or outdated toolchain version");
+            serial_println!("[AI_REPAIR_HINT]: Recompile source file with 'compile <src.pl> <dst.bin>'");
+        }
+        "ERR_BINARY_TRUNCATED" => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Truncated Binary Payload");
+            serial_println!("[ROOT_CAUSE]: Binary file payload is smaller than declared header code + string pool length");
+            serial_println!("[AI_REPAIR_HINT]: Re-generate binary artifact or check file system storage integrity");
+        }
+        _ => {
+            serial_println!("[RUNTIME_FAULT_CATEGORY]: Virtual Machine Execution Fault");
+            serial_println!("[ROOT_CAUSE]: Invalid instruction opcode or VM state corruption");
+            serial_println!("[AI_REPAIR_HINT]: Recompile source file or inspect binary with 'disasm <file.bin>'");
+        }
+    }
     serial_println!("=============================================================================================");
 }
 
