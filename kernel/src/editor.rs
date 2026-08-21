@@ -852,6 +852,43 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                     EditorEscState::Ss3 => {
                         match b {
+                            b'A' => {
+                                EDITOR.move_cursor_up();
+                                cursor_only = true;
+                            }
+                            b'B' => {
+                                EDITOR.move_cursor_down();
+                                cursor_only = true;
+                            }
+                            b'C' => {
+                                if EDITOR.cursor < EDITOR.buf_len {
+                                    EDITOR.cursor += 1;
+                                }
+                                cursor_only = true;
+                            }
+                            b'D' => {
+                                if EDITOR.cursor > 0 {
+                                    EDITOR.cursor -= 1;
+                                }
+                                cursor_only = true;
+                            }
+                            b'H' => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                EDITOR.cursor = start;
+                                cursor_only = true;
+                            }
+                            b'F' => {
+                                let (start, _) = EDITOR.get_current_line_start_and_col();
+                                let mut end = EDITOR.buf_len;
+                                for i in start..EDITOR.buf_len {
+                                    if EDITOR.buffer[i] == b'\n' {
+                                        end = i;
+                                        break;
+                                    }
+                                }
+                                EDITOR.cursor = end;
+                                cursor_only = true;
+                            }
                             b'Q' => { // F2: Save
                                 EDITOR.save_file();
                                 structure_changed = true;
@@ -880,7 +917,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                             // Up Arrow
                             b'A' => {
-                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                let is_ctrl = params[0] == 1 && params[1] == 5;
                                 if is_ctrl {
                                     for _ in 0..5 {
                                         EDITOR.move_cursor_up();
@@ -894,7 +931,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                             // Down Arrow
                             b'B' => {
-                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                let is_ctrl = params[0] == 1 && params[1] == 5;
                                 if is_ctrl {
                                     for _ in 0..5 {
                                         EDITOR.move_cursor_down();
@@ -908,7 +945,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                             // Right Arrow / Ctrl+Right
                             b'C' => {
-                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                let is_ctrl = params[0] == 1 && params[1] == 5;
                                 if is_ctrl {
                                     EDITOR.move_word_right();
                                 } else if EDITOR.cursor < EDITOR.buf_len {
@@ -920,7 +957,7 @@ pub fn start_editor(filename: &str, tsc_freq_hz: u64) {
 
                             // Left Arrow / Ctrl+Left
                             b'D' => {
-                                let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                                let is_ctrl = params[0] == 1 && params[1] == 5;
                                 if is_ctrl {
                                     EDITOR.move_word_left();
                                 } else if EDITOR.cursor > 0 {

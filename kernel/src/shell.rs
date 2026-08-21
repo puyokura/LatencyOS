@@ -32,6 +32,7 @@ pub const HISTORY_SIZE: usize = 8;
 enum EscapeState {
     Normal,
     Esc,
+    Ss3,
     Csi {
         params: [u16; 4],
         param_count: usize,
@@ -50,8 +51,8 @@ static mut HISTORY_IDX: usize = 0;
 
 static mut LAST_CMD_LATENCY_NS: u64 = 18;
 static mut PROMPT_SHOWN: bool = false;
-static mut CURRENT_DIR: [u8; 64] = *b"/\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
-static mut CURRENT_DIR_LEN: usize = 1;
+pub static mut CURRENT_DIR: [u8; 64] = *b"/\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+pub static mut CURRENT_DIR_LEN: usize = 1;
 
 // Function: print_formatted_time
 // Description: Print human-readable time (ns, us, ms, s, m s) without float allocations.
@@ -309,9 +310,65 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             params: [0; 4],
                             param_count: 0,
                         };
+                    } else if b == b'O' {
+                        ESC_STATE = EscapeState::Ss3;
                     } else {
                         ESC_STATE = EscapeState::Normal;
                     }
+                }
+
+                EscapeState::Ss3 => {
+                    match b {
+                        b'A' => {
+                            if HISTORY_COUNT > 0 && HISTORY_IDX > 0 {
+                                HISTORY_IDX -= 1;
+                                let slot = HISTORY_IDX % HISTORY_SIZE;
+                                let len = HISTORY_LENS[slot];
+                                LINE_BUF[..len].copy_from_slice(&HISTORY[slot][..len]);
+                                LINE_LEN = len;
+                                CURSOR_POS = len;
+                                needs_redraw = true;
+                            }
+                        }
+                        b'B' => {
+                            if HISTORY_IDX + 1 < HISTORY_COUNT {
+                                HISTORY_IDX += 1;
+                                let slot = HISTORY_IDX % HISTORY_SIZE;
+                                let len = HISTORY_LENS[slot];
+                                LINE_BUF[..len].copy_from_slice(&HISTORY[slot][..len]);
+                                LINE_LEN = len;
+                                CURSOR_POS = len;
+                                needs_redraw = true;
+                            } else {
+                                HISTORY_IDX = HISTORY_COUNT;
+                                LINE_LEN = 0;
+                                CURSOR_POS = 0;
+                                needs_redraw = true;
+                            }
+                        }
+                        b'C' => {
+                            if CURSOR_POS < LINE_LEN {
+                                CURSOR_POS += 1;
+                                needs_redraw = true;
+                            }
+                        }
+                        b'D' => {
+                            if CURSOR_POS > 0 {
+                                CURSOR_POS -= 1;
+                                needs_redraw = true;
+                            }
+                        }
+                        b'H' => {
+                            CURSOR_POS = 0;
+                            needs_redraw = true;
+                        }
+                        b'F' => {
+                            CURSOR_POS = LINE_LEN;
+                            needs_redraw = true;
+                        }
+                        _ => {}
+                    }
+                    ESC_STATE = EscapeState::Normal;
                 }
 
                 EscapeState::Csi { ref mut params, ref mut param_count } => {
@@ -363,7 +420,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
                         // Right Arrow / Ctrl+Right
                         b'C' => {
-                            let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                            let is_ctrl = params[0] == 1 && params[1] == 5;
                             if is_ctrl {
                                 move_word_right();
                             } else if CURSOR_POS < LINE_LEN {
@@ -375,7 +432,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
                         // Left Arrow / Ctrl+Left
                         b'D' => {
-                            let is_ctrl = (params[0] == 1 && params[1] == 5) || params[0] == 5;
+                            let is_ctrl = params[0] == 1 && params[1] == 5;
                             if is_ctrl {
                                 move_word_left();
                             } else if CURSOR_POS > 0 {
@@ -419,8 +476,19 @@ pub fn poll_shell(tsc_freq_hz: u64) {
                             ESC_STATE = EscapeState::Normal;
                         }
 
+                        // VT100 DCH
+                        b'P' => {
+                            if CURSOR_POS < LINE_LEN {
+                                for i in CURSOR_POS..LINE_LEN - 1 {
+                                    LINE_BUF[i] = LINE_BUF[i + 1];
+                                }
+                                LINE_LEN -= 1;
+                                needs_redraw = true;
+                            }
+                            ESC_STATE = EscapeState::Normal;
+                        }
+
                         _ => {
-                            // Any unexpected character terminates CSI sequence cleanly without leaking
                             ESC_STATE = EscapeState::Normal;
                         }
                     }
@@ -731,6 +799,17 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             if script_path.is_empty() {
                 serial_println!("run: missing operand (usage: run <file.pl|file.bin> [args...])");
             } else if let Some(data) = crate::fs::fs_read(script_path) {
+                // Collect script arguments
+                let mut script_args = [""; 8];
+                let mut argc = 0;
+                while let Some(a) = parts.next() {
+                    if argc < 8 {
+                        script_args[argc] = a;
+                        argc += 1;
+                    }
+                }
+                crate::lang::set_script_args(&script_args[..argc]);
+
                 match crate::lang::run_pulse_auto(data, tsc_freq_hz) {
                     Ok(()) => {}
                     Err(err) => {
@@ -870,6 +949,8 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                                         5 => "@rate",
                                         6 => "@capture",
                                         7 => "@send",
+                                        8 => "@argc",
+                                        9 => "@arg",
                                         _ => "unknown",
                                     };
                                     serial_println!("{:04x}:   OP_CALL_NATIVE      {} (argc: {})", op_ip, name, argc);

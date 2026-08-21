@@ -151,10 +151,21 @@ $tsc := @tsc();
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 "#;
 
-        // 6. echo.pl - Quick message printer script
-        let echo_src = br#"// echo.pl - Simple PulseLang Echo Script
-@contract: @wcet(1us) @budget(10us);
-@println("LatencyOS PulseLang Real-Time Script Engine Active");
+        // 6. echo.pl - Quick message printer script with argument support
+        let echo_src = br#"// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+@contract: @wcet(2us) @budget(20us);
+$argc := @argc();
+$argc > 0 ? {
+    $i := 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        $i < $argc ? @print(" ") : @print("");
+    }
+    @println("");
+} : {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+};
 "#;
         let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
 
@@ -333,24 +344,68 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
 // Description: Read file contents from LatencyFS with path fallback.
 // Worst-case execution time: ~500 ns
 pub fn fs_read(name: &str) -> Option<&'static [u8]> {
+    let clean = name.trim();
+    if clean.is_empty() {
+        return None;
+    }
     unsafe {
         // 1. Exact match
         for file in FS.files.iter() {
-            if file.used && !file.is_dir && file.name_str() == name {
+            if file.used && !file.is_dir && file.name_str() == clean {
                 return Some(&file.data[..file.size]);
             }
         }
-        // 2. Basename match
+
+        // 2. Relative to root match (if clean does not start with '/')
+        if !clean.starts_with('/') {
+            let mut with_root = [0u8; 64];
+            let len = 1 + clean.len();
+            if len <= 64 {
+                with_root[0] = b'/';
+                with_root[1..len].copy_from_slice(clean.as_bytes());
+                if let Ok(root_path) = core::str::from_utf8(&with_root[..len]) {
+                    for file in FS.files.iter() {
+                        if file.used && !file.is_dir && file.name_str() == root_path {
+                            return Some(&file.data[..file.size]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Match relative to CURRENT_DIR
+        let cur = core::str::from_utf8(&crate::shell::CURRENT_DIR[..crate::shell::CURRENT_DIR_LEN]).unwrap_or("/");
+        if cur != "/" {
+            let mut cwd_path = [0u8; 64];
+            let c_len = cur.len();
+            let n_len = clean.len();
+            let total = c_len + 1 + n_len;
+            if total <= 64 {
+                cwd_path[..c_len].copy_from_slice(cur.as_bytes());
+                cwd_path[c_len] = b'/';
+                cwd_path[c_len + 1..total].copy_from_slice(clean.as_bytes());
+                if let Ok(p) = core::str::from_utf8(&cwd_path[..total]) {
+                    for file in FS.files.iter() {
+                        if file.used && !file.is_dir && file.name_str() == p {
+                            return Some(&file.data[..file.size]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Basename match
         for file in FS.files.iter() {
             if file.used && !file.is_dir {
                 let fname = file.name_str();
                 if let Some(pos) = fname.rfind('/') {
-                    if &fname[pos + 1..] == name {
+                    if &fname[pos + 1..] == clean {
                         return Some(&file.data[..file.size]);
                     }
                 }
             }
         }
+
         None
     }
 }

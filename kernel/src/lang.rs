@@ -615,6 +615,27 @@ pub const NATIVE_NET_RTT: u8 = 4;
 pub const NATIVE_NET_SET_RATE: u8 = 5;
 pub const NATIVE_GPU_CAPTURE: u8 = 6;
 pub const NATIVE_NET_SEND: u8 = 7;
+pub const NATIVE_SCRIPT_ARGC: u8 = 8;
+pub const NATIVE_SCRIPT_ARG: u8 = 9;
+
+pub static mut SCRIPT_ARGS: [[u8; 128]; 8] = [[0; 128]; 8];
+pub static mut SCRIPT_ARG_LENS: [usize; 8] = [0; 8];
+pub static mut SCRIPT_ARGC: usize = 0;
+
+// Function: set_script_args
+// Description: Store command-line arguments for PulseLang scripts with zero dynamic allocation.
+// Worst-case execution time: ~500 ns
+pub fn set_script_args(args: &[&str]) {
+    unsafe {
+        SCRIPT_ARGC = core::cmp::min(args.len(), 8);
+        for (i, arg) in args.iter().take(8).enumerate() {
+            let raw = arg.trim_matches('"').trim_matches('\'');
+            let len = core::cmp::min(raw.len(), 128);
+            SCRIPT_ARGS[i][..len].copy_from_slice(&raw.as_bytes()[..len]);
+            SCRIPT_ARG_LENS[i] = len;
+        }
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Compiler (Single-Pass AST-to-Bytecode with Zero Heap Allocation)
@@ -1225,11 +1246,13 @@ impl<'a> Compiler<'a> {
                         b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
                         b"@capture" | b"gpu.capture" => NATIVE_GPU_CAPTURE,
                         b"@send" | b"net.send" => NATIVE_NET_SEND,
+                        b"@argc" | b"sys.argc" => NATIVE_SCRIPT_ARGC,
+                        b"@arg" | b"sys.arg" => NATIVE_SCRIPT_ARG,
                         _ => {
                             return Err(self.error(
                                 "ERR_UNKNOWN_INTRINSIC",
                                 "Unknown intrinsic function name",
-                                "One of @print, @println, @tsc, @rtt, @rate, @capture, @send",
+                                "One of @print, @println, @tsc, @rtt, @rate, @capture, @send, @argc, @arg",
                                 "Expression -> Intrinsic Call",
                                 "Verify that the intrinsic name matches supported DSL intrinsics",
                             ));
@@ -1279,6 +1302,7 @@ impl<'a> Compiler<'a> {
 // -----------------------------------------------------------------------------
 
 pub const STR_TAG: i64 = 0x4000_0000_0000_0000;
+pub const ARG_TAG: i64 = 0x2000_0000_0000_0000;
 
 pub struct VM<'a> {
     code: &'a [u8],
@@ -1476,7 +1500,17 @@ impl<'a> VM<'a> {
                         NATIVE_PRINT => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val & STR_TAG) != 0 {
+                                if (val & ARG_TAG) != 0 {
+                                    let idx = (val & 0xFF) as usize;
+                                    unsafe {
+                                        if idx < SCRIPT_ARGC {
+                                            let len = SCRIPT_ARG_LENS[idx];
+                                            if let Ok(s) = core::str::from_utf8(&SCRIPT_ARGS[idx][..len]) {
+                                                serial_print!("{}", s);
+                                            }
+                                        }
+                                    }
+                                } else if (val & STR_TAG) != 0 {
                                     let raw = val & !STR_TAG;
                                     let offset = (raw >> 32) as usize;
                                     let len = (raw & 0xFFFF_FFFF) as usize;
@@ -1495,7 +1529,17 @@ impl<'a> VM<'a> {
                         NATIVE_PRINTLN => {
                             if argc > 0 {
                                 let val = self.pop()?;
-                                if (val & STR_TAG) != 0 {
+                                if (val & ARG_TAG) != 0 {
+                                    let idx = (val & 0xFF) as usize;
+                                    unsafe {
+                                        if idx < SCRIPT_ARGC {
+                                            let len = SCRIPT_ARG_LENS[idx];
+                                            if let Ok(s) = core::str::from_utf8(&SCRIPT_ARGS[idx][..len]) {
+                                                serial_println!("{}", s);
+                                            }
+                                        }
+                                    }
+                                } else if (val & STR_TAG) != 0 {
                                     let raw = val & !STR_TAG;
                                     let offset = (raw >> 32) as usize;
                                     let len = (raw & 0xFFFF_FFFF) as usize;
@@ -1546,6 +1590,25 @@ impl<'a> VM<'a> {
                                 let _ = stream_send_frame(&handle, deadline, &mut seq);
                             }
                             self.push(1)?;
+                        }
+
+                        NATIVE_SCRIPT_ARGC => {
+                            unsafe {
+                                self.push(SCRIPT_ARGC as i64)?;
+                            }
+                        }
+
+                        NATIVE_SCRIPT_ARG => {
+                            if argc > 0 {
+                                let idx = self.pop()?;
+                                if idx >= 0 && (idx as usize) < 8 {
+                                    self.push(ARG_TAG | (idx & 0xFF))?;
+                                } else {
+                                    self.push(0)?;
+                                }
+                            } else {
+                                self.push(0)?;
+                            }
                         }
 
                         _ => {}

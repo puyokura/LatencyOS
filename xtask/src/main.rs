@@ -705,22 +705,61 @@ fn test_editor_delete(kernel_elf: &Path) {
     assert!(!full_output.contains("Gamma"), "Ghost character 'Gamma' was not cleanly deleted!");
     assert!(!full_output.contains("Delta"), "Ghost character 'Delta' was not cleanly deleted!");
 
-    // Test: run echo.pl "text" with arguments
+    // Test 1: run echo.pl without arguments
     full_output.clear();
-    println!("[xtask-test] Running: run echo.pl \"text\"");
-    tcp_stream.write_all(b"run echo.pl \"text\"\r\n").unwrap();
+    println!("[xtask-test] Running: run echo.pl");
+    tcp_stream.write_all(b"run echo.pl\r\n").unwrap();
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(400));
     while let Ok(chunk) = rx.try_recv() {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
     println!("[xtask-test] run echo.pl output:\n{}", full_output);
-    assert!(full_output.contains("LatencyOS PulseLang Real-Time Script Engine Active"), "Failed to run echo.pl with args");
+    assert!(full_output.contains("LatencyOS PulseLang Real-Time Script Engine Active"), "Failed to run echo.pl without args");
+
+    // Test 2: run echo.pl "a" (single argument)
+    full_output.clear();
+    println!("[xtask-test] Running: run echo.pl \"a\"");
+    tcp_stream.write_all(b"run echo.pl \"a\"\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run echo.pl \"a\" output:\n{}", full_output);
+    assert!(full_output.contains("a"), "Failed to echo single argument 'a'");
+
+    // Test 3: run pulselang/echo.pl (path without leading slash) with multiple arguments
+    full_output.clear();
+    println!("[xtask-test] Running: run pulselang/echo.pl \"hello\" \"world\"");
+    tcp_stream.write_all(b"run pulselang/echo.pl \"hello\" \"world\"\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] run pulselang/echo.pl output:\n{}", full_output);
+    assert!(full_output.contains("hello world"), "Failed to run pulselang/echo.pl with multiple args");
+
+    // Test 4: cd pulselang and run echo.pl with relative CWD resolution
+    full_output.clear();
+    println!("[xtask-test] Running: cd pulselang && run echo.pl \"cwd_test_success\"");
+    tcp_stream.write_all(b"cd pulselang\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    tcp_stream.write_all(b"run echo.pl \"cwd_test_success\"\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    while let Ok(chunk) = rx.try_recv() {
+        full_output.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    println!("[xtask-test] cd pulselang && run echo.pl output:\n{}", full_output);
+    assert!(full_output.contains("cwd_test_success"), "Failed to resolve script from CWD in pulselang/");
 
     let _ = child.kill();
     let _ = child.wait();
 
-    println!("[xtask-test] === TEST PASSED: Nano-style bottom bar, DELETE key, and script argument execution verified! ===");
+    println!("[xtask-test] === TEST PASSED: Nano-style bottom bar, DELETE key, path resolution, and script argument execution verified! ===");
 }
 
 fn check_versions() {
