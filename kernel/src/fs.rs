@@ -187,10 +187,8 @@ pub fn fs_init() {
 @contract: @wcet(5us) @budget(50us);
 $t0 := @tsc();
 $sum := 0;
-$i := 0;
-@while($i < 100) {
+for $i in 0..100 {
     $sum += $i * 2;
-    $i += 1;
 }
 $dt := @tsc() - $t0;
 @println("[BENCH] Iterations: 100");
@@ -334,6 +332,27 @@ $c > 0 ? @println(@arg(0)) : @println("head: empty operand");
         let _ = fs_create_internal("/pulselang/calc.pl", calc_src, false);
         let _ = fs_create_internal("/pulselang/touch.pl", touch_src, false);
         let _ = fs_create_internal("/pulselang/git.pl", git_src, false);
+
+        let for_test_src = br#"// for_test.pl - Static Range For Loop Verification
+@contract: @wcet(10us) @budget(50us);
+$sum := 0;
+for $i in 0..10 {
+    $sum += $i;
+}
+@println("[FOR_TEST] Sum 0..10:");
+@println($sum);
+"#;
+        let _ = fs_create_internal("/pulselang/for_test.pl", for_test_src, false);
+
+        let err_for_wcet_src = br#"// err_for_wcet.pl - Intentional Loop Bound Exceeded
+@contract: @wcet(100us) @budget(500us);
+$sum := 0;
+for $i in 0..3000 {
+    $sum += $i;
+}
+@println($sum);
+"#;
+        let _ = fs_create_internal("/pulselang/err_for_wcet.pl", err_for_wcet_src, false);
 
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
         let _ = fs_create_internal("/etc/config.json", config_json, false);

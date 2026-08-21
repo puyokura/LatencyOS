@@ -33,6 +33,8 @@ pub enum TokenKind {
     Emit,
     Return,
     Budget,
+    For,
+    In,
 
     // AI-Native Directives
     AtContract,
@@ -41,6 +43,7 @@ pub enum TokenKind {
     AtWcet,
     AtWithin,
     AtWhile,
+    AtFor,
     AtLoop,
     AtOnVblank,
 
@@ -77,6 +80,7 @@ pub enum TokenKind {
     Colon,      // :
     Comma,      // ,
     Dot,        // .
+    DotDot,     // ..
     LParen,     // (
     RParen,     // )
     LBrace,     // {
@@ -346,7 +350,15 @@ impl<'a> Lexer<'a> {
                 b'}' => { self.pos += 1; TokenKind::RBrace }
                 b';' => { self.pos += 1; TokenKind::Semi }
                 b',' => { self.pos += 1; TokenKind::Comma }
-                b'.' => { self.pos += 1; TokenKind::Dot }
+                b'.' => {
+                    if self.peek_next() == Some(b'.') {
+                        self.pos += 2;
+                        TokenKind::DotDot
+                    } else {
+                        self.pos += 1;
+                        TokenKind::Dot
+                    }
+                }
                 b'?' => { self.pos += 1; TokenKind::Question }
 
                 b':' => {
@@ -539,6 +551,7 @@ impl<'a> Lexer<'a> {
                         b"wcet" => TokenKind::AtWcet,
                         b"within" => TokenKind::AtWithin,
                         b"while" => TokenKind::AtWhile,
+                        b"for" => TokenKind::AtFor,
                         b"loop" => TokenKind::AtLoop,
                         b"on_vblank" => TokenKind::AtOnVblank,
                         b"drop" => TokenKind::Drop,
@@ -560,6 +573,8 @@ impl<'a> Lexer<'a> {
                         b"if" => TokenKind::If,
                         b"else" => TokenKind::Else,
                         b"while" => TokenKind::While,
+                        b"for" => TokenKind::For,
+                        b"in" => TokenKind::In,
                         b"within" => TokenKind::Within,
                         b"or" => TokenKind::Or,
                         b"drop" => TokenKind::Drop,
@@ -1181,6 +1196,172 @@ impl<'a> Compiler<'a> {
 
                 self.emit_imm16(PX64_OP_JMP, 0, loop_start)?;
                 self.patch_imm16(jz_pos, self.code_len as u16);
+            }
+
+            TokenKind::For | TokenKind::AtFor => {
+                self.advance();
+                let has_paren = self.match_token(TokenKind::LParen);
+
+                // 1. Loop variable: must be a VarIdent ($i, $idx, etc.)
+                let var_tok = self.peek();
+                if var_tok.kind != TokenKind::VarIdent {
+                    return Err(self.error(
+                        "ERR_FOR_EXPECTED_VAR",
+                        "Expected variable identifier (e.g., $i) after 'for'",
+                        "Variable identifier '$var'",
+                        "Statement -> For Loop",
+                        "Specify loop variable, e.g., 'for $i in 0..10'",
+                    ));
+                }
+                let var_tok = self.advance();
+                let var_reg = self.resolve_var(var_tok)?;
+
+                // 2. 'in' keyword
+                if !self.match_token(TokenKind::In) {
+                    return Err(self.error(
+                        "ERR_FOR_EXPECTED_IN",
+                        "Expected 'in' keyword after loop variable",
+                        "'in'",
+                        "Statement -> For Loop",
+                        "Add 'in' keyword after variable, e.g., 'for $i in 0..10'",
+                    ));
+                }
+
+                // 3. Start bound: Must be compile-time constant integer or time literal
+                let start_tok = self.peek();
+                let start_val: i64 = match start_tok.kind {
+                    TokenKind::Number(n) => {
+                        self.advance();
+                        n
+                    }
+                    TokenKind::TimeLiteral(ns) => {
+                        self.advance();
+                        ns as i64
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "ERR_FOR_NON_CONSTANT_BOUND",
+                            "Static range for loop requires compile-time constant start bound (0..N)",
+                            "Integer literal e.g. '0'",
+                            "Statement -> For Loop",
+                            "Use constant literal for loop range start, or use 'while' for dynamic bounds",
+                        ));
+                    }
+                };
+
+                // 4. '..' range operator
+                if !self.match_token(TokenKind::DotDot) {
+                    return Err(self.error(
+                        "ERR_FOR_EXPECTED_DOTDOT",
+                        "Expected range operator '..' between loop bounds",
+                        "'..'",
+                        "Statement -> For Loop",
+                        "Specify range with '..', e.g., '0..100'",
+                    ));
+                }
+
+                // 5. End bound: Must be compile-time constant integer or time literal
+                let end_tok = self.peek();
+                let end_val: i64 = match end_tok.kind {
+                    TokenKind::Number(n) => {
+                        self.advance();
+                        n
+                    }
+                    TokenKind::TimeLiteral(ns) => {
+                        self.advance();
+                        ns as i64
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "ERR_FOR_NON_CONSTANT_BOUND",
+                            "Static range for loop requires compile-time constant end bound (0..N)",
+                            "Integer literal e.g. '100'",
+                            "Statement -> For Loop",
+                            "Use constant literal for loop range end, or use 'while' for dynamic bounds",
+                        ));
+                    }
+                };
+
+                if has_paren {
+                    self.match_token(TokenKind::RParen);
+                }
+
+                // Calculate iterations
+                let iterations: u64 = if end_val > start_val {
+                    (end_val - start_val) as u64
+                } else {
+                    0
+                };
+
+                // Emit start initialization: $i = start_val
+                if start_val >= 0 && start_val <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, var_reg, start_val as u16)?;
+                } else {
+                    let idx = self.add_constant(start_val)?;
+                    self.emit_imm16(PX64_OP_LDC, var_reg, idx)?;
+                }
+
+                // Emit end value into a temp register
+                let end_reg = self.alloc_temp()?;
+                if end_val >= 0 && end_val <= 65535 {
+                    self.emit_imm16(PX64_OP_MOV_IMM, end_reg, end_val as u16)?;
+                } else {
+                    let idx = self.add_constant(end_val)?;
+                    self.emit_imm16(PX64_OP_LDC, end_reg, idx)?;
+                }
+
+                let loop_start = self.code_len as u16;
+
+                // Condition: $rax = ($i < end_reg)
+                self.emit_inst(PX64_OP_CMP_LT, 0, var_reg, end_reg)?;
+                let jz_pos = self.emit_inst(PX64_OP_JZ, 0, 0, 0)?;
+
+                // Parse loop body
+                if !self.match_token(TokenKind::LBrace) {
+                    return Err(self.error(
+                        "ERR_EXPECTED_LBRACE",
+                        "Missing opening brace '{' for for loop body",
+                        "Left brace '{'",
+                        "Statement -> For Loop",
+                        "Add opening brace '{' after for loop range",
+                    ));
+                }
+
+                let body_code_start = self.code_len;
+                while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
+                    self.statement()?;
+                }
+                self.match_token(TokenKind::RBrace);
+                let body_code_end = self.code_len;
+
+                // Static WCET validation:
+                // Body instructions = (body_code_end - body_code_start) / 4
+                // Loop overhead per iteration: CMPLT (1) + JZ (1) + ADDI (1) + JMP (1) = 4 instructions
+                let body_inst_count = (body_code_end - body_code_start) / 4;
+                let insts_per_iter = body_inst_count + 4;
+                let total_estimated_steps = (insts_per_iter as u64).saturating_mul(iterations);
+
+                if total_estimated_steps > MAX_VM_STEPS as u64 {
+                    return Err(self.error(
+                        "ERR_FOR_WCET_EXCEEDED",
+                        "Static loop WCET exceeds MAX_VM_STEPS step limit (10,000 steps)",
+                        "Loop with total steps <= 10,000",
+                        "Static Loop WCET Verification",
+                        "Reduce loop upper bound or simplify loop body to satisfy real-time step budget",
+                    ));
+                }
+
+                // Increment: $i += 1
+                self.emit_inst(PX64_OP_ADDI, var_reg, var_reg, 1)?;
+
+                // Jump back to loop start
+                self.emit_imm16(PX64_OP_JMP, 0, loop_start)?;
+
+                // Patch exit jump
+                self.patch_imm16(jz_pos, self.code_len as u16);
+
+                // Free temp register
+                self.free_temp(end_reg);
             }
 
             TokenKind::Let => {

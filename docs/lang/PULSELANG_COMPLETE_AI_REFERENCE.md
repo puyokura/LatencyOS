@@ -48,6 +48,7 @@ Statement       ::= AssignStmt
                   | CompoundAssign
                   | WithinStmt
                   | WhileStmt
+                  | ForStmt
                   | IfStmt
                   | ExprStmt
                   | Block
@@ -55,7 +56,8 @@ Statement       ::= AssignStmt
 AssignStmt      ::= (VarIdent | HardwareIdent) ":=" Expression ";"
 CompoundAssign  ::= (VarIdent | HardwareIdent) ( "+=" | "-=" ) Expression ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
-WhileStmt       ::= "@while(" Expression ")" Block
+WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" Block
+ForStmt         ::= ( "for" | "@for" ) VarIdent "in" ( IntegerLiteral | TimeLiteral ) ".." ( IntegerLiteral | TimeLiteral ) Block
 IfStmt          ::= "if" "(" Expression ")" Block ( "else" Block )?
 ExprStmt        ::= Expression ";"
 

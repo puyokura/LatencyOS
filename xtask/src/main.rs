@@ -1448,7 +1448,47 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("<out of bounds>", 5, &mut full_output), "Failed disasm out-of-bounds const display");
 
-    println!("[xtask-test] 11. Sending poweroff command...");
+    println!("[xtask-test] 11. Testing Phase 10-1 static range for loop: compile /pulselang/for_test.pl /bin/for_test.bin");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/for_test.pl /bin/for_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling for_test.pl");
+
+    println!("[xtask-test] 12. Testing disasm of for loop bytecode: disasm /bin/for_test.bin");
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/for_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("CMPLT", 5, &mut full_output), "Failed finding CMPLT in disasm");
+    assert!(full_output.contains("JZ"), "Failed finding JZ in disasm");
+    assert!(full_output.contains("ADDI"), "Failed finding ADDI in disasm");
+    assert!(full_output.contains("JMP"), "Failed finding JMP in disasm");
+    println!("[xtask-test] Disassembly for /bin/for_test.bin:\n{}", full_output.trim());
+
+    println!("[xtask-test] 13. Testing execution of for loop binary: run /bin/for_test.bin");
+    full_output.clear();
+    stdin.write_all(b"run /bin/for_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("45", 5, &mut full_output), "Failed executing for_test.bin: sum 0..10 != 45");
+
+    println!("[xtask-test] 14. Testing rewritten bench.pl with static for loop: compile /pulselang/bench.pl /bin/bench_for.bin && run");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/bench.pl /bin/bench_for.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bench.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/bench_for.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("9900", 5, &mut full_output), "Failed executing bench_for.bin: sum != 9900");
+
+    println!("[xtask-test] 15. Testing compile-time static WCET rejection: compile /pulselang/err_for_wcet.pl /bin/err_for.bin");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/err_for_wcet.pl /bin/err_for.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 5, &mut full_output), "Failed compile-time static WCET rejection");
+    assert!(full_output.contains("Static loop WCET exceeds MAX_VM_STEPS"), "Failed error message check");
+
+    println!("[xtask-test] 16. Sending poweroff command...");
     stdin.write_all(b"poweroff\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(500));
