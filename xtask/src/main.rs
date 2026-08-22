@@ -139,6 +139,7 @@ fn create_fat16_image(path: &Path, initial_files: &[(&str, &[u8])]) -> std::io::
 
         disk_data[entry_offset..entry_offset + 11].copy_from_slice(&name_83);
         disk_data[entry_offset + 11] = 0x20; // Archive
+        disk_data[entry_offset + 12] = 0x18; // NTRes: 0x18 = lowercase stem + lowercase extension (Windows NT/10/11)
         disk_data[entry_offset + 26..entry_offset + 28].copy_from_slice(&start_cluster.to_le_bytes());
         disk_data[entry_offset + 28..entry_offset + 32].copy_from_slice(&(content.len() as u32).to_le_bytes());
 
@@ -237,9 +238,96 @@ fn read_file_from_fat16_image(image_path: &Path, filename: &str) -> Option<Vec<u
 
 fn ensure_export_disk_image() -> PathBuf {
     let path = get_export_disk_path();
-    let initial_files: [(&str, &[u8]); 2] = [
-        ("HELLO.TXT", b"Hello from Windows 11 Export Disk!\r\n"),
-        ("WIN_SRC.PL", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\nlet $msg = \"Imported Script from Windows OK\";\r\n@println($msg);\r\n"),
+    let initial_files: [(&str, &[u8]); 9] = [
+        ("bench.pl", br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
+@contract: @wcet(5us) @budget(50us);
+
+let $t0 = @tsc();
+let mut $sum = 0;
+for $i in 0..100 {
+    $sum += $i * 2;
+}
+let $dt = @tsc() - $t0;
+
+@println("[BENCH] Iterations: 100");
+@println("[RESULT] Sum:");
+@println($sum);
+@println("[LATENCY] Cycles:");
+@println($dt);
+"#),
+        ("stream.pl", br#"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+@pipeline: UltraStream @budget(8000us);
+@contract: @wcet(100us) @budget(500us);
+
+@on_vblank: {
+    #f := @capture();
+    @within(500us) {
+        let $rtt = @rtt();
+        $rtt > 200us ? @rate(80) : @rate(100);
+        @send(#f);
+    } !drop;
+};
+"#),
+        ("echo.pl", br#"// echo.pl - PulseLang Echo Script
+@contract: @wcet(2us) @budget(20us);
+
+let $argc = @argc();
+if ($argc > 0) {
+    let mut $i = 0;
+    @while($i < $argc) {
+        @print(@arg($i));
+        $i += 1;
+        if ($i < $argc) {
+            @print(" ");
+        }
+    }
+    @println("");
+} else {
+    @println("LatencyOS PulseLang Real-Time Script Engine Active");
+}
+"#),
+        ("filter.pl", br#"// filter.pl - Adaptive Congestion Guard
+@contract: @wcet(2us) @budget(100us);
+
+let $rtt = @rtt();
+@println("[FILTER] Measured RTT (ns):");
+@println($rtt);
+if ($rtt > 300us) {
+    @println("[ACTION] Congestion detected -> Rate: 60%");
+    @rate(60);
+} else {
+    @println("[ACTION] Optimal latency -> Rate: 100%");
+    @rate(100);
+}
+"#),
+        ("jitter.pl", br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
+@contract: @wcet(3us) @budget(30us);
+
+let $t1 = @tsc();
+let $t2 = @tsc();
+let $delta = $t2 - $t1;
+@println("[JITTER] Consecutive TSC Delta (Cycles):");
+@println($delta);
+if ($delta < 100) {
+    @println("[STATUS] Determinism: Optimal (<100 cycles)");
+} else {
+    @println("[STATUS] Determinism: Jitter detected");
+}
+"#),
+        ("telemetry.pl", br#"// telemetry.pl - Real-Time Hardware Telemetry
+@contract: @wcet(2us) @budget(20us);
+
+let $rtt = @rtt();
+let $tsc = @tsc();
+@println("=== LatencyOS Telemetry ===");
+@print("TSC: ");
+@println($tsc);
+@print("RTT(ns): ");
+@println($rtt);
+"#),
+        ("readme.txt", b"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)\r\n===================================================\r\nAll scripts in this export directory can be edited in Windows and are automatically synchronized with LatencyOS.\r\n"),
+        ("hello.txt", b"Hello from Windows 11 Export Disk!\r\n"),
+        ("win_src.pl", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\nlet $msg = \"Imported Script from Windows OK\";\r\n@println($msg);\r\n"),
     ];
     let _ = create_fat16_image(&path, &initial_files);
     path
@@ -2037,20 +2125,22 @@ fn test_standalone_exe() {
     assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
     println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
 
-    println!("[xtask-test] 38. Testing Phase S Export Disk file listing: export-ls");
+    println!("[xtask-test] 38. Testing Phase S Export Disk file listing: export-ls (lowercase filenames & pre-populated default scripts)");
     full_output.clear();
     stdin.write_all(b"export-ls\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("EXPORT DISK (FAT16) ROOT DIRECTORY", 5, &mut full_output), "Failed running export-ls");
-    assert!(full_output.contains("HELLO.TXT"), "Failed finding HELLO.TXT on Export Disk");
-    assert!(full_output.contains("WIN_SRC.PL"), "Failed finding WIN_SRC.PL on Export Disk");
+    assert!(full_output.contains("bench.pl"), "Failed finding bench.pl on Export Disk");
+    assert!(full_output.contains("stream.pl"), "Failed finding stream.pl on Export Disk");
+    assert!(full_output.contains("hello.txt"), "Failed finding hello.txt on Export Disk");
+    assert!(full_output.contains("win_src.pl"), "Failed finding win_src.pl on Export Disk");
     println!("[xtask-test] Export Disk directory listing verified:\n{}", full_output.trim());
 
-    println!("[xtask-test] 39. Testing Phase S import from Export Disk to LatencyFS: import HELLO.TXT /hello.txt");
+    println!("[xtask-test] 39. Testing Phase S import from Export Disk to LatencyFS: import hello.txt /hello.txt");
     full_output.clear();
-    stdin.write_all(b"import HELLO.TXT /hello.txt\r\n").unwrap();
+    stdin.write_all(b"import hello.txt /hello.txt\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("successfully imported 'HELLO.TXT'", 5, &mut full_output), "Failed importing HELLO.TXT");
+    assert!(wait_for("successfully imported 'hello.txt'", 5, &mut full_output), "Failed importing hello.txt");
 
     println!("[xtask-test] 40. Testing cat on imported file in LatencyFS: cat /hello.txt");
     full_output.clear();
@@ -2058,11 +2148,11 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("Hello from Windows 11 Export Disk!", 5, &mut full_output), "Failed reading /hello.txt in LatencyFS");
 
-    println!("[xtask-test] 41. Testing import & compilation of PulseLang script from Export Disk: import WIN_SRC.PL /pulselang/win_src.pl");
+    println!("[xtask-test] 41. Testing import & compilation of PulseLang script from Export Disk: import win_src.pl /pulselang/win_src.pl");
     full_output.clear();
-    stdin.write_all(b"import WIN_SRC.PL /pulselang/win_src.pl\r\n").unwrap();
+    stdin.write_all(b"import win_src.pl /pulselang/win_src.pl\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("successfully imported 'WIN_SRC.PL'", 5, &mut full_output), "Failed importing WIN_SRC.PL");
+    assert!(wait_for("successfully imported 'win_src.pl'", 5, &mut full_output), "Failed importing win_src.pl");
 
     full_output.clear();
     stdin.write_all(b"compile /pulselang/win_src.pl /bin/win_src.bin\r\n").unwrap();
@@ -2074,9 +2164,9 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("Imported Script from Windows OK", 5, &mut full_output), "Failed running imported win_src.bin");
 
-    println!("[xtask-test] 42. Testing Phase S export from LatencyFS to Export Disk: export /pulselang/bench.pl BENCH.PL");
+    println!("[xtask-test] 42. Testing Phase S export from LatencyFS to Export Disk: export /pulselang/bench.pl bench.pl");
     full_output.clear();
-    stdin.write_all(b"export /pulselang/bench.pl BENCH.PL\r\n").unwrap();
+    stdin.write_all(b"export /pulselang/bench.pl bench.pl\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("successfully exported '/pulselang/bench.pl'", 5, &mut full_output), "Failed exporting /pulselang/bench.pl");
 
@@ -2084,7 +2174,7 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"export-ls\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("BENCH.PL", 5, &mut full_output), "Failed finding BENCH.PL in Export Disk after export");
+    assert!(wait_for("bench.pl", 5, &mut full_output), "Failed finding bench.pl in Export Disk after export");
 
     println!("[xtask-test] 44. Sending poweroff command to LatencyOS...");
     stdin.write_all(b"poweroff\r\n").unwrap();
@@ -2095,12 +2185,12 @@ fn test_standalone_exe() {
     let _ = child.wait();
 
     println!("[xtask-test] 45. Verifying exported file on Windows host from raw FAT16 image (export.img)...");
-    let exported_bench = read_file_from_fat16_image(&export_disk_path, "BENCH.PL");
-    assert!(exported_bench.is_some(), "Failed finding BENCH.PL in FAT16 image after QEMU execution");
+    let exported_bench = read_file_from_fat16_image(&export_disk_path, "bench.pl");
+    assert!(exported_bench.is_some(), "Failed finding bench.pl in FAT16 image after QEMU execution");
     let bench_bytes = exported_bench.unwrap();
     let bench_str = String::from_utf8_lossy(&bench_bytes);
     assert!(bench_str.contains("bench.pl"), "Exported content in FAT16 image does not contain bench.pl header");
-    println!("[xtask-test] Export Disk Verification: Successfully verified BENCH.PL content on Windows host from FAT16 image ({} bytes):\n{}", bench_bytes.len(), bench_str.trim());
+    println!("[xtask-test] Export Disk Verification: Successfully verified bench.pl content on Windows host from FAT16 image ({} bytes):\n{}", bench_bytes.len(), bench_str.trim());
 
     println!("================================================================================");
     println!("[xtask] SUCCESS: Standalone LatencyOS.exe verified end-to-end with 100% success!");

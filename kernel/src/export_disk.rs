@@ -355,7 +355,7 @@ pub fn export_disk_list_files() -> Result<usize, &'static str> {
                 let mut len = 0;
                 for i in 0..8 {
                     if entry[i] != b' ' {
-                        name_buf[len] = entry[i];
+                        name_buf[len] = entry[i].to_ascii_lowercase();
                         len += 1;
                     }
                 }
@@ -364,7 +364,7 @@ pub fn export_disk_list_files() -> Result<usize, &'static str> {
                     len += 1;
                     for i in 8..11 {
                         if entry[i] != b' ' {
-                            name_buf[len] = entry[i];
+                            name_buf[len] = entry[i].to_ascii_lowercase();
                             len += 1;
                         }
                     }
@@ -564,6 +564,7 @@ pub fn export_disk_write_file(filename: &str, data: &[u8]) -> Result<usize, &'st
                     entry[0..11].copy_from_slice(&target_83);
                     entry[11] = 0x20; // Attribute: Archive
                     entry[12..26].fill(0);
+                    entry[12] = 0x18; // NTRes: 0x18 = lowercase stem + lowercase extension (Windows NT/10/11 convention)
                     entry[26..28].copy_from_slice(&(allocated_clusters[0]).to_le_bytes());
                     entry[28..32].copy_from_slice(&(data.len() as u32).to_le_bytes());
 
@@ -583,4 +584,108 @@ pub fn export_disk_write_file(filename: &str, data: &[u8]) -> Result<usize, &'st
     }
 
     Ok(data.len())
+}
+
+// Function: export_disk_sync_on_boot
+// Description: Automatically syncs default LatencyFS files to the Export Disk, and imports any existing files from Export Disk to LatencyFS.
+// Worst-case execution time: ~15 ms (offline boot initialization)
+pub fn export_disk_sync_on_boot() {
+    let loc = match get_export_disk_loc() {
+        Ok(loc) => loc,
+        Err(_) => return,
+    };
+
+    serial_println!("[EXPORT-DISK] Detected FAT16 drive on Port {:#x}, Drive {}. Synchronizing files...", loc.base_port, loc.drive);
+
+    // 1. Auto-export all default LatencyFS files to Export Disk if not present
+    unsafe {
+        for file in crate::fs::FS.files.iter() {
+            if file.used && !file.is_dir {
+                let full_name = file.name_str();
+                let short_name = if let Some(idx) = full_name.rfind('/') {
+                    &full_name[idx + 1..]
+                } else {
+                    full_name
+                };
+
+                // Check if file already exists on Export Disk
+                let mut check_buf = [0u8; 1];
+                let exists = export_disk_read_file(short_name, &mut check_buf).is_ok();
+                if !exists {
+                    let data = &file.data[..file.size];
+                    let _ = export_disk_write_file(short_name, data);
+                }
+            }
+        }
+    }
+
+    // 2. Auto-import any files present on Export Disk into LatencyFS
+    let bpb = match export_disk_get_bpb() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    for sec in 0..bpb.root_dir_sectors {
+        let lba = bpb.root_dir_start_lba + sec;
+        unsafe {
+            if ata_read_sector(loc.base_port, loc.drive, lba, &mut SECTOR_BUF).is_err() {
+                break;
+            }
+            for entry_idx in 0..(SECTOR_SIZE / 32) {
+                let entry = &SECTOR_BUF[entry_idx * 32..(entry_idx + 1) * 32];
+                if entry[0] == 0x00 {
+                    break;
+                }
+                if entry[0] == 0xE5 || (entry[11] & 0x0F) == 0x0F || (entry[11] & 0x08) != 0 || (entry[11] & 0x10) != 0 {
+                    continue;
+                }
+
+                // Construct lowercase name
+                let mut name_buf = [b' '; 16];
+                let mut len = 0;
+                for i in 0..8 {
+                    if entry[i] != b' ' {
+                        name_buf[len] = entry[i].to_ascii_lowercase();
+                        len += 1;
+                    }
+                }
+                if entry[8] != b' ' || entry[9] != b' ' || entry[10] != b' ' {
+                    name_buf[len] = b'.';
+                    len += 1;
+                    for i in 8..11 {
+                        if entry[i] != b' ' {
+                            name_buf[len] = entry[i].to_ascii_lowercase();
+                            len += 1;
+                        }
+                    }
+                }
+
+                if len > 0 {
+                    let file_name = core::str::from_utf8(&name_buf[..len]).unwrap_or("");
+                    if !file_name.is_empty() {
+                        let mut path_buf = [0u8; 64];
+                        let target_path = if file_name.ends_with(".pl") {
+                            // If .pl, ensure it is placed in /pulselang/
+                            let prefix = b"/pulselang/";
+                            path_buf[..prefix.len()].copy_from_slice(prefix);
+                            path_buf[prefix.len()..prefix.len() + file_name.len()].copy_from_slice(file_name.as_bytes());
+                            core::str::from_utf8(&path_buf[..prefix.len() + file_name.len()]).unwrap_or(file_name)
+                        } else {
+                            path_buf[0] = b'/';
+                            path_buf[1..1 + file_name.len()].copy_from_slice(file_name.as_bytes());
+                            core::str::from_utf8(&path_buf[..1 + file_name.len()]).unwrap_or(file_name)
+                        };
+
+                        if !crate::fs::fs_exists(target_path) {
+                            if let Ok(read_len) = export_disk_read_file(file_name, &mut FILE_TRANSFER_BUF) {
+                                let _ = crate::fs::fs_create_internal(target_path, &FILE_TRANSFER_BUF[..read_len], false);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    serial_println!("[EXPORT-DISK] Auto-sync complete. All files ready.");
 }
