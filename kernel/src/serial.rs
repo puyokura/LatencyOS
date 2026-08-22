@@ -34,6 +34,34 @@ pub unsafe fn inb(port: u16) -> u8 {
     val
 }
 
+// Function: outw
+// Description: Write a 16-bit word to an I/O port.
+// Worst-case execution time: ~10 ns
+#[inline]
+pub unsafe fn outw(port: u16, val: u16) {
+    core::arch::asm!(
+        "out dx, ax",
+        in("dx") port,
+        in("ax") val,
+        options(nomem, nostack, preserves_flags)
+    );
+}
+
+// Function: inw
+// Description: Read a 16-bit word from an I/O port.
+// Worst-case execution time: ~10 ns
+#[inline]
+pub unsafe fn inw(port: u16) -> u16 {
+    let val: u16;
+    core::arch::asm!(
+        "in ax, dx",
+        out("ax") val,
+        in("dx") port,
+        options(nomem, nostack, preserves_flags)
+    );
+    val
+}
+
 #[derive(Clone, Copy)]
 pub struct SerialPort {
     base: u16,

@@ -23,6 +23,7 @@ mod shell;
 mod smp;
 mod tsc;
 pub mod vfs;
+pub mod export_disk;
 
 use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;

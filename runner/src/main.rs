@@ -227,6 +227,11 @@ fn main() {
         .arg("none")
         .arg("-no-reboot");
 
+    let export_img = env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("export.img");
+    if export_img.exists() {
+        cmd.arg("-drive").arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_img.display()));
+    }
+
     if share_dir.exists() {
         cmd.arg("-L").arg(&share_dir);
     }

@@ -1318,6 +1318,114 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             }
         }
 
+        "import" => {
+            let mut parts = arg.split_whitespace();
+            let src = parts.next().unwrap_or("");
+            let dst = parts.next().unwrap_or("");
+            if src.is_empty() {
+                serial_println!("import: missing operand (usage: import <export_disk_file> [latencyfs_dest])");
+            } else {
+                let dst_path = if dst.is_empty() {
+                    src
+                } else {
+                    dst
+                };
+
+                let t0 = read_tsc_serialized();
+                match unsafe { crate::export_disk::export_disk_read_file(src, &mut crate::export_disk::FILE_TRANSFER_BUF) } {
+                    Ok(bytes_read) => {
+                        let t1 = read_tsc_serialized();
+                        let dt_ns = tsc_to_ns(t1 - t0, tsc_freq_hz);
+
+                        let mut norm_buf = [0u8; 64];
+                        let cwd = unsafe { core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/") };
+                        let norm_len = crate::fs::fs_normalize_path(dst_path, cwd, &mut norm_buf).unwrap_or(0);
+                        let target_path = core::str::from_utf8(&norm_buf[..norm_len]).unwrap_or(dst_path);
+
+                        let write_res = unsafe {
+                            let data = &crate::export_disk::FILE_TRANSFER_BUF[..bytes_read];
+                            if crate::fs::fs_exists(target_path) {
+                                crate::fs::fs_write(target_path, data)
+                            } else {
+                                crate::fs::fs_create_internal(target_path, data, false).map(|_| ())
+                            }
+                        };
+
+                        match write_res {
+                            Ok(()) => {
+                                serial_println!(
+                                    "import: successfully imported '{}' ({} bytes) -> '{}' in {} us",
+                                    src,
+                                    bytes_read,
+                                    target_path,
+                                    dt_ns / 1000
+                                );
+                            }
+                            Err(e) => {
+                                serial_println!("import: failed to write '{}' into LatencyFS: {:?}", target_path, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        serial_println!("import: failed to read '{}' from Export Disk: {}", src, e);
+                    }
+                }
+            }
+        }
+
+        "export" => {
+            let mut parts = arg.split_whitespace();
+            let src = parts.next().unwrap_or("");
+            let dst = parts.next().unwrap_or("");
+            if src.is_empty() {
+                serial_println!("export: missing operand (usage: export <latencyfs_file> [export_disk_dest])");
+            } else {
+                let mut norm_buf = [0u8; 64];
+                let cwd = unsafe { core::str::from_utf8(&CURRENT_DIR[..CURRENT_DIR_LEN]).unwrap_or("/") };
+                let norm_len = crate::fs::fs_normalize_path(src, cwd, &mut norm_buf).unwrap_or(0);
+                let target_src = core::str::from_utf8(&norm_buf[..norm_len]).unwrap_or(src);
+
+                let dst_name = if dst.is_empty() {
+                    if let Some(idx) = target_src.rfind('/') {
+                        &target_src[idx + 1..]
+                    } else {
+                        target_src
+                    }
+                } else {
+                    dst
+                };
+
+                if let Some(data) = crate::fs::fs_read(target_src) {
+                    let t0 = read_tsc_serialized();
+                    match crate::export_disk::export_disk_write_file(dst_name, data) {
+                        Ok(bytes_written) => {
+                            let t1 = read_tsc_serialized();
+                            let dt_ns = tsc_to_ns(t1 - t0, tsc_freq_hz);
+                            serial_println!(
+                                "export: successfully exported '{}' ({} bytes) -> Export Disk '{}' in {} us",
+                                target_src,
+                                bytes_written,
+                                dst_name,
+                                dt_ns / 1000
+                            );
+                        }
+                        Err(e) => {
+                            serial_println!("export: failed to write to Export Disk: {}", e);
+                        }
+                    }
+                } else {
+                    serial_println!("export: cannot access '{}': No such file in LatencyFS", src);
+                }
+            }
+        }
+
+        "export-ls" | "fat-ls" | "export-disk" => {
+            match crate::export_disk::export_disk_list_files() {
+                Ok(_) => {}
+                Err(e) => serial_println!("export-ls: {}", e),
+            }
+        }
+
         "tree" => {
             serial_println!(".");
             unsafe {

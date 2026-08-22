@@ -46,6 +46,205 @@ fn find_tool(tool_name: &str) -> PathBuf {
     PathBuf::from(tool_name)
 }
 
+fn get_export_disk_path() -> PathBuf {
+    get_workspace_root().join("export.img")
+}
+
+fn create_fat16_image(path: &Path, initial_files: &[(&str, &[u8])]) -> std::io::Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let total_sectors: u32 = 32768; // 16 MB
+    let bytes_per_sector: u16 = 512;
+    let sectors_per_cluster: u8 = 4; // 2KB clusters
+    let reserved_sectors: u16 = 4;
+    let num_fats: u8 = 2;
+    let root_dir_entries: u16 = 512;
+    let fat_size_sectors: u16 = 32;
+
+    let mut disk_data = vec![0u8; (total_sectors * bytes_per_sector as u32) as usize];
+
+    // 1. Boot Sector (Sector 0)
+    disk_data[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
+    disk_data[3..11].copy_from_slice(b"MSWIN4.1");
+    disk_data[11..13].copy_from_slice(&bytes_per_sector.to_le_bytes());
+    disk_data[13] = sectors_per_cluster;
+    disk_data[14..16].copy_from_slice(&reserved_sectors.to_le_bytes());
+    disk_data[16] = num_fats;
+    disk_data[17..19].copy_from_slice(&root_dir_entries.to_le_bytes());
+    disk_data[19..21].copy_from_slice(&(total_sectors as u16).to_le_bytes());
+    disk_data[21] = 0xF8; // Media: Fixed Disk
+    disk_data[22..24].copy_from_slice(&fat_size_sectors.to_le_bytes());
+    disk_data[24..26].copy_from_slice(&63u16.to_le_bytes());
+    disk_data[26..28].copy_from_slice(&255u16.to_le_bytes());
+    disk_data[32..36].copy_from_slice(&total_sectors.to_le_bytes());
+    disk_data[36] = 0x80;
+    disk_data[38] = 0x29;
+    disk_data[39..43].copy_from_slice(&0x12345678u32.to_le_bytes());
+    disk_data[43..54].copy_from_slice(b"EXPORT_DISK");
+    disk_data[54..62].copy_from_slice(b"FAT16   ");
+    disk_data[510..512].copy_from_slice(&[0x55, 0xAA]);
+
+    // 2. Initial FAT Table (Entry 0 = 0xFFF8, Entry 1 = 0xFFFF)
+    let fat1_offset = (reserved_sectors as usize) * 512;
+    let fat2_offset = (reserved_sectors as usize + fat_size_sectors as usize) * 512;
+    let root_dir_offset = (reserved_sectors as usize + num_fats as usize * fat_size_sectors as usize) * 512;
+    let root_dir_sectors = (root_dir_entries as usize * 32 + 511) / 512;
+    let data_start_offset = root_dir_offset + root_dir_sectors * 512;
+
+    disk_data[fat1_offset..fat1_offset + 2].copy_from_slice(&0xFFF8u16.to_le_bytes());
+    disk_data[fat1_offset + 2..fat1_offset + 4].copy_from_slice(&0xFFFFu16.to_le_bytes());
+
+    let mut current_cluster: u16 = 2;
+    let cluster_size_bytes = (sectors_per_cluster as usize) * 512;
+
+    for (file_idx, &(filename, content)) in initial_files.iter().enumerate() {
+        let needed_clusters = if content.is_empty() { 1 } else { (content.len() + cluster_size_bytes - 1) / cluster_size_bytes };
+        let start_cluster = current_cluster;
+
+        // Write data clusters
+        let mut written = 0;
+        for c in 0..needed_clusters {
+            let cluster_num = start_cluster + c as u16;
+            let cluster_offset = data_start_offset + (cluster_num as usize - 2) * cluster_size_bytes;
+            let chunk_len = std::cmp::min(cluster_size_bytes, content.len().saturating_sub(written));
+            if chunk_len > 0 {
+                disk_data[cluster_offset..cluster_offset + chunk_len].copy_from_slice(&content[written..written + chunk_len]);
+                written += chunk_len;
+            }
+
+            let next_val: u16 = if c + 1 < needed_clusters {
+                cluster_num + 1
+            } else {
+                0xFFFF
+            };
+            let fat_entry_offset = fat1_offset + (cluster_num as usize * 2);
+            disk_data[fat_entry_offset..fat_entry_offset + 2].copy_from_slice(&next_val.to_le_bytes());
+        }
+
+        // Write root dir entry
+        let entry_offset = root_dir_offset + file_idx * 32;
+        let mut name_83 = [b' '; 11];
+        let (stem, ext) = if let Some(dot) = filename.rfind('.') {
+            (&filename[..dot], &filename[dot + 1..])
+        } else {
+            (filename, "")
+        };
+        for (i, b) in stem.bytes().take(8).enumerate() {
+            name_83[i] = b.to_ascii_uppercase();
+        }
+        for (j, b) in ext.bytes().take(3).enumerate() {
+            name_83[8 + j] = b.to_ascii_uppercase();
+        }
+
+        disk_data[entry_offset..entry_offset + 11].copy_from_slice(&name_83);
+        disk_data[entry_offset + 11] = 0x20; // Archive
+        disk_data[entry_offset + 26..entry_offset + 28].copy_from_slice(&start_cluster.to_le_bytes());
+        disk_data[entry_offset + 28..entry_offset + 32].copy_from_slice(&(content.len() as u32).to_le_bytes());
+
+        current_cluster += needed_clusters as u16;
+    }
+
+    // Mirror FAT1 to FAT2
+    disk_data.copy_within(fat1_offset..fat1_offset + (fat_size_sectors as usize * 512), fat2_offset);
+
+    let mut file = File::create(path)?;
+    file.write_all(&disk_data)?;
+    Ok(())
+}
+
+fn read_file_from_fat16_image(image_path: &Path, filename: &str) -> Option<Vec<u8>> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut file = File::open(image_path).ok()?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data).ok()?;
+
+    if data.len() < 512 || data[510] != 0x55 || data[511] != 0xAA {
+        return None;
+    }
+
+    let bytes_per_sec = u16::from_le_bytes([data[11], data[12]]) as usize;
+    let sec_per_cluster = data[13] as usize;
+    let reserved_sec = u16::from_le_bytes([data[14], data[15]]) as usize;
+    let num_fats = data[16] as usize;
+    let root_entries = u16::from_le_bytes([data[17], data[18]]) as usize;
+    let fat_size = u16::from_le_bytes([data[22], data[23]]) as usize;
+
+    let fat_offset = reserved_sec * bytes_per_sec;
+    let root_offset = (reserved_sec + num_fats * fat_size) * bytes_per_sec;
+    let root_sectors = (root_entries * 32 + bytes_per_sec - 1) / bytes_per_sec;
+    let data_offset = root_offset + root_sectors * bytes_per_sec;
+    let cluster_size = sec_per_cluster * bytes_per_sec;
+
+    let mut target_83 = [b' '; 11];
+    let (stem, ext) = if let Some(dot) = filename.rfind('.') {
+        (&filename[..dot], &filename[dot + 1..])
+    } else {
+        (filename, "")
+    };
+    for (i, b) in stem.bytes().take(8).enumerate() {
+        target_83[i] = b.to_ascii_uppercase();
+    }
+    for (j, b) in ext.bytes().take(3).enumerate() {
+        target_83[8 + j] = b.to_ascii_uppercase();
+    }
+
+    for idx in 0..root_entries {
+        let entry_off = root_offset + idx * 32;
+        if entry_off + 32 > data.len() {
+            break;
+        }
+        let entry = &data[entry_off..entry_off + 32];
+        if entry[0] == 0x00 {
+            break;
+        }
+        if entry[0] == 0xE5 || (entry[11] & 0x0F) == 0x0F {
+            continue;
+        }
+
+        if &entry[0..11] == &target_83 {
+            let start_cluster = u16::from_le_bytes([entry[26], entry[27]]) as usize;
+            let file_size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize;
+
+            let mut out = Vec::with_capacity(file_size);
+            let mut curr_cluster = start_cluster;
+
+            while curr_cluster >= 2 && curr_cluster < 0xFFF8 && out.len() < file_size {
+                let cl_off = data_offset + (curr_cluster - 2) * cluster_size;
+                let chunk = std::cmp::min(cluster_size, file_size - out.len());
+                if cl_off + chunk <= data.len() {
+                    out.extend_from_slice(&data[cl_off..cl_off + chunk]);
+                } else {
+                    break;
+                }
+
+                let fat_entry_off = fat_offset + curr_cluster * 2;
+                if fat_entry_off + 2 <= data.len() {
+                    curr_cluster = u16::from_le_bytes([data[fat_entry_off], data[fat_entry_off + 1]]) as usize;
+                } else {
+                    break;
+                }
+            }
+
+            return Some(out);
+        }
+    }
+
+    None
+}
+
+fn ensure_export_disk_image() -> PathBuf {
+    let path = get_export_disk_path();
+    let initial_files: [(&str, &[u8]); 2] = [
+        ("HELLO.TXT", b"Hello from Windows 11 Export Disk!\r\n"),
+        ("WIN_SRC.PL", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\nlet $msg = \"Imported Script from Windows OK\";\r\n@println($msg);\r\n"),
+    ];
+    let _ = create_fat16_image(&path, &initial_files);
+    path
+}
+
 fn run_cargo_build(release: bool) -> PathBuf {
     let root = get_workspace_root();
     let cargo = find_tool("cargo");
@@ -173,6 +372,7 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
     let port = listener.local_addr().unwrap().port();
 
     save_and_restore_console_mode(|| {
+        let export_disk = ensure_export_disk_image();
         let mut cmd = Command::new(&qemu);
         cmd.arg("-kernel")
             .arg(kernel_elf)
@@ -193,6 +393,8 @@ fn run_qemu(kernel_elf: &Path, capture_output: bool, timeout_secs: u64) -> Optio
             .arg("user,id=net0")
             .arg("-device")
             .arg("e1000,netdev=net0")
+            .arg("-drive")
+            .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -289,6 +491,7 @@ fn test_paste(kernel_elf: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
+    let export_disk = ensure_export_disk_image();
     let mut cmd = Command::new(&qemu);
     cmd.arg("-kernel")
         .arg(kernel_elf)
@@ -309,6 +512,8 @@ fn test_paste(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
+        .arg("-drive")
+        .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -449,6 +654,7 @@ fn test_compile_error(kernel_elf: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
+    let export_disk = ensure_export_disk_image();
     let mut cmd = Command::new(&qemu);
     cmd.arg("-kernel")
         .arg(kernel_elf)
@@ -469,6 +675,8 @@ fn test_compile_error(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
+        .arg("-drive")
+        .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -549,6 +757,7 @@ fn test_editor_delete(kernel_elf: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
+    let export_disk = ensure_export_disk_image();
     let mut cmd = Command::new(&qemu);
     cmd.arg("-kernel")
         .arg(kernel_elf)
@@ -569,6 +778,8 @@ fn test_editor_delete(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
+        .arg("-drive")
+        .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -709,6 +920,7 @@ fn test_editor_scroll(kernel_elf: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
+    let export_disk = ensure_export_disk_image();
     let mut cmd = Command::new(&qemu);
     cmd.arg("-kernel")
         .arg(kernel_elf)
@@ -729,6 +941,8 @@ fn test_editor_scroll(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
+        .arg("-drive")
+        .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -876,6 +1090,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port");
     let port = listener.local_addr().unwrap().port();
 
+    let export_disk = ensure_export_disk_image();
     let mut cmd = Command::new(&qemu);
     cmd.arg("-kernel")
         .arg(kernel_elf)
@@ -896,6 +1111,8 @@ fn test_px64_architecture(kernel_elf: &Path) {
         .arg("user,id=net0")
         .arg("-device")
         .arg("e1000,netdev=net0")
+        .arg("-drive")
+        .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1283,6 +1500,7 @@ fn bundle_standalone_exe() {
 fn test_standalone_exe() {
     use std::io::{Read, Write};
     let root = get_workspace_root();
+    let export_disk_path = ensure_export_disk_image();
     let out_exe = root.join("dist").join("LatencyOS.exe");
     if !out_exe.exists() {
         bundle_standalone_exe();
@@ -1819,13 +2037,70 @@ fn test_standalone_exe() {
     assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
     println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
 
-    println!("[xtask-test] 38. Sending poweroff command...");
+    println!("[xtask-test] 38. Testing Phase S Export Disk file listing: export-ls");
+    full_output.clear();
+    stdin.write_all(b"export-ls\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("EXPORT DISK (FAT16) ROOT DIRECTORY", 5, &mut full_output), "Failed running export-ls");
+    assert!(full_output.contains("HELLO.TXT"), "Failed finding HELLO.TXT on Export Disk");
+    assert!(full_output.contains("WIN_SRC.PL"), "Failed finding WIN_SRC.PL on Export Disk");
+    println!("[xtask-test] Export Disk directory listing verified:\n{}", full_output.trim());
+
+    println!("[xtask-test] 39. Testing Phase S import from Export Disk to LatencyFS: import HELLO.TXT /hello.txt");
+    full_output.clear();
+    stdin.write_all(b"import HELLO.TXT /hello.txt\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("successfully imported 'HELLO.TXT'", 5, &mut full_output), "Failed importing HELLO.TXT");
+
+    println!("[xtask-test] 40. Testing cat on imported file in LatencyFS: cat /hello.txt");
+    full_output.clear();
+    stdin.write_all(b"cat /hello.txt\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("Hello from Windows 11 Export Disk!", 5, &mut full_output), "Failed reading /hello.txt in LatencyFS");
+
+    println!("[xtask-test] 41. Testing import & compilation of PulseLang script from Export Disk: import WIN_SRC.PL /pulselang/win_src.pl");
+    full_output.clear();
+    stdin.write_all(b"import WIN_SRC.PL /pulselang/win_src.pl\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("successfully imported 'WIN_SRC.PL'", 5, &mut full_output), "Failed importing WIN_SRC.PL");
+
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/win_src.pl /bin/win_src.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling imported win_src.pl");
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/win_src.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("Imported Script from Windows OK", 5, &mut full_output), "Failed running imported win_src.bin");
+
+    println!("[xtask-test] 42. Testing Phase S export from LatencyFS to Export Disk: export /pulselang/bench.pl BENCH.PL");
+    full_output.clear();
+    stdin.write_all(b"export /pulselang/bench.pl BENCH.PL\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("successfully exported '/pulselang/bench.pl'", 5, &mut full_output), "Failed exporting /pulselang/bench.pl");
+
+    println!("[xtask-test] 43. Testing Export Disk directory listing after export: export-ls");
+    full_output.clear();
+    stdin.write_all(b"export-ls\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("BENCH.PL", 5, &mut full_output), "Failed finding BENCH.PL in Export Disk after export");
+
+    println!("[xtask-test] 44. Sending poweroff command to LatencyOS...");
     stdin.write_all(b"poweroff\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     let _ = child.kill();
     let _ = child.wait();
+
+    println!("[xtask-test] 45. Verifying exported file on Windows host from raw FAT16 image (export.img)...");
+    let exported_bench = read_file_from_fat16_image(&export_disk_path, "BENCH.PL");
+    assert!(exported_bench.is_some(), "Failed finding BENCH.PL in FAT16 image after QEMU execution");
+    let bench_bytes = exported_bench.unwrap();
+    let bench_str = String::from_utf8_lossy(&bench_bytes);
+    assert!(bench_str.contains("bench.pl"), "Exported content in FAT16 image does not contain bench.pl header");
+    println!("[xtask-test] Export Disk Verification: Successfully verified BENCH.PL content on Windows host from FAT16 image ({} bytes):\n{}", bench_bytes.len(), bench_str.trim());
 
     println!("================================================================================");
     println!("[xtask] SUCCESS: Standalone LatencyOS.exe verified end-to-end with 100% success!");
