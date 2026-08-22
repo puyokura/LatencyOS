@@ -50,11 +50,17 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
   - `doc pulse`: In-kernel formal specification of PulseLang v2.
   - `exit` / `poweroff`: ACPI hardware shutdown.
 
-### 3.2 PulseLang v2 & `px64` Architecture
-- **`px64` 64-bit Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed instructions.
-- **AI-Actionable Error Diagnostics**: Machine-readable diagnostic logs with error codes, byte offsets, ASCII/Hex dumps, and automatic repair hints.
+### 3.2 PulseLang v3 & `px64` v3 Architecture
+- **`px64` 64-bit Virtual Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed-length instructions.
+- **64-bit Constant Pool & Immediate ALU**: 16-bit index constant pool loading (`0x17 LDC Rd, const[idx]`) and 8-bit immediate operations (`0x18 ADDI`, `0x19 SUBI`).
+- **Safety Guards & Bounds Checking**: Out-of-bounds constant pool protection (`ERR_PX64_CONST_OUT_OF_BOUNDS`) and invalid opcode trapping (`ERR_PX64_INVALID_OPCODE`).
+- **Dual Runtime Safety Watchdog**: 10,000 instruction steps limit + 5.0ms TSC wall-clock timeout guard (worst-case execution bound: 5.48ms).
+- **Disassembler (`disasm <file.bin>`)**: Decodes bytecode with explicit virtual register clarification:
+  `NOTE: Registers ($rax..$r15, #f0..#f3) are px64 VM virtual registers, not host CPU GPRs.`
+- **In-Kernel Instruction Microbenchmarking (`pulse-bench` / `benchmark`)**: TSC-serialized nanosecond benchmarking for each VM opcode.
+- **AI-Actionable Error Diagnostics**: Machine-readable structured diagnostic logs with error codes, byte offsets, ASCII/Hex dumps, and automatic repair hints (syntax vs runtime separation).
 - **First-Class Time & Intrinsics**: Direct hardware calls (`@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`).
-- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`.
+- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`, `for_test.pl`, etc.
 - **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)
@@ -63,9 +69,9 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 - **High-Speed Paste**: Instant UART batch drain preventing character drops on large code pastes.
 - Real-time ANSI syntax highlighting for PulseLang tokens, directives, and numbers.
 
-### 3.4 LatencyFS (Static Real-Time Filesystem)
-- In-memory static filesystem with zero fragmentation and fixed memory layout.
-- Files stored as fixed-size blocks with instant $O(1)$ lookup and precompiled `px64` binaries in `/bin/`.
+### 3.4 LatencyFS & LatencyVFS (Static Real-Time Filesystems)
+- **LatencyFS**: In-memory static filesystem with zero fragmentation and fixed memory layout. Precompiled `px64` binaries in `/bin/`.
+- **LatencyVFS**: GPU DMA Framebuffer VRAM disk mapped directly at `/vram/` (`/vram/slot0..7`, `/vram/scratch`, `/vram/stats`).
 
 ---
 
@@ -94,6 +100,12 @@ cargo run --package xtask -- check
 cargo run --package xtask -- interactive --release
 ```
 
+### 4.5 Package Standalone Executable
+```powershell
+cargo run --package xtask -- dist
+# Produces self-contained executable: dist/LatencyOS.exe
+```
+
 ---
 
 ## 5. Directory Structure
@@ -105,19 +117,53 @@ LatencyOS/
 │   │   ├── main.rs         # Boot sequence & multi-core entry points
 │   │   ├── shell.rs        # Pulse Shell with time-native prompt & ANSI parser
 │   │   ├── editor.rs       # PulseEditor full-screen in-kernel text editor
-│   │   ├── lang.rs         # PulseLang v2 compiler & bytecode VM
+│   │   ├── lang.rs         # PulseLang compiler & px64 v3 bytecode VM
 │   │   ├── fs.rs           # LatencyFS static zero-allocation filesystem
+│   │   ├── vfs.rs          # LatencyVFS GPU DMA Framebuffer VRAM disk (/vram)
 │   │   ├── smp.rs          # APIC & multi-core initialization (Cores 0-3)
 │   │   ├── ring_buffer.rs  # Lock-free SPSC cache-line aligned ring buffer
 │   │   ├── e1000.rs        # Intel 82540EM poll-mode network driver (PMD)
 │   │   ├── gpu.rs          # Zero-copy GPU frame capture & CRC32
 │   │   ├── latency.rs      # Microsecond & nanosecond telemetry profiler
 │   │   ├── tsc.rs          # Serialized TSC cycle timer & calibration
-│   │   └── serial.rs       # UART 16550 serial driver
+│   │   ├── serial.rs       # UART 16550 serial driver
+│   │   ├── gdt.rs          # Global Descriptor Table setup
+│   │   ├── idt.rs          # Interrupt Descriptor Table & exception handlers
+│   │   └── pic.rs          # 8259 PIC disablement for APIC mode
+├── runner/                 # Self-contained standalone executable loader
+│   └── src/main.rs         # Embedded ZIP extractor & QEMU runner
+├── dist/                   # Standalone distribution artifacts
+│   └── LatencyOS.exe       # 100% portable Windows 11 standalone executable
 ├── xtask/                  # Native Rust build & test orchestration
-│   └── src/main.rs         # Toolchain checks, QEMU runner, Win32 console handler
+│   └── src/main.rs         # Toolchain checks, QEMU runner, test harness
 ├── docs/                   # Documentation & formal specifications
-│   ├── pulselang.md        # PulseLang v2 language manual & grammar
+│   ├── lang/               # PulseLang language specifications & ISA manuals
+│   ├── ja/                 # Japanese architecture and documentation
 │   └── superpowers/specs/  # Architectural design specifications
+├── STATUS.md               # Project Phase 0-9 status & inventory report
 └── architecture.md         # Detailed hardware & latency budget specification
 ```
+
+---
+
+## 6. プロジェクト状態一覧 (Project Status Inventory)
+
+| フェーズ名 | 状態 | 備考 |
+|---|---|---|
+| **Phase 0: QEMU Core 0 起動 & シリアル出力** | **完了・実測検証済み** | QEMU COM1 UART（115200 baud）出力およびマイクロカーネル初期ブートシーケンス確認済み。 |
+| **Phase 1: 静的コア割当 & TSC 精密タイマー** | **完了・実測検証済み** | APIC SMP 4コア静的アフィニティ起動、MSR C0ステートロック、シリアライズTSC校正確認済み。 |
+| **Phase 2: GPU Capture ドメイン (Zero-Copy Ring)** | **完了・未検証** | GPU DMAフレームリング・CRC32整合性実装完了。ただしGPUパススルー非搭載のQEMU環境のため、実機GPU測定値ではなくエミュレータ上の値である点に留意。 |
+| **Phase 3: ネットワークドメイン (e1000 PMD + SRTP)** | **完了・実測検証済み** | Intel 82540EM poll-modeドライバー、AES-NI / PCLMULQDQ ハードウェア暗号化パケット送出確認済み。 |
+| **Phase 4: エンドツーエンド計測・統計レポート** | **完了・実測検証済み** | **【フェーズAにて是正完了】** 生ログ（9〜12ms）と1000サンプル集計統計表（p50 235us, p95 12.2ms, Max 18.2ms）の乖離原因を特定・解消し、QEMU制約下での真実の計測値を再提示。 |
+| **Phase 5: 静的ファイルシステム (LatencyFS) & Pulse Shell** | **完了・実測検証済み** | 階層ディレクトリ操作（cd, ls, mkdir, cp, mv）、時間駆動型プロンプト（`[c0\|18ns] %`）、時限ガード（`within`）、VFS VRAMマウント（`/vram`）確認済み。 |
+| **Phase 6: AIネイティブDSL (PulseLang) & 64-bit VM (`px64`)** | **完了・実測検証済み** | 20レジスタマシン、32-bit固定長命令、引数付きスクリプト実行（`run`）、逆アセンブラ（`disasm`）確認済み。 |
+| **Phase 7: カーネル内蔵エディタ (PulseEditor) & AI診断** | **完了・実測検証済み** | ANSIフルスクリーンエディタ、Nano風ショートカットバー、UART高速ペースト、構造化エラー診断確認済み。 |
+| **Phase 8: 実効時間ガード (Wall-Clock Watchdog) & 診断分離** | **完了・実測検証済み** | TSC 5.0ms壁時計タイムアウトガード（最悪保証5.48ms）、構文エラーと実行時エラーの診断テンプレート完全分離確認済み。 |
+| **Phase 9: px64 ISA リファクタリング (定数プール & 即値演算)** | **完了・実測検証済み** | PX64 v3バイナリ、64-bit定数プール（`LDC`）、即値加減算（`ADDI`/`SUBI`）、定数プール境界防御、未登録オペコード検知、disasm仮想レジスタ注記、命令マイクロベンチマーク確認済み。 |
+| **Phase 10: PulseLang v3 言語機能拡張 & 形式検証** | **完了・実測検証済み** | 10-1（静的forループ & WCET解析）、10-2（固定長配列・ビット演算・アサーション）、10-3（静的関数 & Result型）、10-4（構造体）、10-5（ROM定数表）、10-6（文字列比較）、10-7（定数畳み込み）、不変性デフォルト（`let mut`）、契約プログラミング（`@requires`）、網羅的パターンマッチング（`match`）確認済み。 |
+
+### 現時点で判明している制約・留意事項
+1. **GPU / NVENC のエミュレーション制約**: GPUパススルー非搭載のQEMU環境で動作しているため、GPUキャプチャおよびNVENCエンコード区間は実機ハードウェアの実測ではなくソフトウェアエミュレーション/スタブ値である点。
+2. **MSR / CPU温度データの読み取り制約**: QEMU環境においてMSRレジスタ読み取りが `0x0` となる箇所があり、実ハードウェアセンサー値ではない点。
+
+
