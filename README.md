@@ -73,6 +73,12 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 - **LatencyFS**: In-memory static filesystem with zero fragmentation and fixed memory layout. Precompiled `px64` binaries in `/bin/`.
 - **LatencyVFS**: GPU DMA Framebuffer VRAM disk mapped directly at `/vram/` (`/vram/slot0..7`, `/vram/scratch`, `/vram/stats`).
 
+### 3.5 Export Disk (Windows 11 FAT16 Interop & Auto-Sync)
+- **Secondary ATA FAT16 Drive**: Dedicated interop disk (`export.img`) for seamless data exchange between Windows host and LatencyOS.
+- **Boot Auto-Import**: Scans the FAT16 root directory on boot and automatically loads files and PulseLang scripts into LatencyFS.
+- **Continuous Write-Through Auto-Sync**: File CRUD operations (`edit`, `touch`, `cp`, `mv`, `rm`, `compile`) immediately persist to the FAT16 disk, enabling persistent scripts across full cold OS reboots.
+- **Shell Management Commands**: `export-ls` (FAT16 directory list), `import <file> [dst]`, `export <src> [dst]`.
+
 ---
 
 ## 4. Building and Running (Windows 11 Native)
@@ -161,6 +167,7 @@ LatencyOS/
 | **Phase 8: 実効時間ガード (Wall-Clock Watchdog) & 診断分離** | **完了・実測検証済み** | TSC 5.0ms壁時計タイムアウトガード（最悪保証5.48ms）、構文エラーと実行時エラーの診断テンプレート完全分離確認済み。 |
 | **Phase 9: px64 ISA リファクタリング (定数プール & 即値演算)** | **完了・実測検証済み** | PX64 v3バイナリ、64-bit定数プール（`LDC`）、即値加減算（`ADDI`/`SUBI`）、定数プール境界防御、未登録オペコード検知、disasm仮想レジスタ注記、命令マイクロベンチマーク確認済み。 |
 | **Phase 10: PulseLang v3 言語機能拡張 & 形式検証** | **完了・実測検証済み** | 10-1（静的forループ & WCET解析）、10-2（固定長配列・ビット演算・アサーション）、10-3（静的関数 & Result型）、10-4（構造体）、10-5（ROM定数表）、10-6（文字列比較）、10-7（定数畳み込み）、不変性デフォルト（`let mut`）、契約プログラミング（`@requires`）、網羅的パターンマッチング（`match`）確認済み。 |
+| **Phase S: Export Disk (FAT16 輸出入専用ディスク & 常時自動同期・透過保存)** | **完了・実測検証済み** | ATA PIO LBA28ドライバ、FAT16 BPBパーサー、起動時自動インポート、Write-Through常時自動同期（CRUD連動）、Windows 11ホスト直接連携、コールドリブート永続化確認済み。 |
 
 ### 現時点で判明している制約・留意事項
 1. **GPU / NVENC のエミュレーション制約**: GPUパススルー非搭載のQEMU環境で動作しているため、GPUキャプチャおよびNVENCエンコード区間は実機ハードウェアの実測ではなくソフトウェアエミュレーション/スタブ値である点。
