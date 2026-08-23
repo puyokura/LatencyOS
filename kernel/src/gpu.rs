@@ -169,3 +169,12 @@ pub fn get_frame_slot_data(slot_id: u8) -> &'static [u8] {
     let idx = (slot_id as usize) % NUM_FRAME_SLOTS;
     unsafe { &FRAME_POOL[idx].data }
 }
+
+// Function: get_frame_slot_data_mut
+// Description: Retrieve mutable reference to frame data for a given slot.
+// Worst-case execution time: ~10 ns
+#[allow(dead_code)]
+pub fn get_frame_slot_data_mut(slot_id: u8) -> &'static mut [u8] {
+    let idx = (slot_id as usize) % NUM_FRAME_SLOTS;
+    unsafe { &mut FRAME_POOL[idx].data }
+}

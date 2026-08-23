@@ -100,11 +100,15 @@ impl<T: Copy, const CAP: usize> SpscRingBuffer<T, CAP> {
         self.head.load(Ordering::Relaxed).wrapping_sub(self.tail.load(Ordering::Acquire)) >= CAP
     }
 
-    // Function: len
-    // Description: Return current number of elements in buffer.
-    // Worst-case execution time: ~8 ns
     #[inline]
     pub fn len(&self) -> usize {
-        self.head.load(Ordering::Relaxed).wrapping_sub(self.tail.load(Ordering::Acquire))
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        if head >= tail {
+            let diff = head - tail;
+            if diff <= CAP { diff } else { CAP }
+        } else {
+            0
+        }
     }
 }

@@ -634,27 +634,32 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "doc" | "man" => {
-            serial_println!("=== PulseLang v2 Formal Specification (AI-Native DSL) ===");
+            serial_println!("=== PulseLang v3.1 Formal Specification (AI-Native DSL) ===");
             serial_println!("1. DIRECTIVES & CONTRACTS:");
             serial_println!("   @contract: @wcet(<time>) @budget(<time>);");
-            serial_println!("   @pipeline: <Name> @budget(<time>);");
-            serial_println!("   @on_vblank: {{ <statements> }};");
-            serial_println!("2. REGISTERS & HARDWARE HANDLES:");
-            serial_println!("   $var := <expr>;       // Register assignment (e.g. $rtt, $sum)");
-            serial_println!("   $var += <expr>;       // In-place register mutation");
-            serial_println!("   #handle := @capture();// Hardware slot handle (e.g. #f)");
-            serial_println!("3. TEMPORAL GUARDS & PIPELINES:");
-            serial_println!("   @within(<time>) {{ <statements> }} !drop;");
-            serial_println!("   <cond> ? {{ <true_block> }} : {{ <false_block> }};");
-            serial_println!("   <expr> |> <fn>        // Zero-copy stream pipe");
-            serial_println!("4. INTRINSIC HARDWARE CALLS:");
-            serial_println!("   @tsc()                // Read serialized CPU cycle clock");
-            serial_println!("   @rtt()                // Read minimum hardware RTT (ns)");
-            serial_println!("   @rate(<pct>)          // Set NIC flow throttle (10-100%)");
-            serial_println!("   @capture()            // Zero-copy GPU frame capture");
-            serial_println!("   @send(#handle)        // Hard-realtime kernel-bypass TX");
-            serial_println!("   @println(<val>)       // Zero-alloc string/integer print");
-            serial_println!("5. TIME LITERALS:");
+            serial_println!("   fn func($a, $b) -> i64 @requires($b != 0) {{ return $a / $b; }}");
+            serial_println!("2. IMMUTABILITY & PATTERN MATCHING:");
+            serial_println!("   let $val = 10;        // Immutable by default");
+            serial_println!("   let mut $acc = 0;     // Explicit mutable variable");
+            serial_println!("   match $res {{ Ok($v) => {{ ... }}, Err($e) => {{ ... }} }}");
+            serial_println!("3. DETERMINISTIC HARDWARE & TELEMETRY INTRINSICS:");
+            serial_println!("   @core_id()            // Read executing CPU LAPIC ID / Core Index");
+            serial_println!("   @tsc_freq()           // Read calibrated hardware TSC frequency (MHz)");
+            serial_println!("   @uptime_ns()          // Read uptime in nanoseconds");
+            serial_println!("   @busy_wait(<ns>)      // Deterministic spin-wait loop");
+            serial_println!("   @ring_depth(<id>)     // Read lock-free SPSC queue depth (0:Cap->Enc, 1:Enc->Net)");
+            serial_println!("4. BRANCHLESS MATH, BIT & HASH INTRINSICS:");
+            serial_println!("   @min($a, $b)          // Branchless minimum of two 64-bit values");
+            serial_println!("   @max($a, $b)          // Branchless maximum of two 64-bit values");
+            serial_println!("   @abs($val)            // Branchless 64-bit absolute value");
+            serial_println!("   @clamp($v, $min, $max)// Clamps value to [$min, $max] range");
+            serial_println!("   @popcnt($val)         // Hardware population count (bits set)");
+            serial_println!("   @lzcnt($val)          // Hardware leading zero count");
+            serial_println!("   @crc32($seed, $val)   // Hardware-accelerated CRC32 hash");
+            serial_println!("5. VRAM DMA ZERO-COPY DIRECT ACCESS:");
+            serial_println!("   @vram_read($s, $off)  // Direct read from /vram/slotN DMA frame buffer");
+            serial_println!("   @vram_write($s,$off,$v)// Direct write to /vram/slotN DMA frame buffer");
+            serial_println!("6. TIME LITERALS:");
             serial_println!("   50ns, 200us, 5ms, 1s  // Auto-compiled to integer nanoseconds");
         }
 
@@ -1026,6 +1031,25 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                                     crate::lang::NATIVE_NET_SEND => "@send",
                                     crate::lang::NATIVE_SCRIPT_ARGC => "@argc",
                                     crate::lang::NATIVE_SCRIPT_ARG => "@arg",
+                                    crate::lang::NATIVE_TAG_OK => "@ok",
+                                    crate::lang::NATIVE_TAG_ERR => "@err",
+                                    crate::lang::NATIVE_IS_OK => "@is_ok",
+                                    crate::lang::NATIVE_IS_ERR => "@is_err",
+                                    crate::lang::NATIVE_UNWRAP => "@unwrap",
+                                    crate::lang::NATIVE_CORE_ID => "@core_id",
+                                    crate::lang::NATIVE_TSC_FREQ => "@tsc_freq",
+                                    crate::lang::NATIVE_UPTIME_NS => "@uptime_ns",
+                                    crate::lang::NATIVE_BUSY_WAIT => "@busy_wait",
+                                    crate::lang::NATIVE_RING_DEPTH => "@ring_depth",
+                                    crate::lang::NATIVE_MATH_MIN => "@min",
+                                    crate::lang::NATIVE_MATH_MAX => "@max",
+                                    crate::lang::NATIVE_MATH_ABS => "@abs",
+                                    crate::lang::NATIVE_MATH_CLAMP => "@clamp",
+                                    crate::lang::NATIVE_BIT_POPCNT => "@popcnt",
+                                    crate::lang::NATIVE_BIT_LZCNT => "@lzcnt",
+                                    crate::lang::NATIVE_CRC32 => "@crc32",
+                                    crate::lang::NATIVE_VRAM_READ => "@vram_read",
+                                    crate::lang::NATIVE_VRAM_WRITE => "@vram_write",
                                     _ => "@native",
                                 };
                                 serial_println!("{:04x}:   12 {:02x} {:02x} {:02x}  CALL_NAT     {} = {}({})", op_ip, rd, rs1, rs2, rd_str, func_name, rs2_str);

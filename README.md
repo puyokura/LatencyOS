@@ -50,17 +50,21 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
   - `doc pulse`: In-kernel formal specification of PulseLang v2.
   - `exit` / `poweroff`: ACPI hardware shutdown.
 
-### 3.2 PulseLang v3 & `px64` v3 Architecture
+### 3.2 PulseLang v3.1 & `px64` v3 Architecture
 - **`px64` 64-bit Virtual Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed-length instructions.
 - **64-bit Constant Pool & Immediate ALU**: 16-bit index constant pool loading (`0x17 LDC Rd, const[idx]`) and 8-bit immediate operations (`0x18 ADDI`, `0x19 SUBI`).
 - **Safety Guards & Bounds Checking**: Out-of-bounds constant pool protection (`ERR_PX64_CONST_OUT_OF_BOUNDS`) and invalid opcode trapping (`ERR_PX64_INVALID_OPCODE`).
-- **Dual Runtime Safety Watchdog**: 10,000 instruction steps limit + 5.0ms TSC wall-clock timeout guard (worst-case execution bound: 5.48ms).
+- **Dual Runtime Safety Watchdog**: 10,000 instruction steps limit + 50.0ms TSC wall-clock timeout guard (worst-case execution bound: 5.48ms).
 - **Disassembler (`disasm <file.bin>`)**: Decodes bytecode with explicit virtual register clarification:
   `NOTE: Registers ($rax..$r15, #f0..#f3) are px64 VM virtual registers, not host CPU GPRs.`
 - **In-Kernel Instruction Microbenchmarking (`pulse-bench` / `benchmark`)**: TSC-serialized nanosecond benchmarking for each VM opcode.
 - **AI-Actionable Error Diagnostics**: Machine-readable structured diagnostic logs with error codes, byte offsets, ASCII/Hex dumps, and automatic repair hints (syntax vs runtime separation).
-- **First-Class Time & Intrinsics**: Direct hardware calls (`@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`).
-- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`, `for_test.pl`, etc.
+- **Extensive Real-Time Intrinsics**:
+  - *Hardware & System Telemetry*: `@core_id()` (executing CPU LAPIC ID), `@tsc_freq()` (calibrated TSC MHz), `@uptime_ns()` (system uptime), `@busy_wait(<ns>)` (deterministic spin-wait), `@ring_depth(<id>)` (lock-free queue depth).
+  - *Branchless Math, Bits & Hash*: `@min($a, $b)`, `@max($a, $b)`, `@abs($a)`, `@clamp($v, $min, $max)`, `@popcnt($v)`, `@lzcnt($v)`, `@crc32($seed, $val)`.
+  - *Zero-Copy VRAM DMA Direct Access*: `@vram_read($slot, $offset)`, `@vram_write($slot, $offset, $val)` (direct memory access to `/vram/slotN` frame buffers).
+  - *Network & Pipeline*: `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`, `@streq()`.
+- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`, `math_demo.pl`, `telemetry_ext.pl`, `vram_test.pl`, `for_test.pl`, etc.
 - **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)

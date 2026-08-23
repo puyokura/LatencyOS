@@ -832,6 +832,91 @@ match $res {
 "#;
         let _ = fs_create_internal("/pulselang/err_non_exhaustive.pl", err_non_exh_src, false);
 
+        let math_demo_src = br#"// math_demo.pl - Deterministic Math, Bit Manipulation & CRC32 Intrinsics
+@contract: @wcet(25us) @budget(100us);
+
+let $min_val = @min(42, 10);
+let $max_val = @max(42, 10);
+let $abs_pos = @abs(123);
+let $abs_neg = @abs(-123);
+let $clamped_low = @clamp(5, 10, 50);
+let $clamped_mid = @clamp(25, 10, 50);
+let $clamped_high = @clamp(100, 10, 50);
+let $pop = @popcnt(7);
+let $lz = @lzcnt(1);
+let $crc = @crc32(0, 123456789);
+
+@println("[MATH_DEMO] Output values:");
+@println($min_val);
+@println($max_val);
+@println($abs_pos);
+@println($abs_neg);
+@println($clamped_low);
+@println($clamped_mid);
+@println($clamped_high);
+@println($pop);
+@println($lz);
+@println($crc);
+
+@assert($min_val == 10);
+@assert($max_val == 42);
+@assert($abs_pos == 123);
+@assert($abs_neg == 123);
+@assert($clamped_low == 10);
+@assert($clamped_mid == 25);
+@assert($clamped_high == 50);
+@assert($pop == 3);
+@assert($lz == 63);
+@assert($crc != 0);
+@println("[MATH_DEMO] All math & bit manipulation tests passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/math_demo.pl", math_demo_src, false);
+
+        let telemetry_ext_src = br#"// telemetry_ext.pl - Hardware & Real-Time System Telemetry
+@contract: @wcet(30us) @budget(120us);
+
+let $cid = @core_id();
+let $freq = @tsc_freq();
+let $uptime = @uptime_ns();
+let $q_depth = @ring_depth(0);
+
+@busy_wait(1000);
+
+@println("[TELEMETRY_EXT] Core ID:");
+@println($cid);
+@println("[TELEMETRY_EXT] TSC Freq MHz:");
+@println($freq);
+@println("[TELEMETRY_EXT] Uptime ns:");
+@println($uptime);
+@println("[TELEMETRY_EXT] Ring Depth:");
+@println($q_depth);
+
+@assert($cid >= 0);
+@assert($freq > 0);
+@assert($uptime > 0);
+@assert($q_depth >= 0);
+@println("[TELEMETRY_EXT] All telemetry assertions passed!");
+"#;
+        let _ = fs_create_internal("/pulselang/telemetry_ext.pl", telemetry_ext_src, false);
+
+        let vram_test_src = br#"// vram_test.pl - Zero-Copy VRAM DMA Direct Read/Write
+@contract: @wcet(20us) @budget(80us);
+
+let $slot = 0;
+let $offset = 64;
+let $magic_val = 987654321;
+
+@vram_write($slot, $offset, $magic_val);
+let $read_back = @vram_read($slot, $offset);
+
+@println("[VRAM_TEST] Read back value from DMA buffer:");
+@println($read_back);
+
+@assert($read_back == $magic_val);
+@println("[VRAM_TEST] VRAM DMA direct access verified successfully!");
+"#;
+        let _ = fs_create_internal("/pulselang/vram_test.pl", vram_test_src, false);
+
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
         let _ = fs_create_internal("/etc/config.json", config_json, false);
         let _ = fs_create_internal("/var/log/system.log", system_log, false);

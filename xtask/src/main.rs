@@ -1664,7 +1664,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/for_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("CMPLT", 5, &mut full_output), "Failed finding CMPLT in disasm");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm for_test.bin");
+    assert!(full_output.contains("CMPLT"), "Failed finding CMPLT in disasm");
     assert!(full_output.contains("JZ"), "Failed finding JZ in disasm");
     assert!(full_output.contains("ADDI"), "Failed finding ADDI in disasm");
     assert!(full_output.contains("JMP"), "Failed finding JMP in disasm");
@@ -1743,7 +1744,7 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("MOV", 5, &mut full_output), "Failed disasm fold_test.bin");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm fold_test.bin");
     println!("[xtask-test] Disassembly for /bin/fold_test.bin (Constant Folded to 115):\n{}", full_output.trim());
     assert!(full_output.contains("115"), "Failed finding folded constant 115 in disassembly");
 
@@ -1774,7 +1775,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/fn_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("CALL", 5, &mut full_output), "Failed disasm fn_test.bin (missing CALL opcode)");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm fn_test.bin");
+    assert!(full_output.contains("CALL"), "Failed disasm fn_test.bin (missing CALL opcode)");
     assert!(full_output.contains("RET"), "Failed disasm fn_test.bin (missing RET opcode)");
     println!("[xtask-test] Disassembly for /bin/fn_test.bin showing CALL/RET opcodes:\n{}", full_output.trim());
 
@@ -2048,6 +2050,69 @@ fn test_standalone_exe() {
     assert!(full_output.contains("ASSERT"), "Failed finding assert benchmark");
     assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
     println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
+
+    println!("[xtask-test] 37.1 Testing math & bit manipulation intrinsics: compile, disasm & run /pulselang/math_demo.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/math_demo.pl /bin/math_demo.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling math_demo.pl");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for math_demo.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/math_demo.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm math_demo.bin");
+    assert!(full_output.contains("@min") && full_output.contains("@clamp") && full_output.contains("@crc32"), "Failed finding intrinsics in disasm math_demo.bin");
+    println!("[xtask-test] Disassembly for /bin/math_demo.bin showing math intrinsics:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/math_demo.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[MATH_DEMO] All math & bit manipulation tests passed!", 5, &mut full_output), "Failed running math_demo.bin");
+
+    println!("[xtask-test] 37.2 Testing hardware & system telemetry intrinsics: compile & run /pulselang/telemetry_ext.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/telemetry_ext.pl /bin/telemetry_ext.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling telemetry_ext.pl");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for telemetry_ext.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/telemetry_ext.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm telemetry_ext.bin");
+    println!("[xtask-test] Disassembly for /bin/telemetry_ext.bin:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/telemetry_ext.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_telemetry = wait_for("[TELEMETRY_EXT] All telemetry assertions passed!", 5, &mut full_output);
+    if !res_telemetry {
+        println!("[DEBUG_OUTPUT for run telemetry_ext.bin]:\n{}", full_output);
+    }
+    assert!(res_telemetry, "Failed running telemetry_ext.bin");
+
+    println!("[xtask-test] 37.3 Testing zero-copy VRAM DMA direct access intrinsics: compile & run /pulselang/vram_test.pl");
+    full_output.clear();
+    stdin.write_all(b"compile /pulselang/vram_test.pl /bin/vram_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling vram_test.pl");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for vram_test.pl");
+
+    full_output.clear();
+    stdin.write_all(b"disasm /bin/vram_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm vram_test.bin");
+    println!("[xtask-test] Disassembly for /bin/vram_test.bin:\n{}", full_output.trim());
+
+    full_output.clear();
+    stdin.write_all(b"run /bin/vram_test.bin\r\n").unwrap();
+    stdin.flush().unwrap();
+    let res_vram = wait_for("[VRAM_TEST] VRAM DMA direct access verified successfully!", 5, &mut full_output);
+    if !res_vram {
+        println!("[DEBUG_OUTPUT for run vram_test.bin]:\n{}", full_output);
+    }
+    assert!(res_vram, "Failed running vram_test.bin");
 
     println!("[xtask-test] 38. Testing Phase S Auto-Import on boot (without manual import command): cat /hello.txt");
     full_output.clear();

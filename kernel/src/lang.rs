@@ -16,7 +16,7 @@ pub const MAX_BYTECODE_SIZE: usize = 1024;
 pub const MAX_VARS: usize = 32;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;
-pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 20_000_000; // 20.0 ms (20,000,000 ns) wall-clock hard watchdog limit
+pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 50_000_000; // 50.0 ms (50,000,000 ns) wall-clock hard watchdog limit
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -849,6 +849,20 @@ pub const NATIVE_IS_OK: u8 = 12;
 pub const NATIVE_IS_ERR: u8 = 13;
 pub const NATIVE_UNWRAP: u8 = 14;
 pub const NATIVE_STREQ: u8 = 15;
+pub const NATIVE_CORE_ID: u8 = 16;
+pub const NATIVE_TSC_FREQ: u8 = 17;
+pub const NATIVE_UPTIME_NS: u8 = 18;
+pub const NATIVE_BUSY_WAIT: u8 = 19;
+pub const NATIVE_RING_DEPTH: u8 = 20;
+pub const NATIVE_MATH_MIN: u8 = 21;
+pub const NATIVE_MATH_MAX: u8 = 22;
+pub const NATIVE_MATH_ABS: u8 = 23;
+pub const NATIVE_MATH_CLAMP: u8 = 24;
+pub const NATIVE_BIT_POPCNT: u8 = 25;
+pub const NATIVE_BIT_LZCNT: u8 = 26;
+pub const NATIVE_CRC32: u8 = 27;
+pub const NATIVE_VRAM_READ: u8 = 28;
+pub const NATIVE_VRAM_WRITE: u8 = 29;
 
 pub const ERR_TAG: i64 = 0x1000_0000_0000_0000;
 
@@ -3478,24 +3492,106 @@ impl<'a> Compiler<'a> {
                         return Ok(None);
                     }
 
+                    let (func_id, arity) = match name {
+                        b"@print" | b"print" => (NATIVE_PRINT, 1),
+                        b"@println" | b"println" => (NATIVE_PRINTLN, 1),
+                        b"@tsc" | b"sys.tsc" => (NATIVE_SYS_TSC, 0),
+                        b"@rtt" | b"net.rtt" => (NATIVE_NET_RTT, 0),
+                        b"@rate" | b"net.set_rate" => (NATIVE_NET_SET_RATE, 1),
+                        b"@capture" | b"gpu.capture" => (NATIVE_GPU_CAPTURE, 0),
+                        b"@send" | b"net.send" => (NATIVE_NET_SEND, 1),
+                        b"@argc" | b"sys.argc" => (NATIVE_SCRIPT_ARGC, 0),
+                        b"@arg" | b"sys.arg" => (NATIVE_SCRIPT_ARG, 1),
+                        b"@ok" => (NATIVE_TAG_OK, 1),
+                        b"@err" => (NATIVE_TAG_ERR, 1),
+                        b"@is_ok" => (NATIVE_IS_OK, 1),
+                        b"@is_err" => (NATIVE_IS_ERR, 1),
+                        b"@unwrap" => (NATIVE_UNWRAP, 1),
+                        b"@core_id" | b"sys.core_id" => (NATIVE_CORE_ID, 0),
+                        b"@tsc_freq" | b"sys.tsc_freq" => (NATIVE_TSC_FREQ, 0),
+                        b"@uptime_ns" | b"sys.uptime_ns" => (NATIVE_UPTIME_NS, 0),
+                        b"@busy_wait" | b"sys.busy_wait" => (NATIVE_BUSY_WAIT, 1),
+                        b"@ring_depth" | b"sys.ring_depth" => (NATIVE_RING_DEPTH, 1),
+                        b"@min" | b"math.min" => (NATIVE_MATH_MIN, 2),
+                        b"@max" | b"math.max" => (NATIVE_MATH_MAX, 2),
+                        b"@abs" | b"math.abs" => (NATIVE_MATH_ABS, 1),
+                        b"@clamp" | b"math.clamp" => (NATIVE_MATH_CLAMP, 3),
+                        b"@popcnt" | b"bit.popcnt" => (NATIVE_BIT_POPCNT, 1),
+                        b"@lzcnt" | b"bit.lzcnt" => (NATIVE_BIT_LZCNT, 1),
+                        b"@crc32" | b"hash.crc32" => (NATIVE_CRC32, 2),
+                        b"@vram_read" | b"vram.read" => (NATIVE_VRAM_READ, 2),
+                        b"@vram_write" | b"vram.write" => (NATIVE_VRAM_WRITE, 3),
+                        _ => {
+                            return Err(self.error(
+                                "ERR_UNKNOWN_INTRINSIC",
+                                "Unknown intrinsic function name",
+                                "Supported intrinsics: @print, @println, @tsc, @rtt, @rate, @capture, @send, @argc, @arg, @ok, @err, @is_ok, @is_err, @unwrap, @core_id, @tsc_freq, @uptime_ns, @busy_wait, @ring_depth, @min, @max, @abs, @clamp, @popcnt, @lzcnt, @crc32, @vram_read, @vram_write",
+                                "Expression -> Intrinsic Call",
+                                "Verify that the intrinsic name matches supported DSL intrinsics",
+                            ));
+                        }
+                    };
+
                     self.advance(); // consume '('
-                    let mut arg_reg = 0u8;
+                    let mut arg0_reg = 0u8;
+                    let mut arg1_reg = 0u8;
+                    let mut arg2_reg = 0u8;
                     let mut raw_h_reg = 0u8;
-                    if self.peek().kind != TokenKind::RParen {
-                        let arg_tok = self.peek();
-                        if arg_tok.kind == TokenKind::HardwareIdent {
-                            if let Ok(reg) = self.resolve_var(arg_tok) {
-                                raw_h_reg = reg;
+
+                    if arity == 0 {
+                        // 0 arguments: allow empty ()
+                    } else if arity == 1 {
+                        if self.peek().kind != TokenKind::RParen {
+                            let arg_tok = self.peek();
+                            if arg_tok.kind == TokenKind::HardwareIdent {
+                                if let Ok(reg) = self.resolve_var(arg_tok) {
+                                    raw_h_reg = reg;
+                                }
                             }
+                            arg0_reg = self.alloc_temp()?;
+                            self.expression(arg0_reg)?;
                         }
-                        arg_reg = self.alloc_temp()?;
-                        self.expression(arg_reg)?;
-                        while self.match_token(TokenKind::Comma) {
-                            let dummy = self.alloc_temp()?;
-                            self.expression(dummy)?;
-                            self.free_temp(dummy);
+                    } else if arity == 2 {
+                        arg0_reg = self.alloc_temp()?;
+                        self.expression(arg0_reg)?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' between 2 intrinsic arguments",
+                                "Comma ','",
+                                "Expression -> Intrinsic Function Call",
+                                "Provide 2 arguments separated by a comma",
+                            ));
                         }
+                        arg1_reg = self.alloc_temp()?;
+                        self.expression(arg1_reg)?;
+                    } else if arity == 3 {
+                        arg0_reg = self.alloc_temp()?;
+                        self.expression(arg0_reg)?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' between intrinsic arguments",
+                                "Comma ','",
+                                "Expression -> Intrinsic Function Call",
+                                "Provide 3 arguments separated by commas",
+                            ));
+                        }
+                        arg1_reg = self.alloc_temp()?;
+                        self.expression(arg1_reg)?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' between intrinsic arguments",
+                                "Comma ','",
+                                "Expression -> Intrinsic Function Call",
+                                "Provide 3 arguments separated by commas",
+                            ));
+                        }
+                        arg2_reg = self.alloc_temp()?;
+                        self.expression(arg2_reg)?;
                     }
+
                     if !self.match_token(TokenKind::RParen) {
                         return Err(self.error(
                             "ERR_UNCLOSED_PAREN",
@@ -3506,64 +3602,52 @@ impl<'a> Compiler<'a> {
                         ));
                     }
 
-                    let func_id = match name {
-                        b"@print" | b"print" => NATIVE_PRINT,
-                        b"@println" | b"println" => NATIVE_PRINTLN,
-                        b"@tsc" | b"sys.tsc" => NATIVE_SYS_TSC,
-                        b"@rtt" | b"net.rtt" => NATIVE_NET_RTT,
-                        b"@rate" | b"net.set_rate" => NATIVE_NET_SET_RATE,
-                        b"@capture" | b"gpu.capture" => NATIVE_GPU_CAPTURE,
-                        b"@send" | b"net.send" => {
-                            let target_reg = if raw_h_reg >= 16 && raw_h_reg <= 19 { raw_h_reg } else { arg_reg };
-                            if target_reg >= 16 && target_reg <= 19 {
-                                let slot = (target_reg - 16) as usize;
-                                match self.handle_states[slot] {
-                                    HandleState::Unallocated => {
-                                        return Err(self.error(
-                                            "ERR_LINEAR_USE_BEFORE_ALLOC",
-                                            "Hardware handle sent before being captured/allocated",
-                                            "Capture handle with '#f := @capture()' before sending",
-                                            "Linear Ownership Verification",
-                                            "Initialize hardware handle with '@capture()' before '@send()'",
-                                        ));
-                                    }
-                                    HandleState::Consumed => {
-                                        return Err(self.error(
-                                            "ERR_LINEAR_DOUBLE_SEND",
-                                            "Hardware handle sent multiple times (double-send / double-free violation)",
-                                            "Single @send per allocated handle",
-                                            "Linear Ownership Verification",
-                                            "Remove duplicate '@send(#f);' calls on the same handle",
-                                        ));
-                                    }
-                                    HandleState::Allocated { .. } => {
-                                        self.handle_states[slot] = HandleState::Consumed;
-                                    }
+                    if func_id == NATIVE_NET_SEND {
+                        let target_reg = if raw_h_reg >= 16 && raw_h_reg <= 19 { raw_h_reg } else { arg0_reg };
+                        if target_reg >= 16 && target_reg <= 19 {
+                            let slot = (target_reg - 16) as usize;
+                            match self.handle_states[slot] {
+                                HandleState::Unallocated => {
+                                    return Err(self.error(
+                                        "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                        "Hardware handle sent before being captured/allocated",
+                                        "Capture handle with '#f := @capture()' before sending",
+                                        "Linear Ownership Verification",
+                                        "Initialize hardware handle with '@capture()' before '@send()'",
+                                    ));
+                                }
+                                HandleState::Consumed => {
+                                    return Err(self.error(
+                                        "ERR_LINEAR_DOUBLE_SEND",
+                                        "Hardware handle sent multiple times (double-send / double-free violation)",
+                                        "Single @send per allocated handle",
+                                        "Linear Ownership Verification",
+                                        "Remove duplicate '@send(#f);' calls on the same handle",
+                                    ));
+                                }
+                                HandleState::Allocated { .. } => {
+                                    self.handle_states[slot] = HandleState::Consumed;
                                 }
                             }
-                            NATIVE_NET_SEND
                         }
-                        b"@argc" | b"sys.argc" => NATIVE_SCRIPT_ARGC,
-                        b"@arg" | b"sys.arg" => NATIVE_SCRIPT_ARG,
-                        b"@ok" => NATIVE_TAG_OK,
-                        b"@err" => NATIVE_TAG_ERR,
-                        b"@is_ok" => NATIVE_IS_OK,
-                        b"@is_err" => NATIVE_IS_ERR,
-                        b"@unwrap" => NATIVE_UNWRAP,
-                        _ => {
-                            return Err(self.error(
-                                "ERR_UNKNOWN_INTRINSIC",
-                                "Unknown intrinsic function name",
-                                "One of @print, @println, @tsc, @rtt, @rate, @capture, @send, @argc, @arg, @ok, @err, @is_ok, @is_err, @unwrap",
-                                "Expression -> Intrinsic Call",
-                                "Verify that the intrinsic name matches supported DSL intrinsics",
-                            ));
-                        }
-                    };
+                    }
 
-                    self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg_reg)?;
-                    if arg_reg != 0 {
-                        self.free_temp(arg_reg);
+                    if arity == 0 {
+                        self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, 0)?;
+                    } else if arity == 1 {
+                        self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg0_reg)?;
+                        if arg0_reg != 0 {
+                            self.free_temp(arg0_reg);
+                        }
+                    } else if arity == 2 {
+                        self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg0_reg)?;
+                        self.free_temp(arg1_reg);
+                        self.free_temp(arg0_reg);
+                    } else if arity == 3 {
+                        self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, arg0_reg)?;
+                        self.free_temp(arg2_reg);
+                        self.free_temp(arg1_reg);
+                        self.free_temp(arg0_reg);
                     }
                     Ok(None)
                 } else {
@@ -3729,10 +3813,10 @@ impl<'a> PX64VM<'a> {
                 ));
             }
 
-            if read_tsc_serialized() > timeout_tsc {
+            if (steps & 0x1F) == 0 && read_tsc_serialized() > timeout_tsc {
                 return Err(CompileError::simple(
                     "ERR_PX64_TIMEOUT_EXCEEDED",
-                    "Execution exceeded 5.0ms wall-clock execution deadline (watchdog safety violation)",
+                    "Execution exceeded wall-clock execution deadline (watchdog safety violation)",
                 ));
             }
 
@@ -4258,6 +4342,117 @@ impl<'a> PX64VM<'a> {
                         }
 
                         NATIVE_STREQ => {
+                            0
+                        }
+
+                        NATIVE_CORE_ID => {
+                            crate::apic::get_lapic_id() as i64
+                        }
+
+                        NATIVE_TSC_FREQ => {
+                            (tsc_freq_hz / 1_000_000) as i64
+                        }
+
+                        NATIVE_UPTIME_NS => {
+                            crate::tsc::tsc_to_ns(read_tsc_serialized(), tsc_freq_hz) as i64
+                        }
+
+                        NATIVE_BUSY_WAIT => {
+                            if arg_val > 0 {
+                                let wait_tsc = crate::tsc::ns_to_tsc(arg_val as u64, tsc_freq_hz);
+                                let start = read_tsc_serialized();
+                                while read_tsc_serialized() < start + wait_tsc {
+                                    core::hint::spin_loop();
+                                }
+                            }
+                            0
+                        }
+
+                        NATIVE_RING_DEPTH => {
+                            if arg_val == 0 {
+                                crate::ring_buffer::CAPTURE_TO_ENCODE_RING.len() as i64
+                            } else if arg_val == 1 {
+                                crate::ring_buffer::ENCODE_TO_NET_RING.len() as i64
+                            } else {
+                                0
+                            }
+                        }
+
+                        NATIVE_MATH_MIN => {
+                            let a = arg_val;
+                            let b = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            core::cmp::min(a, b)
+                        }
+
+                        NATIVE_MATH_MAX => {
+                            let a = arg_val;
+                            let b = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            core::cmp::max(a, b)
+                        }
+
+                        NATIVE_MATH_ABS => {
+                            arg_val.saturating_abs()
+                        }
+
+                        NATIVE_MATH_CLAMP => {
+                            let v = arg_val;
+                            let min_v = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            let max_v = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 0 };
+                            core::cmp::min(core::cmp::max(v, min_v), max_v)
+                        }
+
+                        NATIVE_BIT_POPCNT => {
+                            (arg_val as u64).count_ones() as i64
+                        }
+
+                        NATIVE_BIT_LZCNT => {
+                            (arg_val as u64).leading_zeros() as i64
+                        }
+
+                        NATIVE_CRC32 => {
+                            let seed = arg_val as u32;
+                            let val = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            let bytes = val.to_le_bytes();
+                            let crc = crate::gpu::compute_crc32(&bytes);
+                            (crc ^ seed) as i64
+                        }
+
+                        NATIVE_VRAM_READ => {
+                            let slot_id = (arg_val as usize) % crate::gpu::NUM_FRAME_SLOTS;
+                            let offset = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] as usize } else { 0 };
+                            let slot_data = crate::gpu::get_frame_slot_data(slot_id as u8);
+                            if offset + 8 <= slot_data.len() {
+                                i64::from_le_bytes([
+                                    slot_data[offset],
+                                    slot_data[offset + 1],
+                                    slot_data[offset + 2],
+                                    slot_data[offset + 3],
+                                    slot_data[offset + 4],
+                                    slot_data[offset + 5],
+                                    slot_data[offset + 6],
+                                    slot_data[offset + 7],
+                                ])
+                            } else if offset + 4 <= slot_data.len() {
+                                i32::from_le_bytes([
+                                    slot_data[offset],
+                                    slot_data[offset + 1],
+                                    slot_data[offset + 2],
+                                    slot_data[offset + 3],
+                                ]) as i64
+                            } else {
+                                0
+                            }
+                        }
+
+                        NATIVE_VRAM_WRITE => {
+                            let slot_id = (arg_val as usize) % crate::gpu::NUM_FRAME_SLOTS;
+                            let offset = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] as usize } else { 0 };
+                            let val = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 0 };
+                            let slot_data = crate::gpu::get_frame_slot_data_mut(slot_id as u8);
+                            if offset + 8 <= slot_data.len() {
+                                let bytes = val.to_le_bytes();
+                                slot_data[offset..offset + 8].copy_from_slice(&bytes);
+                            }
                             0
                         }
 

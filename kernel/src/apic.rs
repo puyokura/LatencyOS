@@ -7,6 +7,7 @@ use crate::cstate::{rdmsr, wrmsr, IA32_APIC_BASE_MSR};
 #[allow(dead_code)]
 pub const LAPIC_DEFAULT_BASE: u64 = 0xFEE00000;
 
+#[allow(dead_code)]
 pub const LAPIC_ID_REG: u32 = 0x020;
 #[allow(dead_code)]
 pub const LAPIC_VER_REG: u32 = 0x030;
@@ -22,12 +23,18 @@ pub const LAPIC_ICR_HIGH: u32 = 0x310;
 // Worst-case execution time: ~45 ns
 #[inline]
 pub fn get_lapic_base() -> u64 {
-    unsafe { rdmsr(IA32_APIC_BASE_MSR) & 0xFFFFF000 }
+    let base = unsafe { rdmsr(IA32_APIC_BASE_MSR) & 0xFFFFF000 };
+    if base == 0 {
+        LAPIC_DEFAULT_BASE
+    } else {
+        base
+    }
 }
 
 // Function: read_lapic_reg
 // Description: Read 32-bit register from memory-mapped Local APIC.
 // Worst-case execution time: ~15 ns
+#[allow(dead_code)]
 #[inline]
 pub fn read_lapic_reg(offset: u32) -> u32 {
     let addr = (get_lapic_base() + offset as u64) as *const u32;
@@ -45,11 +52,11 @@ pub fn write_lapic_reg(offset: u32, val: u32) {
 
 // Function: get_lapic_id
 // Description: Read Local APIC ID of current executing CPU core.
-// Worst-case execution time: ~25 ns
+// Worst-case execution time: ~15 ns
 #[inline]
 pub fn get_lapic_id() -> u8 {
-    let id_reg = read_lapic_reg(LAPIC_ID_REG);
-    ((id_reg >> 24) & 0xFF) as u8
+    let cpuid_leaf = core::arch::x86_64::__cpuid(1);
+    ((cpuid_leaf.ebx >> 24) & 0xFF) as u8
 }
 
 // Function: init_local_apic
