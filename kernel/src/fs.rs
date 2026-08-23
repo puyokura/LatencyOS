@@ -1121,6 +1121,9 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
                 file.data[..content.len()].copy_from_slice(content);
                 file.size = content.len();
                 file.modified_tsc = read_tsc_serialized();
+                if !read_only && !norm_path.starts_with("/vram") {
+                    crate::export_disk::export_disk_auto_sync_file(norm_path, content);
+                }
                 return Ok(idx);
             }
         }
@@ -1136,6 +1139,9 @@ pub fn fs_create_internal(name: &str, content: &[u8], read_only: bool) -> Result
                 file.size = content.len();
                 file.read_only = read_only;
                 file.modified_tsc = read_tsc_serialized();
+                if !read_only && !norm_path.starts_with("/vram") {
+                    crate::export_disk::export_disk_auto_sync_file(norm_path, content);
+                }
                 return Ok(idx);
             }
         }
@@ -1183,6 +1189,17 @@ pub fn fs_read(name: &str) -> Option<&'static [u8]> {
             }
         }
 
+        // 3. FAT 8.3 truncation match fallback
+        let target_83 = crate::export_disk::to_83_name(clean);
+        for file in FS.files.iter() {
+            if file.used && !file.is_dir {
+                let fname = file.name_str();
+                if crate::export_disk::to_83_name(fname) == target_83 {
+                    return Some(&file.data[..file.size]);
+                }
+            }
+        }
+
         None
     }
 }
@@ -1224,6 +1241,9 @@ pub fn fs_delete(name: &str) -> Result<(), FsError> {
                     return Err(FsError::ReadOnly);
                 }
                 *file = FileEntry::empty();
+                if !norm_path.starts_with("/vram") {
+                    crate::export_disk::export_disk_auto_sync_delete(norm_path);
+                }
                 return Ok(());
             }
         }
@@ -1261,6 +1281,14 @@ pub fn fs_rename(old_name: &str, new_name: &str) -> Result<(), FsError> {
                 file.name_len = new_norm.len();
                 file.name[..new_norm.len()].copy_from_slice(new_norm.as_bytes());
                 file.modified_tsc = read_tsc_serialized();
+
+                if !old_norm.starts_with("/vram") {
+                    crate::export_disk::export_disk_auto_sync_delete(old_norm);
+                }
+                if !new_norm.starts_with("/vram") && !file.is_dir {
+                    crate::export_disk::export_disk_auto_sync_file(new_norm, &file.data[..file.size]);
+                }
+
                 return Ok(());
             }
         }
@@ -1295,6 +1323,12 @@ pub fn fs_exists(name: &str) -> bool {
     unsafe {
         for file in FS.files.iter() {
             if file.used && file.name_str() == name {
+                return true;
+            }
+        }
+        let target_83 = crate::export_disk::to_83_name(name);
+        for file in FS.files.iter() {
+            if file.used && crate::export_disk::to_83_name(file.name_str()) == target_83 {
                 return true;
             }
         }

@@ -36,6 +36,7 @@ static mut EXPORT_DISK_LOC: DiskLocation = DiskLocation {
 
 // Static sector buffer for FAT operations
 static mut SECTOR_BUF: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
+static mut ROOT_DIR_BUF: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
 
 // Pre-allocated static file transfer buffer for import/export
 pub static mut FILE_TRANSFER_BUF: [u8; MAX_EXPORT_FILE_SIZE] = [0; MAX_EXPORT_FILE_SIZE];
@@ -355,7 +356,7 @@ pub fn export_disk_list_files() -> Result<usize, &'static str> {
                 let mut len = 0;
                 for i in 0..8 {
                     if entry[i] != b' ' {
-                        name_buf[len] = entry[i].to_ascii_lowercase();
+                        name_buf[len] = entry[i];
                         len += 1;
                     }
                 }
@@ -364,7 +365,7 @@ pub fn export_disk_list_files() -> Result<usize, &'static str> {
                     len += 1;
                     for i in 8..11 {
                         if entry[i] != b' ' {
-                            name_buf[len] = entry[i].to_ascii_lowercase();
+                            name_buf[len] = entry[i];
                             len += 1;
                         }
                     }
@@ -384,6 +385,50 @@ pub fn export_disk_list_files() -> Result<usize, &'static str> {
     serial_println!("  -------------------------------------------------------------");
     serial_println!("  Total entries found: {}", count);
     Ok(count)
+}
+
+// Helper: read cluster chain into buffer
+fn export_disk_read_clusters(
+    bpb: &Fat16Bpb,
+    loc: DiskLocation,
+    first_cluster: u16,
+    file_size: usize,
+    out_buf: &mut [u8],
+) -> Result<usize, &'static str> {
+    if file_size == 0 || first_cluster < 2 {
+        return Ok(0);
+    }
+
+    let bytes_to_read = core::cmp::min(file_size, out_buf.len());
+    let mut bytes_read = 0;
+    let mut current_cluster = first_cluster;
+
+    while current_cluster >= 2 && current_cluster < 0xFFF8 && bytes_read < bytes_to_read {
+        let cluster_lba = bpb.data_start_lba + (current_cluster as u32 - 2) * bpb.sectors_per_cluster as u32;
+
+        for s in 0..bpb.sectors_per_cluster as u32 {
+            if bytes_read >= bytes_to_read {
+                break;
+            }
+            unsafe {
+                ata_read_sector(loc.base_port, loc.drive, cluster_lba + s, &mut SECTOR_BUF)?;
+                let chunk = core::cmp::min(SECTOR_SIZE, bytes_to_read - bytes_read);
+                out_buf[bytes_read..bytes_read + chunk].copy_from_slice(&SECTOR_BUF[..chunk]);
+                bytes_read += chunk;
+            }
+        }
+
+        // Read next cluster from FAT table
+        let fat_sec = bpb.reserved_sectors as u32 + ((current_cluster as u32 * 2) / SECTOR_SIZE as u32);
+        let fat_offset = (current_cluster as usize * 2) % SECTOR_SIZE;
+
+        unsafe {
+            ata_read_sector(loc.base_port, loc.drive, fat_sec, &mut SECTOR_BUF)?;
+            current_cluster = u16::from_le_bytes([SECTOR_BUF[fat_offset], SECTOR_BUF[fat_offset + 1]]);
+        }
+    }
+
+    Ok(bytes_read)
 }
 
 // Function: export_disk_read_file
@@ -428,41 +473,236 @@ pub fn export_disk_read_file(filename: &str, out_buf: &mut [u8]) -> Result<usize
         return Err("File not found on Export Disk");
     }
 
-    if file_size == 0 {
-        return Ok(0);
-    }
+    export_disk_read_clusters(&bpb, loc, first_cluster, file_size, out_buf)
+}
 
-    let bytes_to_read = core::cmp::min(file_size, out_buf.len());
-    let mut bytes_read = 0;
-    let mut current_cluster = first_cluster;
-    let _cluster_size_bytes = bpb.sectors_per_cluster as usize * SECTOR_SIZE;
+// Function: export_disk_delete_file
+// Description: Deletes a file on the Export Disk and frees its allocated FAT clusters.
+// Worst-case execution time: ~1.5 ms
+pub fn export_disk_delete_file(filename: &str) -> Result<(), &'static str> {
+    let loc = get_export_disk_loc()?;
+    let bpb = export_disk_get_bpb()?;
+    let target_83 = to_83_name(filename);
 
-    while current_cluster >= 2 && current_cluster < 0xFFF8 && bytes_read < bytes_to_read {
-        let cluster_lba = bpb.data_start_lba + (current_cluster as u32 - 2) * bpb.sectors_per_cluster as u32;
+    let mut first_cluster = 0u16;
+    let mut found = false;
 
-        for s in 0..bpb.sectors_per_cluster as u32 {
-            if bytes_read >= bytes_to_read {
-                break;
-            }
-            unsafe {
-                ata_read_sector(loc.base_port, loc.drive, cluster_lba + s, &mut SECTOR_BUF)?;
-                let chunk = core::cmp::min(SECTOR_SIZE, bytes_to_read - bytes_read);
-                out_buf[bytes_read..bytes_read + chunk].copy_from_slice(&SECTOR_BUF[..chunk]);
-                bytes_read += chunk;
+    for sec in 0..bpb.root_dir_sectors {
+        let lba = bpb.root_dir_start_lba + sec;
+        unsafe {
+            ata_read_sector(loc.base_port, loc.drive, lba, &mut SECTOR_BUF)?;
+            for entry_idx in 0..(SECTOR_SIZE / 32) {
+                let entry_offset = entry_idx * 32;
+                let entry = &mut SECTOR_BUF[entry_offset..entry_offset + 32];
+                if entry[0] == 0x00 {
+                    break;
+                }
+                if entry[0] == 0xE5 || (entry[11] & 0x0F) == 0x0F {
+                    continue;
+                }
+                if entry[0..11] == target_83 {
+                    first_cluster = u16::from_le_bytes([entry[26], entry[27]]);
+                    entry[0] = 0xE5; // Mark entry as deleted
+                    ata_write_sector(loc.base_port, loc.drive, lba, &SECTOR_BUF)?;
+                    found = true;
+                    break;
+                }
             }
         }
+        if found {
+            break;
+        }
+    }
 
-        // Read next cluster from FAT table
-        let fat_sec = bpb.reserved_sectors as u32 + ((current_cluster as u32 * 2) / SECTOR_SIZE as u32);
+    if !found {
+        return Ok(());
+    }
+
+    // Free cluster chain in FAT1 and FAT2
+    let mut current_cluster = first_cluster;
+    while current_cluster >= 2 && current_cluster < 0xFFF8 {
+        let fat1_sec = bpb.reserved_sectors as u32 + ((current_cluster as u32 * 2) / SECTOR_SIZE as u32);
         let fat_offset = (current_cluster as usize * 2) % SECTOR_SIZE;
 
+        let next_cluster;
         unsafe {
-            ata_read_sector(loc.base_port, loc.drive, fat_sec, &mut SECTOR_BUF)?;
-            current_cluster = u16::from_le_bytes([SECTOR_BUF[fat_offset], SECTOR_BUF[fat_offset + 1]]);
+            ata_read_sector(loc.base_port, loc.drive, fat1_sec, &mut SECTOR_BUF)?;
+            next_cluster = u16::from_le_bytes([SECTOR_BUF[fat_offset], SECTOR_BUF[fat_offset + 1]]);
+            SECTOR_BUF[fat_offset..fat_offset + 2].copy_from_slice(&0x0000u16.to_le_bytes());
+            ata_write_sector(loc.base_port, loc.drive, fat1_sec, &SECTOR_BUF)?;
+
+            let fat2_sec = fat1_sec + bpb.fat_size_sectors as u32;
+            ata_write_sector(loc.base_port, loc.drive, fat2_sec, &SECTOR_BUF)?;
+        }
+        current_cluster = next_cluster;
+    }
+
+    Ok(())
+}
+
+static mut SYNC_MUTEX_FLAG: bool = false;
+
+// Function: export_disk_auto_import
+// Description: Automatically scans Export Disk FAT16 root directory and populates LatencyFS at boot.
+// Worst-case execution time: ~15 ms
+pub fn export_disk_auto_import() -> Result<usize, &'static str> {
+    let loc = get_export_disk_loc()?;
+    let bpb = export_disk_get_bpb()?;
+
+    unsafe {
+        SYNC_MUTEX_FLAG = true;
+    }
+
+    let mut imported_count = 0;
+
+    for sec in 0..bpb.root_dir_sectors {
+        let lba = bpb.root_dir_start_lba + sec;
+        unsafe {
+            if ata_read_sector(loc.base_port, loc.drive, lba, &mut ROOT_DIR_BUF).is_err() {
+                break;
+            }
+
+            for entry_idx in 0..(SECTOR_SIZE / 32) {
+                let entry = &ROOT_DIR_BUF[entry_idx * 32..(entry_idx + 1) * 32];
+                if entry[0] == 0x00 {
+                    break;
+                }
+                if entry[0] == 0xE5 || (entry[11] & 0x0F) == 0x0F || (entry[11] & 0x08) != 0 || (entry[11] & 0x10) != 0 {
+                    continue;
+                }
+
+                // Extract 8.3 filename
+                let mut name_buf = [b' '; 16];
+                let mut len = 0;
+                for i in 0..8 {
+                    if entry[i] != b' ' {
+                        name_buf[len] = entry[i];
+                        len += 1;
+                    }
+                }
+                if entry[8] != b' ' || entry[9] != b' ' || entry[10] != b' ' {
+                    name_buf[len] = b'.';
+                    len += 1;
+                    for i in 8..11 {
+                        if entry[i] != b' ' {
+                            name_buf[len] = entry[i];
+                            len += 1;
+                        }
+                    }
+                }
+
+                let raw_name = match core::str::from_utf8(&name_buf[..len]) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                let first_cluster = u16::from_le_bytes([entry[26], entry[27]]);
+                let file_size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize;
+
+                if file_size > MAX_EXPORT_FILE_SIZE {
+                    continue;
+                }
+
+                let read_bytes = export_disk_read_clusters(&bpb, loc, first_cluster, file_size, &mut FILE_TRANSFER_BUF).unwrap_or(0);
+                let data = &FILE_TRANSFER_BUF[..read_bytes];
+
+                // 1. Root path: "/<name>"
+                let mut path_buf = [0u8; 64];
+                path_buf[0] = b'/';
+                let mut p_len = 1;
+                for &b in &name_buf[..len] {
+                    if p_len < 63 {
+                        path_buf[p_len] = b.to_ascii_lowercase();
+                        p_len += 1;
+                    }
+                }
+                if let Ok(root_path) = core::str::from_utf8(&path_buf[..p_len]) {
+                    let _ = crate::fs::fs_create_internal(root_path, data, false);
+                }
+
+                // 2. If .PL script, also register under "/pulselang/<name>"
+                if raw_name.ends_with(".PL") || raw_name.ends_with(".pl") {
+                    let mut pl_buf = [0u8; 64];
+                    let prefix = b"/pulselang/";
+                    pl_buf[..prefix.len()].copy_from_slice(prefix);
+                    let mut pl_len = prefix.len();
+                    for &b in &name_buf[..len] {
+                        if pl_len < 63 {
+                            pl_buf[pl_len] = b.to_ascii_lowercase();
+                            pl_len += 1;
+                        }
+                    }
+                    if let Ok(pl_path) = core::str::from_utf8(&pl_buf[..pl_len]) {
+                        let _ = crate::fs::fs_create_internal(pl_path, data, false);
+                    }
+                }
+
+                imported_count += 1;
+            }
         }
     }
 
-    Ok(bytes_read)
+    unsafe {
+        SYNC_MUTEX_FLAG = false;
+    }
+
+    if imported_count > 0 {
+        serial_println!("[EXPORT_DISK] Auto-imported {} files from FAT16 Export Disk into LatencyFS", imported_count);
+    }
+
+    Ok(imported_count)
+}
+
+// Function: export_disk_auto_sync_file
+// Description: Automatically writes through file creations/modifications to the FAT16 Export Disk.
+// Worst-case execution time: ~4.0 ms
+pub fn export_disk_auto_sync_file(path: &str, data: &[u8]) {
+    unsafe {
+        if SYNC_MUTEX_FLAG || !EXPORT_DISK_LOC.detected {
+            return;
+        }
+        SYNC_MUTEX_FLAG = true;
+    }
+
+    let basename = if let Some(idx) = path.rfind('/') {
+        &path[idx + 1..]
+    } else {
+        path
+    };
+
+    if !basename.is_empty() {
+        let _ = export_disk_write_file(basename, data);
+    }
+
+    unsafe {
+        SYNC_MUTEX_FLAG = false;
+    }
+}
+
+// Function: export_disk_auto_sync_delete
+// Description: Automatically deletes corresponding file from the FAT16 Export Disk when deleted in LatencyFS.
+// Worst-case execution time: ~1.5 ms
+pub fn export_disk_auto_sync_delete(path: &str) {
+    unsafe {
+        if SYNC_MUTEX_FLAG || !EXPORT_DISK_LOC.detected {
+            return;
+        }
+        SYNC_MUTEX_FLAG = true;
+    }
+
+    let basename = if let Some(idx) = path.rfind('/') {
+        &path[idx + 1..]
+    } else {
+        path
+    };
+
+    if !basename.is_empty() {
+        let _ = export_disk_delete_file(basename);
+    }
+
+    unsafe {
+        SYNC_MUTEX_FLAG = false;
+    }
 }
 
 // Function: export_disk_write_file
@@ -564,7 +804,6 @@ pub fn export_disk_write_file(filename: &str, data: &[u8]) -> Result<usize, &'st
                     entry[0..11].copy_from_slice(&target_83);
                     entry[11] = 0x20; // Attribute: Archive
                     entry[12..26].fill(0);
-                    entry[12] = 0x18; // NTRes: 0x18 = lowercase stem + lowercase extension (Windows NT/10/11 convention)
                     entry[26..28].copy_from_slice(&(allocated_clusters[0]).to_le_bytes());
                     entry[28..32].copy_from_slice(&(data.len() as u32).to_le_bytes());
 
@@ -584,108 +823,4 @@ pub fn export_disk_write_file(filename: &str, data: &[u8]) -> Result<usize, &'st
     }
 
     Ok(data.len())
-}
-
-// Function: export_disk_sync_on_boot
-// Description: Automatically syncs default LatencyFS files to the Export Disk, and imports any existing files from Export Disk to LatencyFS.
-// Worst-case execution time: ~15 ms (offline boot initialization)
-pub fn export_disk_sync_on_boot() {
-    let loc = match get_export_disk_loc() {
-        Ok(loc) => loc,
-        Err(_) => return,
-    };
-
-    serial_println!("[EXPORT-DISK] Detected FAT16 drive on Port {:#x}, Drive {}. Synchronizing files...", loc.base_port, loc.drive);
-
-    // 1. Auto-export all default LatencyFS files to Export Disk if not present
-    unsafe {
-        for file in crate::fs::FS.files.iter() {
-            if file.used && !file.is_dir {
-                let full_name = file.name_str();
-                let short_name = if let Some(idx) = full_name.rfind('/') {
-                    &full_name[idx + 1..]
-                } else {
-                    full_name
-                };
-
-                // Check if file already exists on Export Disk
-                let mut check_buf = [0u8; 1];
-                let exists = export_disk_read_file(short_name, &mut check_buf).is_ok();
-                if !exists {
-                    let data = &file.data[..file.size];
-                    let _ = export_disk_write_file(short_name, data);
-                }
-            }
-        }
-    }
-
-    // 2. Auto-import any files present on Export Disk into LatencyFS
-    let bpb = match export_disk_get_bpb() {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-
-    for sec in 0..bpb.root_dir_sectors {
-        let lba = bpb.root_dir_start_lba + sec;
-        unsafe {
-            if ata_read_sector(loc.base_port, loc.drive, lba, &mut SECTOR_BUF).is_err() {
-                break;
-            }
-            for entry_idx in 0..(SECTOR_SIZE / 32) {
-                let entry = &SECTOR_BUF[entry_idx * 32..(entry_idx + 1) * 32];
-                if entry[0] == 0x00 {
-                    break;
-                }
-                if entry[0] == 0xE5 || (entry[11] & 0x0F) == 0x0F || (entry[11] & 0x08) != 0 || (entry[11] & 0x10) != 0 {
-                    continue;
-                }
-
-                // Construct lowercase name
-                let mut name_buf = [b' '; 16];
-                let mut len = 0;
-                for i in 0..8 {
-                    if entry[i] != b' ' {
-                        name_buf[len] = entry[i].to_ascii_lowercase();
-                        len += 1;
-                    }
-                }
-                if entry[8] != b' ' || entry[9] != b' ' || entry[10] != b' ' {
-                    name_buf[len] = b'.';
-                    len += 1;
-                    for i in 8..11 {
-                        if entry[i] != b' ' {
-                            name_buf[len] = entry[i].to_ascii_lowercase();
-                            len += 1;
-                        }
-                    }
-                }
-
-                if len > 0 {
-                    let file_name = core::str::from_utf8(&name_buf[..len]).unwrap_or("");
-                    if !file_name.is_empty() {
-                        let mut path_buf = [0u8; 64];
-                        let target_path = if file_name.ends_with(".pl") {
-                            // If .pl, ensure it is placed in /pulselang/
-                            let prefix = b"/pulselang/";
-                            path_buf[..prefix.len()].copy_from_slice(prefix);
-                            path_buf[prefix.len()..prefix.len() + file_name.len()].copy_from_slice(file_name.as_bytes());
-                            core::str::from_utf8(&path_buf[..prefix.len() + file_name.len()]).unwrap_or(file_name)
-                        } else {
-                            path_buf[0] = b'/';
-                            path_buf[1..1 + file_name.len()].copy_from_slice(file_name.as_bytes());
-                            core::str::from_utf8(&path_buf[..1 + file_name.len()]).unwrap_or(file_name)
-                        };
-
-                        if !crate::fs::fs_exists(target_path) {
-                            if let Ok(read_len) = export_disk_read_file(file_name, &mut FILE_TRANSFER_BUF) {
-                                let _ = crate::fs::fs_create_internal(target_path, &FILE_TRANSFER_BUF[..read_len], false);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    serial_println!("[EXPORT-DISK] Auto-sync complete. All files ready.");
 }

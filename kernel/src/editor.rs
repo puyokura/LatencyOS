@@ -100,13 +100,7 @@ impl PulseEditor {
         let name = self.filename_str();
         match fs_write(name, &self.buffer[..self.buf_len]) {
             Ok(()) => {
-                let export_name = if let Some(idx) = name.rfind('/') {
-                    &name[idx + 1..]
-                } else {
-                    name
-                };
-                let _ = crate::export_disk::export_disk_write_file(export_name, &self.buffer[..self.buf_len]);
-                self.set_status("Saved to LatencyFS & Export Disk.");
+                self.set_status("Saved to LatencyFS.");
             }
             Err(_e) => {
                 self.set_status("Save failed!");

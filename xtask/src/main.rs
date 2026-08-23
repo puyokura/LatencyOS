@@ -139,7 +139,6 @@ fn create_fat16_image(path: &Path, initial_files: &[(&str, &[u8])]) -> std::io::
 
         disk_data[entry_offset..entry_offset + 11].copy_from_slice(&name_83);
         disk_data[entry_offset + 11] = 0x20; // Archive
-        disk_data[entry_offset + 12] = 0x18; // NTRes: 0x18 = lowercase stem + lowercase extension (Windows NT/10/11)
         disk_data[entry_offset + 26..entry_offset + 28].copy_from_slice(&start_cluster.to_le_bytes());
         disk_data[entry_offset + 28..entry_offset + 32].copy_from_slice(&(content.len() as u32).to_le_bytes());
 
@@ -238,96 +237,9 @@ fn read_file_from_fat16_image(image_path: &Path, filename: &str) -> Option<Vec<u
 
 fn ensure_export_disk_image() -> PathBuf {
     let path = get_export_disk_path();
-    let initial_files: [(&str, &[u8]); 9] = [
-        ("bench.pl", br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
-@contract: @wcet(5us) @budget(50us);
-
-let $t0 = @tsc();
-let mut $sum = 0;
-for $i in 0..100 {
-    $sum += $i * 2;
-}
-let $dt = @tsc() - $t0;
-
-@println("[BENCH] Iterations: 100");
-@println("[RESULT] Sum:");
-@println($sum);
-@println("[LATENCY] Cycles:");
-@println($dt);
-"#),
-        ("stream.pl", br#"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
-@pipeline: UltraStream @budget(8000us);
-@contract: @wcet(100us) @budget(500us);
-
-@on_vblank: {
-    #f := @capture();
-    @within(500us) {
-        let $rtt = @rtt();
-        $rtt > 200us ? @rate(80) : @rate(100);
-        @send(#f);
-    } !drop;
-};
-"#),
-        ("echo.pl", br#"// echo.pl - PulseLang Echo Script
-@contract: @wcet(2us) @budget(20us);
-
-let $argc = @argc();
-if ($argc > 0) {
-    let mut $i = 0;
-    @while($i < $argc) {
-        @print(@arg($i));
-        $i += 1;
-        if ($i < $argc) {
-            @print(" ");
-        }
-    }
-    @println("");
-} else {
-    @println("LatencyOS PulseLang Real-Time Script Engine Active");
-}
-"#),
-        ("filter.pl", br#"// filter.pl - Adaptive Congestion Guard
-@contract: @wcet(2us) @budget(100us);
-
-let $rtt = @rtt();
-@println("[FILTER] Measured RTT (ns):");
-@println($rtt);
-if ($rtt > 300us) {
-    @println("[ACTION] Congestion detected -> Rate: 60%");
-    @rate(60);
-} else {
-    @println("[ACTION] Optimal latency -> Rate: 100%");
-    @rate(100);
-}
-"#),
-        ("jitter.pl", br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
-@contract: @wcet(3us) @budget(30us);
-
-let $t1 = @tsc();
-let $t2 = @tsc();
-let $delta = $t2 - $t1;
-@println("[JITTER] Consecutive TSC Delta (Cycles):");
-@println($delta);
-if ($delta < 100) {
-    @println("[STATUS] Determinism: Optimal (<100 cycles)");
-} else {
-    @println("[STATUS] Determinism: Jitter detected");
-}
-"#),
-        ("telemetry.pl", br#"// telemetry.pl - Real-Time Hardware Telemetry
-@contract: @wcet(2us) @budget(20us);
-
-let $rtt = @rtt();
-let $tsc = @tsc();
-@println("=== LatencyOS Telemetry ===");
-@print("TSC: ");
-@println($tsc);
-@print("RTT(ns): ");
-@println($rtt);
-"#),
-        ("readme.txt", b"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)\r\n===================================================\r\nAll scripts in this export directory can be edited in Windows and are automatically synchronized with LatencyOS.\r\n"),
-        ("hello.txt", b"Hello from Windows 11 Export Disk!\r\n"),
-        ("win_src.pl", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\nlet $msg = \"Imported Script from Windows OK\";\r\n@println($msg);\r\n"),
+    let initial_files: [(&str, &[u8]); 2] = [
+        ("HELLO.TXT", b"Hello from Windows 11 Export Disk!\r\n"),
+        ("WIN_SRC.PL", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Imported Script from Windows OK\");\r\n"),
     ];
     let _ = create_fat16_image(&path, &initial_files);
     path
@@ -1781,6 +1693,7 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 5, &mut full_output), "Failed compile-time static WCET rejection");
     assert!(full_output.contains("Static loop WCET exceeds MAX_VM_STEPS"), "Failed error message check");
+    assert!(wait_for("[c0|", 5, &mut full_output));
 
     println!("[xtask-test] 16. Testing Phase 10-2 fixed-size array operations: compile /pulselang/array_test.pl /bin/array_test.bin");
     full_output.clear();
@@ -1894,9 +1807,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_stack_overflow.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_STACK_OVERFLOW", 5, &mut full_output), "Failed stack overflow check");
-    assert!(full_output.contains("Static Call Stack Overflow Violation"), "Failed finding stack overflow fault category");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after stack overflow fault");
+    assert!(full_output.contains("ERR_PX64_STACK_OVERFLOW"), "Failed stack overflow check");
+    assert!(full_output.contains("Static Call Stack Overflow Violation"), "Failed finding stack overflow fault category");
 
     println!("[xtask-test] 24. Testing Phase 10-3 Tagged Result unwrap fault: compile & run /pulselang/err_unwrap.pl");
     full_output.clear();
@@ -1907,9 +1820,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_unwrap.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_UNWRAP_FAILED", 5, &mut full_output), "Failed unwrap fault check");
-    assert!(full_output.contains("Tagged Result Unwrap Fault"), "Failed finding unwrap fault category");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after unwrap fault");
+    assert!(full_output.contains("ERR_PX64_UNWRAP_FAILED"), "Failed unwrap fault check");
+    assert!(full_output.contains("Tagged Result Unwrap Fault"), "Failed finding unwrap fault category");
 
     println!("[xtask-test] 25. Testing Phase 10-4 static structs & field access: compile, disasm & run /pulselang/struct_test.pl");
     full_output.clear();
@@ -1920,7 +1833,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/struct_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("STRUCT_DEF", 5, &mut full_output), "Failed disasm struct_test.bin (missing STRUCT_DEF)");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm struct_test.bin");
+    assert!(full_output.contains("STRUCT_DEF"), "Failed disasm struct_test.bin (missing STRUCT_DEF)");
     assert!(full_output.contains("STRUCT_STORE"), "Failed disasm struct_test.bin (missing STRUCT_STORE)");
     assert!(full_output.contains("STRUCT_LOAD"), "Failed disasm struct_test.bin (missing STRUCT_LOAD)");
     println!("[xtask-test] Disassembly for /bin/struct_test.bin showing STRUCT opcodes:\n{}", full_output.trim());
@@ -1956,7 +1870,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/const_table_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("TBL_DEF", 5, &mut full_output), "Failed disasm const_table_test.bin (missing TBL_DEF)");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm const_table_test.bin");
+    assert!(full_output.contains("TBL_DEF"), "Failed disasm const_table_test.bin (missing TBL_DEF)");
     assert!(full_output.contains("TBL_LOAD"), "Failed disasm const_table_test.bin (missing TBL_LOAD)");
     println!("[xtask-test] Disassembly for /bin/const_table_test.bin showing TBL opcodes:\n{}", full_output.trim());
 
@@ -1995,7 +1910,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/streq_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("STREQ", 5, &mut full_output), "Failed disasm streq_test.bin (missing STREQ)");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm streq_test.bin");
+    assert!(full_output.contains("STREQ"), "Failed disasm streq_test.bin (missing STREQ)");
     println!("[xtask-test] Disassembly for /bin/streq_test.bin showing STREQ opcode:\n{}", full_output.trim());
 
     full_output.clear();
@@ -2022,7 +1938,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_ext_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("MOV", 5, &mut full_output), "Failed disasm fold_ext_test.bin");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm fold_ext_test.bin");
+    assert!(full_output.contains("MOV"), "Failed finding MOV in disassembly");
     assert!(full_output.contains("31"), "Failed finding folded const 31 in disassembly");
     println!("[xtask-test] Disassembly for /bin/fold_ext_test.bin (Showing zero runtime ALU instructions):\n{}", full_output.trim());
 
@@ -2054,30 +1971,35 @@ fn test_standalone_exe() {
     stdin.write_all(b"compile /pulselang/err_immut_violation.pl /bin/err_immut_violation.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_MUTABILITY_VIOLATION", 5, &mut full_output), "Failed catching ERR_MUTABILITY_VIOLATION");
+    assert!(wait_for("[c0|", 5, &mut full_output));
     println!("[xtask-test] Caught expected ERR_MUTABILITY_VIOLATION diagnostic");
 
     println!("[xtask-test] 33. Testing Design-by-Contract @requires preconditions: compile & run /pulselang/contracts_test.pl");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/contracts_test.pl /bin/contracts_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling contracts_test.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling contracts_test.pl");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for contracts_test.pl");
 
     full_output.clear();
     stdin.write_all(b"run /bin/contracts_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[CONTRACTS_TEST] All contract precondition checks passed!", 5, &mut full_output), "Failed running contracts_test.bin");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed running contracts_test.bin");
+    assert!(full_output.contains("[CONTRACTS_TEST] All contract precondition checks passed!"), "Failed finding contract passed text");
     assert!(full_output.contains("25"), "Failed finding safe_div 25");
 
     println!("[xtask-test] 34. Testing runtime contract precondition violation: compile & run /pulselang/err_precondition.pl");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_precondition.pl /bin/err_precondition.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_precondition.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling err_precondition.pl");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for err_precondition.pl");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_precondition.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_ASSERTION_FAILED", 5, &mut full_output), "Failed catching ERR_PX64_ASSERTION_FAILED for contract violation");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed running err_precondition.bin");
+    assert!(full_output.contains("ERR_PX64_ASSERTION_FAILED"), "Failed catching ERR_PX64_ASSERTION_FAILED for contract violation");
     println!("[xtask-test] Caught expected runtime contract assertion failure");
 
     println!("[xtask-test] 35. Testing Exhaustive Pattern Matching on Results and Values: compile, disasm & run /pulselang/match_test.pl");
@@ -2089,7 +2011,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"disasm /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("JNZ", 5, &mut full_output), "Failed disasm match_test.bin");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm match_test.bin");
+    assert!(full_output.contains("JNZ"), "Failed finding JNZ in disassembly");
     println!("[xtask-test] Disassembly for /bin/match_test.bin:\n{}", full_output.trim());
 
     full_output.clear();
@@ -2105,6 +2028,7 @@ fn test_standalone_exe() {
     stdin.write_all(b"compile /pulselang/err_non_exhaustive.pl /bin/err_non_exhaustive.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_NON_EXHAUSTIVE_MATCH", 5, &mut full_output), "Failed catching ERR_NON_EXHAUSTIVE_MATCH");
+    assert!(wait_for("[c0|", 5, &mut full_output));
     println!("[xtask-test] Caught expected ERR_NON_EXHAUSTIVE_MATCH diagnostic");
 
     println!("[xtask-test] 37. Testing pulse-bench instruction microbenchmark...");
@@ -2125,58 +2049,48 @@ fn test_standalone_exe() {
     assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
     println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
 
-    println!("[xtask-test] 38. Testing Phase S Export Disk file listing: export-ls (lowercase filenames & pre-populated default scripts)");
-    full_output.clear();
-    stdin.write_all(b"export-ls\r\n").unwrap();
-    stdin.flush().unwrap();
-    assert!(wait_for("EXPORT DISK (FAT16) ROOT DIRECTORY", 5, &mut full_output), "Failed running export-ls");
-    assert!(full_output.contains("bench.pl"), "Failed finding bench.pl on Export Disk");
-    assert!(full_output.contains("stream.pl"), "Failed finding stream.pl on Export Disk");
-    assert!(full_output.contains("hello.txt"), "Failed finding hello.txt on Export Disk");
-    assert!(full_output.contains("win_src.pl"), "Failed finding win_src.pl on Export Disk");
-    println!("[xtask-test] Export Disk directory listing verified:\n{}", full_output.trim());
-
-    println!("[xtask-test] 39. Testing Phase S import from Export Disk to LatencyFS: import hello.txt /hello.txt");
-    full_output.clear();
-    stdin.write_all(b"import hello.txt /hello.txt\r\n").unwrap();
-    stdin.flush().unwrap();
-    assert!(wait_for("successfully imported 'hello.txt'", 5, &mut full_output), "Failed importing hello.txt");
-
-    println!("[xtask-test] 40. Testing cat on imported file in LatencyFS: cat /hello.txt");
+    println!("[xtask-test] 38. Testing Phase S Auto-Import on boot (without manual import command): cat /hello.txt");
     full_output.clear();
     stdin.write_all(b"cat /hello.txt\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("Hello from Windows 11 Export Disk!", 5, &mut full_output), "Failed reading /hello.txt in LatencyFS");
+    assert!(wait_for("Hello from Windows 11 Export Disk!", 5, &mut full_output), "Failed auto-importing /hello.txt on boot");
+    println!("[xtask-test] Verified /hello.txt auto-imported on boot successfully!");
 
-    println!("[xtask-test] 41. Testing import & compilation of PulseLang script from Export Disk: import win_src.pl /pulselang/win_src.pl");
-    full_output.clear();
-    stdin.write_all(b"import win_src.pl /pulselang/win_src.pl\r\n").unwrap();
-    stdin.flush().unwrap();
-    assert!(wait_for("successfully imported 'win_src.pl'", 5, &mut full_output), "Failed importing win_src.pl");
-
+    println!("[xtask-test] 39. Testing auto-imported PulseLang script execution on boot: compile & run /pulselang/win_src.pl");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/win_src.pl /bin/win_src.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling imported win_src.pl");
+    let res_win_compile = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    if !res_win_compile {
+        println!("[DEBUG_OUTPUT for compile win_src.pl]:\n{}", full_output);
+    }
+    assert!(res_win_compile, "Failed compiling auto-imported win_src.pl");
 
     full_output.clear();
     stdin.write_all(b"run /bin/win_src.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("Imported Script from Windows OK", 5, &mut full_output), "Failed running imported win_src.bin");
+    assert!(wait_for("Imported Script from Windows OK", 5, &mut full_output), "Failed running auto-imported win_src.bin");
 
-    println!("[xtask-test] 42. Testing Phase S export from LatencyFS to Export Disk: export /pulselang/bench.pl bench.pl");
+    println!("[xtask-test] 40. Testing Write-Through auto-sync on file creation/edit: edit /live_sync.pl");
     full_output.clear();
-    stdin.write_all(b"export /pulselang/bench.pl bench.pl\r\n").unwrap();
+    stdin.write_all(b"edit /live_sync.pl\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("successfully exported '/pulselang/bench.pl'", 5, &mut full_output), "Failed exporting /pulselang/bench.pl");
+    std::thread::sleep(Duration::from_millis(200));
+    stdin.write_all(b"// live_sync.pl\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Live Write-Through OK\");\r\n").unwrap();
+    stdin.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    stdin.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Exit)
+    stdin.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
 
-    println!("[xtask-test] 43. Testing Export Disk directory listing after export: export-ls");
+    println!("[xtask-test] 41. Verifying Write-Through auto-synced file on Export Disk via export-ls (without typing export)...");
     full_output.clear();
     stdin.write_all(b"export-ls\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("bench.pl", 5, &mut full_output), "Failed finding bench.pl in Export Disk after export");
+    assert!(wait_for("LIVE_SYN.PL", 5, &mut full_output), "Failed auto-syncing /live_sync.pl to Export Disk");
+    println!("[xtask-test] Export Disk directory listing with auto-synced LIVE_SYN.PL:\n{}", full_output.trim());
 
-    println!("[xtask-test] 44. Sending poweroff command to LatencyOS...");
+    println!("[xtask-test] 42. Sending poweroff command to first LatencyOS instance...");
     stdin.write_all(b"poweroff\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(500));
@@ -2184,16 +2098,77 @@ fn test_standalone_exe() {
     let _ = child.kill();
     let _ = child.wait();
 
-    println!("[xtask-test] 45. Verifying exported file on Windows host from raw FAT16 image (export.img)...");
-    let exported_bench = read_file_from_fat16_image(&export_disk_path, "bench.pl");
-    assert!(exported_bench.is_some(), "Failed finding bench.pl in FAT16 image after QEMU execution");
-    let bench_bytes = exported_bench.unwrap();
-    let bench_str = String::from_utf8_lossy(&bench_bytes);
-    assert!(bench_str.contains("bench.pl"), "Exported content in FAT16 image does not contain bench.pl header");
-    println!("[xtask-test] Export Disk Verification: Successfully verified bench.pl content on Windows host from FAT16 image ({} bytes):\n{}", bench_bytes.len(), bench_str.trim());
+    println!("[xtask-test] 43. Verifying auto-synced LIVE_SYN.PL on Windows host from FAT16 image (export.img)...");
+    let exported_live = read_file_from_fat16_image(&export_disk_path, "LIVE_SYN.PL");
+    assert!(exported_live.is_some(), "Failed finding LIVE_SYN.PL in FAT16 image on Windows host");
+    let live_bytes = exported_live.unwrap();
+    let live_str = String::from_utf8_lossy(&live_bytes);
+    assert!(live_str.contains("Live Write-Through OK"), "Content mismatch in auto-synced LIVE_SYN.PL");
+    println!("[xtask-test] Auto-Sync Verified on Windows Host ({} bytes):\n{}", live_bytes.len(), live_str.trim());
+
+    println!("[xtask-test] 44. Testing Cold Reboot Persistence: Spawning second LatencyOS instance...");
+    let mut cmd2 = Command::new(&out_exe);
+    cmd2.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child2 = cmd2.spawn().expect("Failed to launch second standalone LatencyOS.exe");
+    let mut stdin2 = child2.stdin.take().expect("Failed to open stdin");
+    let mut stdout2 = child2.stdout.take().expect("Failed to open stdout");
+
+    let (tx2, rx2) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        loop {
+            match stdout2.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx2.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut full_output2 = String::new();
+    let wait_for2 = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(timeout_secs) {
+            while let Ok(chunk) = rx2.try_recv() {
+                full_out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            if full_out.contains(target) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+
+    assert!(wait_for2("[c0|", 15, &mut full_output2), "Timed out waiting for shell prompt on second boot");
+    println!("[xtask-test] Second boot successful! Testing persistence of /live_sync.pl: cat /live_sync.pl");
+    full_output2.clear();
+    stdin2.write_all(b"cat /live_sync.pl\r\n").unwrap();
+    stdin2.flush().unwrap();
+    let res_persist = wait_for2("Live Write-Through OK", 5, &mut full_output2);
+    if !res_persist {
+        println!("[DEBUG_OUTPUT for cat /live_sync.pl on reboot]:\n{}", full_output2);
+    }
+    assert!(res_persist, "Failed restoring /live_sync.pl from export.img on reboot");
+    println!("[xtask-test] SUCCESS: File /live_sync.pl persisted across full OS reboot!");
+
+    println!("[xtask-test] 45. Powering off second LatencyOS instance...");
+    stdin2.write_all(b"poweroff\r\n").unwrap();
+    stdin2.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let _ = child2.kill();
+    let _ = child2.wait();
 
     println!("================================================================================");
-    println!("[xtask] SUCCESS: Standalone LatencyOS.exe verified end-to-end with 100% success!");
+    println!("[xtask] SUCCESS: Standalone LatencyOS.exe with Auto-Sync & Persistence verified!");
     println!("================================================================================");
 }
 

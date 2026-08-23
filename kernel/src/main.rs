@@ -216,8 +216,10 @@ pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
     // 12. Initialize LatencyFS in-memory filesystem
     fs::fs_init();
 
-    // 12b. Auto-sync Export Disk (FAT16) with LatencyFS
-    export_disk::export_disk_sync_on_boot();
+    // 12.1 Auto-detect FAT16 Export Disk and auto-import files into LatencyFS
+    if export_disk::export_disk_detect().is_some() {
+        let _ = export_disk::export_disk_auto_import();
+    }
 
     // 13. Initialize and start Core 0 interactive control shell
     shell::init_shell();
