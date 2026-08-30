@@ -85,8 +85,8 @@ pub const PULSE_BIN_VERSION: u16 = 3;
 pub const PULSE_HEADER_SIZE: usize = 16;
 
 // Resource limits
-pub const MAX_TOKENS: usize = 256;
-pub const MAX_BYTECODE_SIZE: usize = 1024;
+pub const MAX_TOKENS: usize = 2048;
+pub const MAX_BYTECODE_SIZE: usize = 4096;
 pub const MAX_VARS: usize = 32;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;

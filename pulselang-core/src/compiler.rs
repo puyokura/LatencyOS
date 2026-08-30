@@ -538,6 +538,40 @@ impl<'a> Compiler<'a> {
         false
     }
 
+    fn count_array_literal_elements(&self) -> usize {
+        let mut idx = self.current;
+        let mut depth = 1;
+        let mut count = 0;
+        let mut has_elem = false;
+        while idx < self.tokens.len() {
+            match self.tokens[idx].kind {
+                TokenKind::LBracket | TokenKind::LParen | TokenKind::LBrace => {
+                    depth += 1;
+                    has_elem = true;
+                }
+                TokenKind::RBracket | TokenKind::RParen | TokenKind::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        if has_elem {
+                            count += 1;
+                        }
+                        break;
+                    }
+                }
+                TokenKind::Comma if depth == 1 => {
+                    count += 1;
+                    has_elem = false;
+                }
+                TokenKind::Eof => break,
+                _ => {
+                    has_elem = true;
+                }
+            }
+            idx += 1;
+        }
+        count
+    }
+
     pub fn declare_const_table(&mut self) -> Result<(), CompileError> {
         let name_tok = self.advance();
         if name_tok.kind != TokenKind::Ident {
@@ -1416,7 +1450,7 @@ impl<'a> Compiler<'a> {
                 let is_mut = self.match_token(TokenKind::Mut);
                 let ident = self.advance();
                 if self.match_token(TokenKind::Colon) {
-                    // Array declaration: let $buf: [i64; N];
+                    // Array declaration: let $buf: [i64; N]; or let $buf: [i64; N] = [1, 2, 3];
                     if self.match_token(TokenKind::LBracket) {
                         let _type_tok = self.advance(); // i64 or Ident
                         if !self.match_token(TokenKind::Semi) {
@@ -1450,10 +1484,56 @@ impl<'a> Compiler<'a> {
                                 "Close array type with ']'",
                             ));
                         }
-                        self.match_token(TokenKind::Semi);
 
                         let arr_id = self.declare_array(ident, len)?;
                         self.emit_imm16(PX64_OP_ARR_DEF, arr_id, len as u16)?;
+
+                        // Optional initialization: = [elem0, elem1, ...] or := [elem0, elem1, ...]
+                        if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
+                            if !self.match_token(TokenKind::LBracket) {
+                                return Err(self.error(
+                                    "ERR_EXPECTED_LBRACKET",
+                                    "Expected '[' to start array literal initialization",
+                                    "Left bracket '['",
+                                    "Statement -> Array Initialization",
+                                    "Initialize array elements with '= [elem0, elem1, ...]'",
+                                ));
+                            }
+                            let mut elem_idx = 0;
+                            while self.peek().kind != TokenKind::RBracket && self.peek().kind != TokenKind::Eof {
+                                if elem_idx >= len {
+                                    return Err(self.error(
+                                        "ERR_ARRAY_INIT_TOO_MANY_ELEMENTS",
+                                        "Array literal has more elements than declared array capacity",
+                                        "Matching number of elements",
+                                        "Statement -> Array Initialization",
+                                        "Ensure element count does not exceed declared array size",
+                                    ));
+                                }
+                                let idx_reg = self.alloc_temp()?;
+                                let val_reg = self.alloc_temp()?;
+                                self.emit_inst(PX64_OP_MOV_IMM, idx_reg, (elem_idx >> 8) as u8, (elem_idx & 0xff) as u8)?;
+                                self.expression(val_reg)?;
+                                self.emit_inst(PX64_OP_ARR_STORE, arr_id, idx_reg, val_reg)?;
+                                self.free_temp(val_reg);
+                                self.free_temp(idx_reg);
+                                elem_idx += 1;
+                                if !self.match_token(TokenKind::Comma) {
+                                    break;
+                                }
+                            }
+                            if !self.match_token(TokenKind::RBracket) {
+                                return Err(self.error(
+                                    "ERR_ARRAY_SYNTAX",
+                                    "Expected ']' after array initialization elements",
+                                    "Right bracket ']'",
+                                    "Statement -> Array Initialization",
+                                    "Close array initialization list with ']'",
+                                ));
+                            }
+                        }
+
+                        self.match_token(TokenKind::Semi);
                         return Ok(());
                     } else {
                         // Struct instance declaration: let $pt: Point; or type annotation let $x: i64 = 10;
@@ -1466,6 +1546,55 @@ impl<'a> Compiler<'a> {
                         // Primitive type annotation, e.g. let $x: i64 = 10;
                     }
                 }
+
+                // Check for array literal initialization without type annotation:
+                // e.g. let $a = [1, 2, 3]; or let mut $a = [1, 2, 3];
+                if (self.peek().kind == TokenKind::ColonEq || self.peek().kind == TokenKind::Eq)
+                    && self.peek_ahead(1).kind == TokenKind::LBracket
+                {
+                    self.advance(); // consume '=' or ':='
+                    self.advance(); // consume '['
+
+                    let len = self.count_array_literal_elements();
+                    if len == 0 {
+                        return Err(self.error(
+                            "ERR_ARRAY_INVALID_LEN",
+                            "Array literal cannot be empty",
+                            "At least one element",
+                            "Statement -> Array Initialization",
+                            "Provide elements in array literal, e.g. '[1, 2, 3]'",
+                        ));
+                    }
+                    let arr_id = self.declare_array(ident, len)?;
+                    self.emit_imm16(PX64_OP_ARR_DEF, arr_id, len as u16)?;
+
+                    let mut elem_idx = 0;
+                    while self.peek().kind != TokenKind::RBracket && self.peek().kind != TokenKind::Eof {
+                        let idx_reg = self.alloc_temp()?;
+                        let val_reg = self.alloc_temp()?;
+                        self.emit_inst(PX64_OP_MOV_IMM, idx_reg, (elem_idx >> 8) as u8, (elem_idx & 0xff) as u8)?;
+                        self.expression(val_reg)?;
+                        self.emit_inst(PX64_OP_ARR_STORE, arr_id, idx_reg, val_reg)?;
+                        self.free_temp(val_reg);
+                        self.free_temp(idx_reg);
+                        elem_idx += 1;
+                        if !self.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    if !self.match_token(TokenKind::RBracket) {
+                        return Err(self.error(
+                            "ERR_ARRAY_SYNTAX",
+                            "Expected ']' after array initialization elements",
+                            "Right bracket ']'",
+                            "Statement -> Array Initialization",
+                            "Close array initialization list with ']'",
+                        ));
+                    }
+                    self.match_token(TokenKind::Semi);
+                    return Ok(());
+                }
+
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.expression(var_reg)?;

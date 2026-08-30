@@ -364,6 +364,22 @@ impl<'a> Lexer<'a> {
             };
             count += 1;
         }
+        self.skip_whitespace_and_comments();
+        if self.pos < self.src.len() {
+            let (line, col) = get_line_and_col(self.src, self.pos);
+            return Err(CompileError {
+                code: "ERR_MAX_TOKENS_EXCEEDED",
+                message: "Source script exceeds maximum tokens capacity",
+                line,
+                col,
+                byte_offset: self.pos,
+                token_kind: TokenKind::Eof,
+                token_len: 0,
+                expected: "Script with fewer tokens or split into smaller functions/modules",
+                stage: "Lexer -> Tokenization",
+                suggestion: "Reduce code size or split logic into modules",
+            });
+        }
 
         let (line, col) = get_line_and_col(self.src, self.pos);
         tokens[count] = Token {

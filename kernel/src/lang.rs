@@ -39,6 +39,10 @@ pub fn set_script_args(args: &[&str]) {
 
 pub static mut COMPILER_TOKENS: [Token; MAX_TOKENS] = [Token::empty(); MAX_TOKENS];
 
+pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, CompileError> {
+    let tokens = unsafe { &mut COMPILER_TOKENS };
+    pulselang_core::compile_pulse_to_binary_with_tokens(src, tokens, out_buf)
+}
 // Function: print_compile_diagnostic
 // Description: Emit comprehensive, structured, AI-actionable compiler or runtime diagnostic log.
 // Worst-case execution time: ~20_000 ns

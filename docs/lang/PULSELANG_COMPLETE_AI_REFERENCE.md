@@ -272,30 +272,49 @@ All basic runtime values in PulseLang are 64-bit signed/unsigned words (`i64` / 
 
 ### 3.3 Fixed-Size Static Arrays (`[i64; N]`)
 
-Fixed-size arrays provide deterministic, bounds-checked $O(1)$ memory access using kernel static array storage (up to 8 distinct arrays, max 256 total elements):
+Fixed-size static arrays provide deterministic, hardware bounds-checked $O(1)$ memory access using kernel/VM static array storage (up to 8 distinct arrays, max 256 total elements across the script).
+
+> **Memory & Register Model**:
+> - **Zero GPR Exhaustion**: Arrays do **not** consume general-purpose variable registers ($rax..$r15). They live in the dedicated static array slot bank (`array_slots[256]`). This allows storing large datasets and matrices without hitting the 13 GPR distinct-variable limit.
+> - **Hardware Bounds Guard**: Every read (`ARR_LOAD`) and write (`ARR_STORE`) verifies $0 \le \text{index} < N$. Out-of-bounds access immediately raises `ERR_PX64_ARRAY_OUT_OF_BOUNDS`.
+> - **Three Declaration & Initialization Modes**:
+>   1. **Uninitialized (Zero-Filled)**: `let $a: [i64; 9];` or `let mut $a: [i64; 9];`
+>   2. **Typed Initialized**: `let $a: [i64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];`
+>   3. **Direct Array Literal**: `let $a = [1, 2, 3, 4, 5, 6, 7, 8, 9];`
 
 ```pulse
-// Declaration and explicit initialization
-let $buf: [i64; 4];
-$buf[0] := 100;
-$buf[1] := 200;
-$buf[2] := 300;
-$buf[3] := 400;
+// 1. Array declaration styles
+let $zeros: [i64; 4];                            // 4 elements, initialized to 0
+let $typed: [i64; 3] = [10, 20, 30];            // Typed with inline elements
+let $matrix = [                                 // Inferred size (9 elements)
+    1, 2, 3,
+    4, 5, 6,
+    7, 8, 9
+];
 
-// Inline literal declaration
-let $lut = [10, 20, 30, 40];
+// 2. Array Element Mutation & Loading
+let mut $out: [i64; 9];
+$out[0] := 100;
+let $val = $matrix[4];                          // Loads 5
 
-// Array read
-let $first = $buf[0];
-let $second = $lut[1];
+// 3. Multi-Dimensional 3x3 Matrix Multiplication Example
+let $mat_a = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+let $mat_b = [9, 8, 7, 6, 5, 4, 3, 2, 1];
+let mut $mat_c: [i64; 9];
 
-// Bounded loop iteration
-for $i in 0..4 {
-    @print("[ARRAY] Index: ");
-    @println($buf[$i]);
+for $i in 0..3 {
+    for $j in 0..3 {
+        let mut $sum = 0;
+        for $k in 0..3 {
+            let $a_idx = ($i * 3) + $k;
+            let $b_idx = ($k * 3) + $j;
+            $sum += $mat_a[$a_idx] * $mat_b[$b_idx];
+        }
+        let $c_idx = ($i * 3) + $j;
+        $mat_c[$c_idx] := $sum;
+    }
 }
 ```
-
 ### 3.4 Static Structs & Field Manipulation
 
 Static Structs allow composite data structures without heap allocation. Struct types and field offsets are verified at compile time (up to 8 struct types, 8 fields each, 8 active instances):
