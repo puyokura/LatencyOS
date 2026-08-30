@@ -134,6 +134,28 @@ impl ConstTableMeta {
         }
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub struct ViewMeta {
+    pub name: [u8; 16],
+    pub name_len: usize,
+    pub arr_id: u8,
+    pub base_reg: u8,
+    pub stride_imm: u16,
+    pub len_imm: u16,
+}
+
+impl ViewMeta {
+    pub const fn empty() -> Self {
+        Self {
+            name: [0; 16],
+            name_len: 0,
+            arr_id: 0,
+            base_reg: 0,
+            stride_imm: 1,
+            len_imm: 0,
+        }
+    }
+}
 
 /// Compilation summary statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +172,6 @@ pub struct CompileStats {
     pub const_table_count: usize,
     pub total_binary_size: usize,
 }
-
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
     pub src: &'a [u8],
@@ -167,7 +188,7 @@ pub struct Compiler<'a> {
     pub str_pool_len: usize,
     pub const_pool: [i64; MAX_CONST_POOL],
     pub const_pool_len: usize,
-    temp_depth: u8,
+    temp_used: u8,
     handle_states: [HandleState; 4],
     pub arrays: [ArrayMeta; 8],
     pub array_count: usize,
@@ -182,6 +203,8 @@ pub struct Compiler<'a> {
     pub total_struct_fields: usize,
     pub const_tables: [ConstTableMeta; 8],
     pub const_table_count: usize,
+    pub views: [ViewMeta; 8],
+    pub view_count: usize,
 }
 
 impl<'a> Compiler<'a> {
@@ -201,7 +224,7 @@ impl<'a> Compiler<'a> {
             str_pool_len: 0,
             const_pool: [0; MAX_CONST_POOL],
             const_pool_len: 0,
-            temp_depth: 0,
+            temp_used: 0,
             handle_states: [HandleState::Unallocated; 4],
             arrays: [ArrayMeta::empty(); 8],
             array_count: 0,
@@ -216,6 +239,8 @@ impl<'a> Compiler<'a> {
             total_struct_fields: 0,
             const_tables: [ConstTableMeta::empty(); 8],
             const_table_count: 0,
+            views: [ViewMeta::empty(); 8],
+            view_count: 0,
         }
     }
 
@@ -286,6 +311,386 @@ impl<'a> Compiler<'a> {
             "Array Access",
             "Define array buffer before indexing elements",
         ))
+    }
+
+    pub fn declare_view(&mut self, tok: Token, arr_id: u8, base_reg: u8, stride_imm: u16, len_imm: u16) -> Result<(), CompileError> {
+        let name = &self.src[tok.start..tok.start + tok.len];
+        if self.view_count >= 8 {
+            return Err(self.error(
+                "ERR_MAX_VIEWS_EXCEEDED",
+                "Maximum distinct array views limit reached (8 views limit)",
+                "Fewer distinct array views",
+                "View Declaration",
+                "Reuse view variables across script",
+            ));
+        }
+        for i in 0..self.view_count {
+            let v = &self.views[i];
+            if v.name_len == name.len() && &v.name[..v.name_len] == name {
+                self.views[i] = ViewMeta {
+                    name: v.name,
+                    name_len: v.name_len,
+                    arr_id,
+                    base_reg,
+                    stride_imm,
+                    len_imm,
+                };
+                return Ok(());
+            }
+        }
+        let mut meta = ViewMeta::empty();
+        meta.name_len = core::cmp::min(name.len(), 16);
+        meta.name[..meta.name_len].copy_from_slice(&name[..meta.name_len]);
+        meta.arr_id = arr_id;
+        meta.base_reg = base_reg;
+        meta.stride_imm = stride_imm;
+        meta.len_imm = len_imm;
+        self.views[self.view_count] = meta;
+        self.view_count += 1;
+        Ok(())
+    }
+
+    pub fn lookup_view(&self, tok: Token) -> Option<ViewMeta> {
+        let name = &self.src[tok.start..tok.start + tok.len];
+        for i in 0..self.view_count {
+            let v = &self.views[i];
+            if v.name_len == name.len() && &v.name[..v.name_len] == name {
+                return Some(*v);
+            }
+        }
+        None
+    }
+
+    pub fn is_view(&self, tok: Token) -> bool {
+        self.lookup_view(tok).is_some()
+    }
+
+    pub fn lookup_fn_by_name(&self, name: &[u8]) -> Result<FnMeta, CompileError> {
+        for i in 0..self.fn_count {
+            let meta = &self.functions[i];
+            if meta.name_len == name.len() && &meta.name[..meta.name_len] == name {
+                return Ok(*meta);
+            }
+        }
+        Err(self.error(
+            "ERR_UNKNOWN_FUNCTION",
+            "Function name passed to combinator is not defined",
+            "Valid function name",
+            "Combinator -> Function Lookup",
+            "Define static function with 'fn name(...) { ... }' before using in combinators",
+        ))
+    }
+    pub fn parse_view_source_to_reg(&mut self, base_reg: u8) -> Result<ViewMeta, CompileError> {
+        if self.peek().kind == TokenKind::IntrinsicIdent || self.peek().kind == TokenKind::Ident {
+            let tok = self.peek();
+            let name = &self.src[tok.start..tok.start + tok.len];
+            if name == b"@row" || name == b"@col" || name == b"@slice" {
+                self.advance(); // consume intrinsic
+                self.match_token(TokenKind::LParen);
+                let arr_tok = self.advance();
+                let arr_id = self.lookup_array(arr_tok)?;
+                let total_len = self.arrays[arr_id as usize].len;
+
+                self.match_token(TokenKind::Comma);
+                self.expression(base_reg)?;
+
+                if name == b"@row" {
+                    self.match_token(TokenKind::Comma);
+                    let cols_tok = self.advance();
+                    let cols = match cols_tok.kind {
+                        TokenKind::Number(n) if n > 0 => n as usize,
+                        _ => 3,
+                    };
+                    self.match_token(TokenKind::RParen);
+
+                    let cols_reg = self.alloc_temp()?;
+                    self.emit_inst(PX64_OP_MOV_IMM, cols_reg, (cols >> 8) as u8, (cols & 0xff) as u8)?;
+                    self.emit_inst(PX64_OP_MUL, base_reg, base_reg, cols_reg)?;
+                    self.free_temp(cols_reg);
+
+                    return Ok(ViewMeta {
+                        name: [0; 16],
+                        name_len: 0,
+                        arr_id,
+                        base_reg,
+                        stride_imm: 1,
+                        len_imm: cols as u16,
+                    });
+                } else if name == b"@col" {
+                    self.match_token(TokenKind::Comma);
+                    let cols_tok = self.advance();
+                    let cols = match cols_tok.kind {
+                        TokenKind::Number(n) if n > 0 => n as usize,
+                        _ => 3,
+                    };
+                    self.match_token(TokenKind::RParen);
+
+                    let rows = (total_len as usize) / cols;
+
+                    return Ok(ViewMeta {
+                        name: [0; 16],
+                        name_len: 0,
+                        arr_id,
+                        base_reg,
+                        stride_imm: cols as u16,
+                        len_imm: rows as u16,
+                    });
+                } else {
+                    // @slice($arr, $start, $len)
+                    self.match_token(TokenKind::Comma);
+                    let len_tok = self.advance();
+                    let len = match len_tok.kind {
+                        TokenKind::Number(n) if n > 0 => n as usize,
+                        _ => 1,
+                    };
+                    self.match_token(TokenKind::RParen);
+
+                    return Ok(ViewMeta {
+                        name: [0; 16],
+                        name_len: 0,
+                        arr_id,
+                        base_reg,
+                        stride_imm: 1,
+                        len_imm: len as u16,
+                    });
+                }
+            }
+        }
+
+        let tok = self.advance();
+        if let Some(view) = self.lookup_view(tok) {
+            return Ok(view);
+        }
+
+        let arr_id = self.lookup_array(tok)?;
+        let len = self.arrays[arr_id as usize].len;
+        self.emit_inst(PX64_OP_MOV_IMM, base_reg, 0, 0)?;
+
+        Ok(ViewMeta {
+            name: [0; 16],
+            name_len: 0,
+            arr_id,
+            base_reg,
+            stride_imm: 1,
+            len_imm: len,
+        })
+    }
+
+    pub fn parse_view_source(&mut self) -> Result<ViewMeta, CompileError> {
+        if self.peek().kind == TokenKind::VarIdent || self.peek().kind == TokenKind::Ident {
+            let tok = self.peek();
+            let name = &self.src[tok.start..tok.start + tok.len];
+            if name != b"@row" && name != b"@col" && name != b"@slice" {
+                self.advance();
+                if let Some(view) = self.lookup_view(tok) {
+                    return Ok(view);
+                }
+                let arr_id = self.lookup_array(tok)?;
+                let len = self.arrays[arr_id as usize].len;
+                return Ok(ViewMeta {
+                    name: [0; 16],
+                    name_len: 0,
+                    arr_id,
+                    base_reg: 0,
+                    stride_imm: 1,
+                    len_imm: len,
+                });
+            }
+        }
+        let temp_base = self.alloc_temp()?;
+        self.parse_view_source_to_reg(temp_base)
+    }
+    pub fn compile_zip_with_to_reg(
+        &mut self,
+        dst: u8,
+        v1: ViewMeta,
+        v2: ViewMeta,
+        fn_name: &[u8],
+        is_sum: bool,
+    ) -> Result<(), CompileError> {
+        let fn_meta = self.lookup_fn_by_name(fn_name)?;
+        let count = core::cmp::min(v1.len_imm, v2.len_imm);
+
+        if is_sum {
+            self.emit_inst(PX64_OP_MOV_IMM, dst, 0, 0)?;
+        }
+
+        let loop_i = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, loop_i, 0, 0)?;
+
+        let count_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, count_reg, (count >> 8) as u8, (count & 0xff) as u8)?;
+
+        let loop_start_pc = self.code_len;
+
+        let cond_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_CMP_LT, cond_reg, loop_i, count_reg)?;
+        let jz_pc = self.code_len;
+        self.emit_imm16(PX64_OP_JZ, cond_reg, 0)?;
+        self.free_temp(cond_reg);
+
+        let idx1_reg = self.alloc_temp()?;
+        if v1.stride_imm == 1 {
+            self.emit_inst(PX64_OP_ADD, idx1_reg, v1.base_reg, loop_i)?;
+        } else {
+            let stride1_reg = self.alloc_temp()?;
+            self.emit_inst(PX64_OP_MOV_IMM, stride1_reg, (v1.stride_imm >> 8) as u8, (v1.stride_imm & 0xff) as u8)?;
+            self.emit_inst(PX64_OP_MUL, idx1_reg, loop_i, stride1_reg)?;
+            self.emit_inst(PX64_OP_ADD, idx1_reg, idx1_reg, v1.base_reg)?;
+            self.free_temp(stride1_reg);
+        }
+        let elem1_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_ARR_LOAD, elem1_reg, v1.arr_id, idx1_reg)?;
+        self.free_temp(idx1_reg);
+        self.emit_inst(PX64_OP_MOV_REG, 7, elem1_reg, 0)?;
+        self.free_temp(elem1_reg);
+
+        let idx2_reg = self.alloc_temp()?;
+        if v2.stride_imm == 1 {
+            self.emit_inst(PX64_OP_ADD, idx2_reg, v2.base_reg, loop_i)?;
+        } else {
+            let stride2_reg = self.alloc_temp()?;
+            self.emit_inst(PX64_OP_MOV_IMM, stride2_reg, (v2.stride_imm >> 8) as u8, (v2.stride_imm & 0xff) as u8)?;
+            self.emit_inst(PX64_OP_MUL, idx2_reg, loop_i, stride2_reg)?;
+            self.emit_inst(PX64_OP_ADD, idx2_reg, idx2_reg, v2.base_reg)?;
+            self.free_temp(stride2_reg);
+        }
+        let elem2_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_ARR_LOAD, elem2_reg, v2.arr_id, idx2_reg)?;
+        self.free_temp(idx2_reg);
+        self.emit_inst(PX64_OP_MOV_REG, 6, elem2_reg, 0)?;
+        self.free_temp(elem2_reg);
+
+        self.emit_imm16(PX64_OP_CALL, 0, fn_meta.entry_pc)?;
+
+        if is_sum {
+            self.emit_inst(PX64_OP_ADD, dst, dst, 0)?;
+        } else {
+            self.emit_inst(PX64_OP_MOV_REG, dst, 0, 0)?;
+        }
+
+        self.emit_inst(PX64_OP_ADDI, loop_i, loop_i, 1)?;
+        self.emit_imm16(PX64_OP_JMP, 0, loop_start_pc as u16)?;
+
+        let loop_end_pc = self.code_len;
+        self.code[jz_pc + 2] = (loop_end_pc >> 8) as u8;
+        self.code[jz_pc + 3] = (loop_end_pc & 0xff) as u8;
+
+        self.free_temp(count_reg);
+        self.free_temp(loop_i);
+
+        Ok(())
+    }
+    pub fn compile_sum_to_reg(&mut self, dst: u8, v: ViewMeta) -> Result<(), CompileError> {
+        let count = v.len_imm;
+        self.emit_inst(PX64_OP_MOV_IMM, dst, 0, 0)?;
+
+        let loop_i = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, loop_i, 0, 0)?;
+
+        let count_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, count_reg, (count >> 8) as u8, (count & 0xff) as u8)?;
+
+        let loop_start_pc = self.code_len;
+
+        let cond_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_CMP_LT, cond_reg, loop_i, count_reg)?;
+        let jz_pc = self.code_len;
+        self.emit_imm16(PX64_OP_JZ, cond_reg, 0)?;
+
+        let idx_reg = self.alloc_temp()?;
+        if v.stride_imm == 1 {
+            self.emit_inst(PX64_OP_ADD, idx_reg, v.base_reg, loop_i)?;
+        } else {
+            let stride_reg = self.alloc_temp()?;
+            self.emit_inst(PX64_OP_MOV_IMM, stride_reg, (v.stride_imm >> 8) as u8, (v.stride_imm & 0xff) as u8)?;
+            self.emit_inst(PX64_OP_MUL, idx_reg, loop_i, stride_reg)?;
+            self.emit_inst(PX64_OP_ADD, idx_reg, idx_reg, v.base_reg)?;
+            self.free_temp(stride_reg);
+        }
+        let elem_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_ARR_LOAD, elem_reg, v.arr_id, idx_reg)?;
+        self.free_temp(idx_reg);
+
+        self.emit_inst(PX64_OP_ADD, dst, dst, elem_reg)?;
+        self.free_temp(elem_reg);
+
+        self.emit_inst(PX64_OP_ADDI, loop_i, loop_i, 1)?;
+        self.emit_imm16(PX64_OP_JMP, 0, loop_start_pc as u16)?;
+
+        let loop_end_pc = self.code_len;
+        self.code[jz_pc + 2] = (loop_end_pc >> 8) as u8;
+        self.code[jz_pc + 3] = (loop_end_pc & 0xff) as u8;
+
+        self.free_temp(cond_reg);
+        self.free_temp(count_reg);
+        self.free_temp(loop_i);
+
+        Ok(())
+    }
+
+    pub fn compile_reduce_to_reg(
+        &mut self,
+        dst: u8,
+        v: ViewMeta,
+        init_val: Option<i64>,
+        fn_name: &[u8],
+    ) -> Result<(), CompileError> {
+        let fn_meta = self.lookup_fn_by_name(fn_name)?;
+        let count = v.len_imm;
+
+        if let Some(init) = init_val {
+            self.emit_const(dst, init)?;
+        } else {
+            self.emit_inst(PX64_OP_MOV_IMM, dst, 0, 0)?;
+        }
+
+        let loop_i = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, loop_i, 0, 0)?;
+
+        let count_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_MOV_IMM, count_reg, (count >> 8) as u8, (count & 0xff) as u8)?;
+
+        let loop_start_pc = self.code_len;
+
+        let cond_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_CMP_LT, cond_reg, loop_i, count_reg)?;
+        let jz_pc = self.code_len;
+        self.emit_imm16(PX64_OP_JZ, cond_reg, 0)?;
+
+        let idx_reg = self.alloc_temp()?;
+        if v.stride_imm == 1 {
+            self.emit_inst(PX64_OP_ADD, idx_reg, v.base_reg, loop_i)?;
+        } else {
+            let stride_reg = self.alloc_temp()?;
+            self.emit_inst(PX64_OP_MOV_IMM, stride_reg, (v.stride_imm >> 8) as u8, (v.stride_imm & 0xff) as u8)?;
+            self.emit_inst(PX64_OP_MUL, idx_reg, loop_i, stride_reg)?;
+            self.emit_inst(PX64_OP_ADD, idx_reg, idx_reg, v.base_reg)?;
+            self.free_temp(stride_reg);
+        }
+        let elem_reg = self.alloc_temp()?;
+        self.emit_inst(PX64_OP_ARR_LOAD, elem_reg, v.arr_id, idx_reg)?;
+        self.free_temp(idx_reg);
+
+        self.emit_inst(PX64_OP_MOV_REG, 7, dst, 0)?;
+        self.emit_inst(PX64_OP_MOV_REG, 6, elem_reg, 0)?;
+        self.free_temp(elem_reg);
+
+        self.emit_imm16(PX64_OP_CALL, 0, fn_meta.entry_pc)?;
+        self.emit_inst(PX64_OP_MOV_REG, dst, 0, 0)?;
+
+        self.emit_inst(PX64_OP_ADDI, loop_i, loop_i, 1)?;
+        self.emit_imm16(PX64_OP_JMP, 0, loop_start_pc as u16)?;
+
+        let loop_end_pc = self.code_len;
+        self.code[jz_pc + 2] = (loop_end_pc >> 8) as u8;
+        self.code[jz_pc + 3] = (loop_end_pc & 0xff) as u8;
+
+        self.free_temp(cond_reg);
+        self.free_temp(count_reg);
+        self.free_temp(loop_i);
+
+        Ok(())
     }
 
     pub fn declare_struct_def(&mut self) -> Result<(), CompileError> {
@@ -800,26 +1205,28 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn alloc_temp(&mut self) -> Result<u8, CompileError> {
-        if self.temp_depth >= 6 {
-            return Err(self.error(
-                "ERR_EXPR_TOO_COMPLEX",
-                "Expression nesting too deep (exceeded register scratch pool)",
-                "Simpler expression or intermediate variables",
-                "Expression Evaluation",
-                "Split complex expression into intermediate variables",
-            ));
+        for i in 0..8 {
+            let mask = 1u8 << i;
+            if (self.temp_used & mask) == 0 {
+                self.temp_used |= mask;
+                return Ok(15 - i);
+            }
         }
-        let reg = 15 - self.temp_depth;
-        self.temp_depth += 1;
-        Ok(reg)
+        Err(self.error(
+            "ERR_EXPR_TOO_COMPLEX",
+            "Expression nesting too deep (exceeded register scratch pool)",
+            "Simpler expression or intermediate variables",
+            "Expression Evaluation",
+            "Split complex expression into intermediate variables",
+        ))
     }
 
     pub fn free_temp(&mut self, reg: u8) {
-        if self.temp_depth > 0 && reg == 15 - (self.temp_depth - 1) {
-            self.temp_depth -= 1;
+        if (8..=15).contains(&reg) {
+            let i = 15 - reg;
+            self.temp_used &= !(1u8 << i);
         }
     }
-
     pub fn add_constant(&mut self, val: i64) -> Result<u16, CompileError> {
         for i in 0..self.const_pool_len {
             if self.const_pool[i] == val {
@@ -1593,6 +2000,20 @@ impl<'a> Compiler<'a> {
                     }
                     self.match_token(TokenKind::Semi);
                     return Ok(());
+                }
+                // Check for view declaration: e.g. let $row = @row($a, $i, 3);
+                if (self.peek().kind == TokenKind::ColonEq || self.peek().kind == TokenKind::Eq)
+                    && (self.peek_ahead(1).kind == TokenKind::IntrinsicIdent || self.peek_ahead(1).kind == TokenKind::Ident)
+                {
+                    let next_tok = self.peek_ahead(1);
+                    let name = &self.src[next_tok.start..next_tok.start + next_tok.len];
+                    if name == b"@row" || name == b"@col" || name == b"@slice" {
+                        self.advance(); // consume '=' or ':='
+                        let view = self.parse_view_source()?;
+                        self.declare_view(ident, view.arr_id, view.base_reg, view.stride_imm, view.len_imm)?;
+                        self.match_token(TokenKind::Semi);
+                        return Ok(());
+                    }
                 }
 
                 let var_reg = self.declare_var(ident, is_mut)?;
@@ -2864,6 +3285,120 @@ impl<'a> Compiler<'a> {
                         self.emit_inst(PX64_OP_STREQ, dst, s1_reg, s2_reg)?;
                         self.free_temp(s2_reg);
                         self.free_temp(s1_reg);
+                        return Ok(None);
+                    }
+
+                    if name == b"@zip_with" {
+                        self.advance(); // consume '('
+                        let v1 = self.parse_view_source()?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' between views in @zip_with",
+                                "Comma ','",
+                                "Expression -> Combinator Call",
+                                "Provide two views and function, e.g. '@zip_with($v1, $v2, mul)'",
+                            ));
+                        }
+                        let v2 = self.parse_view_source()?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' before function name in @zip_with",
+                                "Comma ','",
+                                "Expression -> Combinator Call",
+                                "Provide function name, e.g. '@zip_with($v1, $v2, mul)'",
+                            ));
+                        }
+                        let fn_tok = self.advance();
+                        let fn_name = &self.src[fn_tok.start..fn_tok.start + fn_tok.len];
+                        if !self.match_token(TokenKind::RParen) {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @zip_with",
+                                "Closing parenthesis ')'",
+                                "Expression -> Combinator Call",
+                                "Close with ')'",
+                            ));
+                        }
+
+                        // Check if chained with |> @sum()
+                        let mut is_sum = false;
+                        if self.peek().kind == TokenKind::Pipe {
+                            let next_tok = self.peek_ahead(1);
+                            let next_name = &self.src[next_tok.start..next_tok.start + next_tok.len];
+                            if next_name == b"@sum" || next_name == b"sum" {
+                                self.advance(); // consume '|>'
+                                self.advance(); // consume '@sum'
+                                if self.peek().kind == TokenKind::LParen {
+                                    self.advance();
+                                    self.match_token(TokenKind::RParen);
+                                }
+                                is_sum = true;
+                            }
+                        }
+
+                        self.compile_zip_with_to_reg(dst, v1, v2, fn_name, is_sum)?;
+                        return Ok(None);
+                    }
+
+                    if name == b"@sum" || name == b"sum" {
+                        self.advance(); // consume '('
+                        if self.peek().kind == TokenKind::RParen {
+                            self.advance();
+                            return Ok(None);
+                        }
+                        let v = self.parse_view_source()?;
+                        if !self.match_token(TokenKind::RParen) {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @sum",
+                                "Closing parenthesis ')'",
+                                "Expression -> Combinator Call",
+                                "Close with ')'",
+                            ));
+                        }
+                        self.compile_sum_to_reg(dst, v)?;
+                        return Ok(None);
+                    }
+
+                    if name == b"@reduce" || name == b"reduce" {
+                        self.advance(); // consume '('
+                        let v = self.parse_view_source()?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' after view in @reduce",
+                                "Comma ','",
+                                "Expression -> Combinator Call",
+                                "Provide view, initial value, and reducer function",
+                            ));
+                        }
+                        let init_reg = self.alloc_temp()?;
+                        self.expression(init_reg)?;
+                        if !self.match_token(TokenKind::Comma) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_COMMA",
+                                "Expected ',' before function name in @reduce",
+                                "Comma ','",
+                                "Expression -> Combinator Call",
+                                "Provide reducer function name",
+                            ));
+                        }
+                        let fn_tok = self.advance();
+                        let fn_name = &self.src[fn_tok.start..fn_tok.start + fn_tok.len];
+                        if !self.match_token(TokenKind::RParen) {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @reduce",
+                                "Closing parenthesis ')'",
+                                "Expression -> Combinator Call",
+                                "Close with ')'",
+                            ));
+                        }
+                        self.emit_inst(PX64_OP_MOV_REG, dst, init_reg, 0)?;
+                        self.free_temp(init_reg);
+                        self.compile_reduce_to_reg(dst, v, None, fn_name)?;
                         return Ok(None);
                     }
 

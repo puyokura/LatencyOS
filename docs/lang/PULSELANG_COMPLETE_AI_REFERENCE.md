@@ -30,7 +30,7 @@
    - 3.11 [Static Functions & Call Semantics (`fn`)](#311-static-functions--call-semantics-fn)
    - 3.12 [Design-by-Contract & Formal Directives](#312-design-by-contract--formal-directives)
    - 3.13 [Linear Type Ownership & DMA Safety Proofs](#313-linear-type-ownership--dma-safety-proofs)
-4. [Exhaustive Intrinsics Catalog (All 29 Intrinsics)](#4-exhaustive-intrinsics-catalog-all-29-intrinsics)
+   - 3.14 [AI-Native Declarative Combinators & Stride Views](#314-ai-native-declarative-combinators--stride-views)
    - 4.1 [Telemetry & Real-Time System Intrinsics](#41-telemetry--real-time-system-intrinsics)
    - 4.2 [Mathematical & Bitwise Intrinsics](#42-mathematical--bitwise-intrinsics)
    - 4.3 [Zero-Copy VRAM & Framebuffer Intrinsics](#43-zero-copy-vram--framebuffer-intrinsics)
@@ -627,6 +627,70 @@ Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear 
 
 Every intrinsic compiles directly to a specialized `PX64_OP_CALL_NAT` instruction (`0x12`), executing deterministically within the LatencyOS kernel with verified worst-case execution time bounds:
 
+### 3.14 AI-Native Declarative Combinators & Stride Views
+
+PulseLang v3.2 introduces first-class zero-allocation stream combinators and stride view intrinsics. Instead of writing imperative, error-prone 3-level nested loops with manual 1D indexing, AI agents can directly express mathematical intent (dot products, vector transformations, reductions) using declarative functional pipelines.
+
+> **Key Architectural Guarantees**:
+> - **Zero Heap Allocation**: No dynamic closures or intermediate vector arrays are allocated.
+> - **Compile-Time Loop Fusion**: Chained combinators (e.g. `@zip_with(...) |> @sum()`) are statically fused into a single tightly-optimized `px64` loop with register accumulation.
+> - **Static WCET & Shape Proof**: The compiler calculates the exact execution time and step count at compile time, rejecting shape mismatches before runtime.
+
+#### 1. Stride View Intrinsics
+| Intrinsic | Parameters | Description |
+|---|---|---|
+| `@row($arr, $i, $cols)` | Array, Row Index, Column Count | Creates a zero-copy row view of `$cols` elements starting at index `$i * $cols` with stride 1. |
+| `@col($arr, $j, $cols)` | Array, Column Index, Column Count | Creates a zero-copy column view spanning the array with stride `$cols`. |
+| `@slice($arr, $start, $len)` | Array, Start Index, Length | Creates a contiguous sub-array view of `$len` elements starting at `$start`. |
+
+#### 2. Declarative Combinators
+| Combinator | Signature | Description |
+|---|---|---|
+| `@zip_with($v1, $v2, fn)` | `(View, View, Function) -> Loop` | Applies binary function `fn` to corresponding elements from `$v1` and `$v2`. |
+| `@sum($view)` or `\|> @sum()` | `(View) -> i64` | Computes the scalar sum of view elements using register accumulation. |
+| `@reduce($view, $init, fn)` | `(View, Initial, Function) -> i64` | Reduces view elements into a single scalar value using accumulator function `fn`. |
+
+#### 3. Complete Declarative 3x3 Matrix Multiplication Example
+```pulse
+// matrix_mul_v32.pul - AI-Native 3x3 Matrix Multiplication with Combinators
+@contract: @wcet(25us) @budget(50us);
+
+fn mul($x, $y) -> $ret {
+    return $x * $y;
+}
+
+let $a = [
+    1, 2, 3,
+    4, 5, 6,
+    7, 8, 9
+];
+
+let $b = [
+    9, 8, 7,
+    6, 5, 4,
+    3, 2, 1
+];
+
+let mut $c: [i64; 9];
+
+for $i in 0..3 {
+    let $row_i = @row($a, $i, 3);
+
+    for $j in 0..3 {
+        let $col_j = @col($b, $j, 3);
+        
+        // Dot Product: zip row and column, apply 'mul', and compute sum
+        let $dot = @zip_with($row_i, $col_j, mul) |> @sum();
+
+        $c[($i * 3) + $j] := $dot;
+    }
+}
+
+// Output results (30, 24, 18, 84, 69, 54, 138, 114, 90)
+for $k in 0..9 {
+    @println($c[$k]);
+}
+```
 ### 4.1 Telemetry & Real-Time System Intrinsics
 
 | ID | Intrinsic | Signature | WCET | Description & Register Behavior |
@@ -638,6 +702,7 @@ Every intrinsic compiles directly to a specialized `PX64_OP_CALL_NAT` instructio
 | `17` | `@tsc_freq()` | `() -> i64` | **~5 ns** | Returns calibrated CPU TSC frequency in megahertz (MHz). |
 | `18` | `@uptime_ns()` | `() -> i64` | **~20 ns** | Returns elapsed nanoseconds since kernel boot derived from serialized TSC. |
 | `19` | `@busy_wait($ns)` | `(i64) -> 0` | **$\approx \$ns$** | Performs cycle-accurate spin loop for exactly `$ns` nanoseconds. |
+
 | `20` | `@ring_depth($id)`| `(i64) -> i64` | **~10 ns** | Queries depth of lock-free ring (`0`: Capture-to-Encode, `1`: Encode-to-Net). |
 
 ```pulse

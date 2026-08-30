@@ -488,6 +488,48 @@ mod tests {
         assert_eq!(err_cap.code, "ERR_ARRAY_CAPACITY_EXCEEDED");
     }
     #[test]
+    fn test_combinator_matrix_multiplication_v32() {
+        let src = r#"
+            @contract: @wcet(25us) @budget(50us);
+            fn mul($x, $y) -> $ret {
+                return $x * $y;
+            }
+            let $a = [
+                1, 2, 3,
+                4, 5, 6,
+                7, 8, 9
+            ];
+            let $b = [
+                9, 8, 7,
+                6, 5, 4,
+                3, 2, 1
+            ];
+            let mut $c: [i64; 9];
+            for $i in 0..3 {
+                let $row_i = @row($a, $i, 3);
+                for $j in 0..3 {
+                    let $col_j = @col($b, $j, 3);
+                    let $dot = @zip_with($row_i, $col_j, mul) |> @sum();
+                    $c[($i * 3) + $j] := $dot;
+                }
+            }
+            @println($c[0]);
+            @println($c[1]);
+            @println($c[2]);
+            @println($c[3]);
+            @println($c[4]);
+            @println($c[5]);
+            @println($c[6]);
+            @println($c[7]);
+            @println($c[8]);
+        "#;
+        let bin = compile(src).expect("Combinator matrix multiplication compile failed");
+        let mut out = alloc::string::String::new();
+        run_binary_with_output(&bin, &[], &mut out).expect("Combinator matrix multiplication run failed");
+        let lines: alloc::vec::Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, &["30", "24", "18", "84", "69", "54", "138", "114", "90"]);
+    }
+    #[test]
     fn test_error_json_formatting() {
         let src = "let $x = 10;\n$x := 20;\n";
         let mut buf = [0u8; 1024];
