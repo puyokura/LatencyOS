@@ -13,6 +13,10 @@ const VERSION: &str = "0.1.0";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Subcommand {
+    Run {
+        input: PathBuf,
+        args: Vec<String>,
+    },
     Compile {
         input: PathBuf,
         output: Option<PathBuf>,
@@ -36,16 +40,18 @@ struct CliOptions {
 
 fn print_help() {
     println!(
-        "\x1b[1mpulc\x1b[0m {} - PulseLang Compiler & Disassembler for LatencyOS
+        "\x1b[1mpulc\x1b[0m {} - PulseLang Compiler, Disassembler & VM Toolchain for LatencyOS
 
 \x1b[1mUSAGE:\x1b[0m
     pulc <file.pul> [-o <out.bin>]
+    pulc run <file.bin|file.pul> [args...]
     pulc compile <file.pul> [-o <out.bin>]
     pulc check <file.pul>
     pulc disasm <file.bin>
     pulc -d <file.bin>
 
 \x1b[1mSUBCOMMANDS:\x1b[0m
+    run <file> [args...]  Execute px64 binary (.bin) or source script (.pul) directly
     compile <file.pul>    Compile PulseLang source into px64 binary bytecode
     check <file.pul>      Validate syntax, types, linear ownership & WCET constraints
     disasm <file.bin>     Disassemble px64 binary bytecode into assembly instructions
@@ -60,7 +66,7 @@ fn print_help() {
 
 \x1b[1mEXIT CODES:\x1b[0m
     0   Success
-    1   Compilation, syntax, linear ownership or WCET constraint error
+    1   Compilation, syntax, linear ownership, WCET, or VM runtime error
     2   IO, file access, or command-line argument error
 ",
         VERSION
@@ -123,6 +129,21 @@ where
                 }
                 i += 1;
                 output_opt = Some(PathBuf::from(&args_vec[i]));
+            }
+            "run" | "exec" => {
+                if i + 1 >= args_vec.len() {
+                    return Err("Missing input file for 'run' subcommand (expected .bin or .pul)".to_string());
+                }
+                let input = PathBuf::from(&args_vec[i + 1]);
+                let run_args = args_vec[i + 2..].to_vec();
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Run {
+                        input,
+                        args: run_args,
+                    },
+                    json,
+                    verbose,
+                });
             }
             _ => {
                 if let Some(stripped) = arg.strip_prefix("-o=") {
@@ -411,6 +432,72 @@ fn run_disasm(input_path: &Path, json: bool) -> Result<(), (i32, String)> {
 
     Ok(())
 }
+fn run_exec(
+    input_path: &Path,
+    args: &[String],
+    json: bool,
+    verbose: bool,
+) -> Result<(), (i32, String)> {
+    let args_str_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    let raw_bytes = fs::read(input_path).map_err(|e| {
+        (
+            2,
+            format!(
+                "Cannot read input file '{}': {}",
+                input_path.display(),
+                e
+            ),
+        )
+    })?;
+
+    let ext = input_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_bin_ext = ext.eq_ignore_ascii_case("bin") || ext.eq_ignore_ascii_case("px64");
+    let is_binary = is_bin_ext || (raw_bytes.len() >= 4 && &raw_bytes[0..4] == b"PX64");
+
+    if is_binary {
+        if verbose {
+            eprintln!(
+                "[pulc] Executing px64 binary: '{}' ({} bytes, {} args)",
+                input_path.display(),
+                raw_bytes.len(),
+                args.len()
+            );
+        }
+        pulselang_core::run_binary(&raw_bytes, &args_str_refs).map_err(|err| {
+            let formatted = format_compile_error(&err, &raw_bytes, &input_path.to_string_lossy(), json);
+            (1, formatted)
+        })?;
+    } else {
+        let src = core::str::from_utf8(&raw_bytes).map_err(|e| {
+            (
+                2,
+                format!(
+                    "File '{}' is not valid UTF-8 source code: {}",
+                    input_path.display(),
+                    e
+                ),
+            )
+        })?;
+
+        if verbose {
+            eprintln!(
+                "[pulc] Compiling and executing source: '{}' ({} bytes, {} args)",
+                input_path.display(),
+                src.len(),
+                args.len()
+            );
+        }
+
+        pulselang_core::run_source(src, &args_str_refs).map_err(|err| {
+            let formatted = format_compile_error(&err, src.as_bytes(), &input_path.to_string_lossy(), json);
+            (1, formatted)
+        })?;
+    }
+
+    Ok(())
+}
+
 
 fn format_compile_error(
     err: &CompileError,
@@ -461,6 +548,9 @@ fn main() -> ExitCode {
         Subcommand::Version => {
             print_version();
             Ok(())
+        }
+        Subcommand::Run { input, args } => {
+            run_exec(&input, &args, options.json, options.verbose)
         }
         Subcommand::Compile { input, output } => {
             run_compile(&input, output, options.json, options.verbose)
@@ -572,5 +662,126 @@ mod tests {
 
         let custom = derive_output_path(input, Some(PathBuf::from("custom.bin")));
         assert_eq!(custom, PathBuf::from("custom.bin"));
+    }
+
+    #[test]
+    fn test_cli_parse_run_pul() {
+        let args = vec!["run".to_string(), "script.pul".to_string()];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Run {
+                input: PathBuf::from("script.pul"),
+                args: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_run_bin_with_args() {
+        let args = vec![
+            "run".to_string(),
+            "app.bin".to_string(),
+            "arg1".to_string(),
+            "42".to_string(),
+            "--flag".to_string(),
+        ];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Run {
+                input: PathBuf::from("app.bin"),
+                args: vec!["arg1".to_string(), "42".to_string(), "--flag".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_run_verbose_flag_before() {
+        let args = vec![
+            "-v".to_string(),
+            "run".to_string(),
+            "test.pul".to_string(),
+            "x".to_string(),
+        ];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert!(opts.verbose);
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Run {
+                input: PathBuf::from("test.pul"),
+                args: vec!["x".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_run_exec_pul_file() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("test_run_exec.pul");
+        fs::write(&file_path, "let $x = 10; let $y = 20; @assert($x + $y == 30);").unwrap();
+        let res = run_exec(&file_path, &[], false, false);
+        let _ = fs::remove_file(&file_path);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_run_exec_bin_file() {
+        let dir = std::env::temp_dir();
+        let pul_path = dir.join("test_run_bin.pul");
+        let bin_path = dir.join("test_run_bin.bin");
+        let src = "@println(\"Hello from compiled binary!\");";
+        fs::write(&pul_path, src).unwrap();
+
+        // Compile to bin
+        let comp_res = run_compile(&pul_path, Some(bin_path.clone()), false, false);
+        assert!(comp_res.is_ok());
+
+        // Run binary
+        let run_res = run_exec(&bin_path, &[], false, false);
+        let _ = fs::remove_file(&pul_path);
+        let _ = fs::remove_file(&bin_path);
+        assert!(run_res.is_ok());
+    }
+
+    #[test]
+    fn test_run_exec_with_arguments() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("test_run_args.pul");
+        let src = r#"
+            let $c = @argc();
+            @assert($c == 2);
+            let $a0 = @arg(0);
+            let $a1 = @arg(1);
+            @assert($a0 == "arg_one");
+            @assert($a1 == "arg_two");
+        "#;
+        fs::write(&file_path, src).unwrap();
+        let args = vec!["arg_one".to_string(), "arg_two".to_string()];
+        let res = run_exec(&file_path, &args, false, false);
+        let _ = fs::remove_file(&file_path);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_run_exec_runtime_error() {
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("test_run_err.pul");
+        fs::write(&file_path, "let $x = 10; @assert($x == 999);").unwrap();
+        let res = run_exec(&file_path, &[], false, false);
+        let _ = fs::remove_file(&file_path);
+        assert!(res.is_err());
+        let (code, err_msg) = res.unwrap_err();
+        assert_eq!(code, 1);
+        assert!(err_msg.contains("ERR_PX64_ASSERTION_FAILED"));
+    }
+
+    #[test]
+    fn test_run_exec_file_not_found() {
+        let non_existent = PathBuf::from("this_file_does_not_exist_12345.pul");
+        let res = run_exec(&non_existent, &[], false, false);
+        assert!(res.is_err());
+        let (code, _err_msg) = res.unwrap_err();
+        assert_eq!(code, 2);
     }
 }

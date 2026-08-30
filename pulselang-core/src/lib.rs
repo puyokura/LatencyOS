@@ -6,10 +6,10 @@
 
 #![no_std]
 
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 extern crate alloc;
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", test))]
 extern crate std;
 
 pub mod compiler;
@@ -18,18 +18,24 @@ pub mod error;
 pub mod isa;
 pub mod lexer;
 pub mod token;
+pub mod vm;
 
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, FnMeta, HandleState, StructDefMeta,
     StructFieldMeta, StructInstMeta,
 };
 pub use disasm::{disassemble_px64, disassemble_px64_with_filename};
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 pub use disasm::{disasm, disasm_with_filename};
 pub use error::CompileError;
 pub use isa::*;
 pub use lexer::Lexer;
 pub use token::{get_line_and_col, Token, TokenKind};
+pub use vm::{compute_crc32, run_binary, run_binary_with_output, NullWriter, PX64VM};
+#[cfg(any(feature = "std", test))]
+pub use vm::StdoutWriter;
+#[cfg(any(feature = "alloc", test))]
+pub use vm::{run_source, run_source_with_output};
 
 /// Compile PulseLang source code into a binary px64 bytecode buffer (zero-heap `no_std` API).
 ///
@@ -41,6 +47,7 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
 
     let mut compiler = Compiler::new(src, &tokens);
     let code_len = compiler.compile()?;
+
     let str_pool_len = compiler.str_pool_len;
     let const_pool_count = compiler.const_pool_len;
     let const_pool_bytes = const_pool_count * 8;
@@ -49,7 +56,7 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     if total_size > out_buf.len() {
         return Err(CompileError::simple(
             "ERR_BINARY_BUFFER_OVERFLOW",
-            "Target binary output buffer is too small for compiled px64 artifact",
+            "Output buffer too small for compiled px64 binary payload",
         ));
     }
 
@@ -60,7 +67,7 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     out_buf[8..10].copy_from_slice(&(str_pool_len as u16).to_be_bytes());
     out_buf[10..12].copy_from_slice(&(const_pool_count as u16).to_be_bytes());
     out_buf[12..14].copy_from_slice(&(PX64_NUM_REGISTERS as u16).to_be_bytes()); // 20
-    out_buf[14..16].fill(0); // Reserved
+    out_buf[14..16].copy_from_slice(&[0u8, 0u8]); // Reserved
 
     // Payload: Code + String Pool + Constant Pool
     out_buf[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len]
@@ -77,7 +84,7 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
 }
 
 /// Compile PulseLang source code into a newly-allocated bytecode Vector (`alloc`/`std` API).
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 pub fn compile(src: &str) -> Result<alloc::vec::Vec<u8>, CompileError> {
     let max_size = PX64_HEADER_SIZE + MAX_BYTECODE_SIZE + MAX_STRING_POOL + MAX_CONST_POOL * 8;
     let mut buf = alloc::vec![0u8; max_size];
@@ -87,7 +94,7 @@ pub fn compile(src: &str) -> Result<alloc::vec::Vec<u8>, CompileError> {
 }
 
 /// Validate syntax, type ownership, WCET constraints and calculate compilation statistics (`alloc`/`std` API).
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 pub fn check(src: &str) -> Result<CompileStats, CompileError> {
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src.as_bytes());
@@ -97,7 +104,6 @@ pub fn check(src: &str) -> Result<CompileStats, CompileError> {
     let _code_len = compiler.compile()?;
     Ok(compiler.stats())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

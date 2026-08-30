@@ -224,3 +224,5 @@ $delta < 100 ? {
 | `malloc(1024);` | Dynamic heap allocation does not exist | Pre-allocated static slots only |
 | Missing `@send(#f)` | Leaking a `#handle` causes compile error | `#f` must be sent or discarded |
 | `500` (without unit in `@within`) | Time limits require unit suffixes | `@within(500us)` |
+| `if $x > 0 { ... }` | `if` requires parentheses | `if ($x > 0) { ... }` or `$x > 0 ? { ... } : { ... };` |
+| `else if ($x == 2) { ... }` | `else if` is not supported directly; `else` strictly requires `{ ... }` | `else { if ($x == 2) { ... } }` |

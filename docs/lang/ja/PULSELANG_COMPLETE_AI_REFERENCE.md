@@ -302,10 +302,20 @@ let $val = $buf[1];
 ### 4.3 制御構文 (if, for, while, match)
 
 #### 1. 条件分岐 (`if` / `else` および 三項演算子)
+
+PulseLang v3.1 における条件分岐は、決定論的かつ高速な単一パス構文解析を保証するため、厳格な構文規則を持ちます。
+
+> **`else if` 非対応と `else` ブロックの厳格仕様**:
+> - **PulseLang v3.1 では `else if` 構文を直接サポートしていません。**
+> - **`else` キーワードの直後には必ず `{ ... }` のブロックが必要です。**
+> - 複数条件を評価する場合は、`else` ブロック内に `if` 文をネストして記述します（`else { if (...) { ... } else { ... } }`）。
+> - `else if` を記述した場合、コンパイラ（`pulc` / `pulselang-core`）は `ERR_EXPECTED_LBRACE: Missing opening brace '{' after else keyword` エラーを発生させます。
+
+##### 基本構文と三項演算子
 ```pulse
 let $rtt = @rtt();
 
-// 標準 if-else 構文
+// 標準 if-else 構文 (else の直後は必ずブロック '{ ... }')
 if ($rtt > 200us) {
     @rate(60);
     @println("[ALERT] High latency detected");
@@ -320,6 +330,54 @@ $rtt > 500us ? {
 } : {
     @println("[OK] Stable");
 };
+```
+
+##### 正しい記述例（ネスト形式）
+```pulse
+// 正しい記述例: else ブロック内に if 文をネスト
+let $x = 2;
+
+if ($x == 1) {
+    @println("one");
+} else {
+    if ($x == 2) {
+        @println("two");
+    } else {
+        @println("other");
+    }
+}
+```
+
+##### 構文エラーとなる不正例
+```pulse
+// 構文エラー: ERR_EXPECTED_LBRACE が発生
+let $x = 2;
+
+if ($x == 1) {
+    @println("one");
+} else if ($x == 2) {
+    @println("two");
+}
+```
+
+##### 正しい FizzBuzz 実装例
+```pulse
+// 正しい FizzBuzz 実装例 (for ループと else 内 if ネスト)
+for $i in 1..16 {
+    if ($i % 15 == 0) {
+        @println("FizzBuzz");
+    } else {
+        if ($i % 3 == 0) {
+            @println("Fizz");
+        } else {
+            if ($i % 5 == 0) {
+                @println("Buzz");
+            } else {
+                @println($i);
+            }
+        }
+    }
+}
 ```
 
 #### 2. 静的有界ループ (`for in 0..N`)
@@ -861,22 +919,29 @@ Byte 3: Rs2 (第2ソースレジスタ / 即値下位 / ArgReg)
 USAGE:
     pulc <file.pul> [-o <out.bin>]
     pulc compile <file.pul> [-o <out.bin>]
+    pulc run <file.bin|file.pul> [args...]
     pulc check <file.pul>
     pulc disasm <file.bin>
     pulc -d <file.bin>
 
 SUBCOMMANDS:
     compile <file.pul>    PulseLang ソースを px64 バイナリバイトコードへコンパイル
+    run <file...>         px64 バイトコードバイナリまたはソーススクリプトを直接実行
+                          (trailing 引数は @argc() / @arg(i) へ渡されます)
     check <file.pul>      構文・型・不変性・線形所有権・静的 WCET を完全検証 (コード生成なし)
     disasm <file.bin>     px64 バイナリファイルを可読なアセンブリ命令一覧へ逆アセンブル
 
 FLAGS:
-    -o, --output <file>   出力バイナリファイルパスを指定 (デフォルト: <input>.bin)
-    -d, --disasm          バイナリファイルの逆アセンブルを実行
-    --json                AI エージェント / CI 用に構造化 JSON フォーマットで結果を出力
-    -v, --verbose         詳細な診断ログを出力
-    -h, --help            ヘルプメッセージを出力
-    -V, --version         バージョン情報を出力
+    +o, ++output <file>   出力バイナリファイルパスを指定 (デフォルト: <input>.bin)
+    +d, ++disasm          バイナリファイルの逆アセンブルを実行
+    ++json                AI エージェント / CI 用に構造化 JSON フォーマットで結果を出力
+    +v, ++verbose         詳細な診断ログを出力
+    +h, ++help            ヘルプメッセージを出力
+    +V, ++version         バージョン情報を出力
+
+EXAMPLES:
+    pulc run fizzbuzz.bin
+    pulc run stream.pul "arg1" "arg2"
 
 EXIT CODES:
     0   Success (正常終了)
@@ -1023,6 +1088,7 @@ PulseLang コンパイラおよび VM は、エラー発生時に AI エージ�
 | ERR_PX64_UNWRAP_FAILED             | @err な Result を @unwrap -> 事前に @is_ok() ガードを設ける   |
 | ERR_PX64_ARRAY_OUT_OF_BOUNDS       | 配列インデックスが境界外 -> for 0..N または bounds check を   |
 | ERR_PX64_STACK_OVERFLOW            | 関数呼び出し深度が 8 を超過 -> 再帰を排除してループ化         |
+| ERR_EXPECTED_LBRACE                | else の直後に '{' がない (else if 使用時等) -> else { if (...) } にネスト修正 |
 +------------------------------------+---------------------------------------------------------------+
 ```
 

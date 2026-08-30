@@ -303,12 +303,12 @@ pub fn disassemble_px64_with_filename<W: core::fmt::Write>(
     }
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 pub fn disasm(bin: &[u8]) -> Result<alloc::string::String, CompileError> {
     disasm_with_filename(bin, "binary")
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(any(feature = "alloc", test))]
 pub fn disasm_with_filename(bin: &[u8], filename: &str) -> Result<alloc::string::String, CompileError> {
     let mut out = alloc::string::String::new();
     disassemble_px64_with_filename(bin, filename, &mut out)?;

@@ -62,6 +62,7 @@
    - 8.8 [`fn_test.pul`: Static Function Calling & Contract Validation](#88-fn_testpul-static-function-calling--contract-validation)
    - 8.9 [`struct_test.pul`: Static Struct Manipulation](#89-struct_testpul-static-struct-manipulation)
    - 8.10 [`match_test.pul`: Tagged Result Pattern Matching](#810-match_testpul-tagged-result-pattern-matching)
+   - 8.11 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#811-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
 
 ---
 
@@ -182,7 +183,7 @@ AssertStmt      ::= "@assert(" Expression ")" ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
 WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" Block
 ForStmt         ::= ( "for" | "@for" ) VarIdent "in" Expression ".." Expression Block
-IfStmt          ::= "if" "(" Expression ")" Block ( "else" ( IfStmt | Block ) )?
+IfStmt          ::= "if" "(" Expression ")" Block ( "else" Block )?
 ExprStmt        ::= Expression ";"
 
 Block           ::= "{" Statement* "}"
@@ -407,37 +408,109 @@ if (@is_ok($res)) {
 
 ### 3.9 Control Flow: Conditionals, Bounded Loops & Deadlines
 
+#### 1. Conditionals (`if` / `else` & Strict Block Requirements)
+
+PulseLang v3.1 strictly enforces block-delimited control flow. An `if` statement requires parentheses around its condition, followed immediately by a block enclosed in curly braces `{ ... }`.
+
+> **CRITICAL AI & COMPILER RULE: No Direct `else if` Syntax**
+> - PulseLang v3.1 does **NOT** directly support `else if` syntax.
+> - The `else` keyword **MUST** be followed immediately by an opening brace `{` defining a Block (`{ ... }`).
+> - For multi-branch decision trees, you **MUST** nest the subsequent `if` statement inside the `else` block: `else { if (...) { ... } else { ... } }`.
+> - Writing `else if` triggers the compile error:
+>   `error[ERR_EXPECTED_LBRACE]: Missing opening brace '{' after else keyword`
+
+**Standard If / Else Branch:**
 ```pulse
-// 1. If / Else Branches
+let $rtt = @rtt();
+
 if ($rtt < 100us) {
     @rate(100);
 } else {
     @rate(80);
 }
+```
 
-// 2. Ternary Operator & Ternary Blocks
+**Valid Multi-Branch Condition (Nested `else { if (...) { ... } }`):**
+```pulse
+let $x = 2;
+
+if ($x == 1) {
+    @println("one");
+} else {
+    if ($x == 2) {
+        @println("two");
+    } else {
+        @println("other");
+    }
+}
+```
+
+**Invalid Syntax (Triggers `ERR_EXPECTED_LBRACE`):**
+```pulse
+// INVALID: Triggers ERR_EXPECTED_LBRACE at compile time
+if ($x == 1) {
+    @println("one");
+} else if ($x == 2) {
+    @println("two");
+}
+```
+
+**Complete Real-Time Multi-Branch FizzBuzz Recipe:**
+```pulse
+// fizzbuzz.pul - Real-Time Multi-Branch FizzBuzz Recipe
+@contract: @wcet(10us) @budget(100us);
+
+for $i in 1..16 {
+    if (($i % 15) == 0) {
+        @println("FizzBuzz");
+    } else {
+        if (($i % 3) == 0) {
+            @println("Fizz");
+        } else {
+            if (($i % 5) == 0) {
+                @println("Buzz");
+            } else {
+                @println($i);
+            }
+        }
+    }
+}
+```
+
+#### 2. Ternary Operator & Ternary Blocks
+```pulse
+let $rtt = @rtt();
+
+// Simple ternary expression
 let $rate = ($rtt < 200us) ? 100 : 60;
 
+// Multi-statement ternary block
 $rtt > 300us ? {
     @println("[ALERT] Congestion detected!");
     @rate(50);
 } : {
     @rate(100);
 };
+```
 
-// 3. Statically Bounded For Loop (Proven WCET)
+#### 3. Statically Bounded For Loop (Proven WCET)
+```pulse
 let mut $acc = 0;
 for $i in 0..10 {
     $acc += $i * 2;
 }
+```
 
-// 4. While Loop (Watchdog & Step Bounded)
+#### 4. While Loop (Watchdog & Step Bounded)
+```pulse
 let mut $k = 0;
 while ($k < 50) {
     $k += 1;
 }
+```
 
-// 5. Temporal Deadline Block with Automatic Overrun Reclaim
+#### 5. Temporal Deadline Block with Automatic Overrun Reclaim
+```pulse
 @within(500us) {
     #f := @capture();
     @send(#f);
@@ -856,12 +929,18 @@ OFFSET  HEX          INSTRUCTION  OPERANDS
 
 `pulc` is the official standalone compiler, validator, and disassembler toolchain for PulseLang and `px64`:
 
+### Usage:
 ```bash
 # Compile source to px64 binary artifact
 pulc compile script.pul -o script.bin
 
 # Fast compilation shorthand
 pulc script.pul
+
+# Execute pre-compiled px64 bytecode binary or source script
+# Trailing CLI arguments are passed to @argc() and @arg(i)
+pulc run fizzbuzz.bin
+pulc run stream.pul "arg1" "arg2"
 
 # Validate syntax, linear ownership, and WCET bounds without writing binary
 pulc check script.pul
@@ -874,6 +953,14 @@ pulc -d script.bin
 pulc compile script.pul --json
 pulc check script.pul --json
 ```
+
+#### Subcommands:
+| Subcommand | Description |
+| :--- | :--- |
+| `compile` | Compile PulseLang source into `px64` bytecode binary. |
+| `run` | Execute bytecode binary or source script directly in the host virtual machine. |
+| `check` | Validate syntax, types, linear ownership, and WCET bounds. |
+| `disasm` | Disassemble `px64` bytecode into readable assembly instructions. |
 
 #### Exit Codes:
 - `0`: Success.
@@ -966,6 +1053,7 @@ Human-readable and serial console error reports emit structured, actionable diag
 | `ERR_PX64_STACK_OVERFLOW` | Runtime | Call stack exceeded 8 frames | Flatten recursive functions |
 | `ERR_PX64_UNWRAP_FAILED` | Runtime | Called `@unwrap()` on an `Err` tagged result | Guard unwrap with `if (@is_ok($res))` |
 | `ERR_BINARY_VERSION_MISMATCH` | Runtime | Binary compiled with outdated version | Recompile with `pulc compile <file.pul>` |
+| `ERR_EXPECTED_LBRACE` | Compile | Missing opening brace `{` after `else`, `if`, `while`, `for`, `match`, or `@within` | Add `{` immediately after keyword (e.g. `else { if (...) { ... } }` instead of `else if`) |
 
 ### 7.5 PulseEditor In-Kernel Editor & Shortcut Bar
 
@@ -1220,3 +1308,27 @@ match $res2 {
     }
 };
 ```
+
+### 8.11 `fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else
+
+```pulse
+// fizzbuzz.pul - Real-Time Multi-Branch Decision Tree & Arithmetic
+@contract: @wcet(10us) @budget(100us);
+
+for $i in 1..16 {
+    if (($i % 15) == 0) {
+        @println("FizzBuzz");
+    } else {
+        if (($i % 3) == 0) {
+            @println("Fizz");
+        } else {
+            if (($i % 5) == 0) {
+                @println("Buzz");
+            } else {
+                @println($i);
+            }
+        }
+    }
+}
+```
+
