@@ -1,0 +1,6 @@
+// PulseLang Ultra-Low-Latency Screen Streaming Pipeline
+@contract: latency <= 50us;
+@pipeline: StreamNetwork @budget(5ms);
+
+#f0 := @capture();
+@send(#f0);

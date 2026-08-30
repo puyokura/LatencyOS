@@ -24,6 +24,7 @@ pub struct PulseEditor {
     pub buffer: [u8; MAX_EDITOR_BUF],
     pub buf_len: usize,
     pub cursor: usize,
+    pub top_line: usize,
     pub filename: [u8; 32],
     pub filename_len: usize,
     pub status_msg: [u8; 64],
@@ -39,6 +40,7 @@ impl PulseEditor {
             buffer: [0; MAX_EDITOR_BUF],
             buf_len: 0,
             cursor: 0,
+            top_line: 1,
             filename: [0; 32],
             filename_len: 0,
             status_msg: [0; 64],
@@ -56,9 +58,9 @@ impl PulseEditor {
 
     pub fn filename_str(&self) -> &str {
         if self.filename_len == 0 {
-            return "untitled.pl";
+            return "untitled.pul";
         }
-        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.pl")
+        core::str::from_utf8(&self.filename[..self.filename_len]).unwrap_or("untitled.pul")
     }
 
     pub fn set_status(&mut self, msg: &str) {
@@ -73,6 +75,23 @@ impl PulseEditor {
         core::str::from_utf8(&self.status_msg[..self.status_msg_len]).unwrap_or("")
     }
 
+    // Function: adjust_scroll
+    // Description: Adjust top_line viewport based on current cursor row.
+    // Worst-case execution time: ~100 ns
+    pub fn adjust_scroll(&mut self) -> bool {
+        let (row, _) = self.get_row_col();
+        let old_top = self.top_line;
+        if self.top_line == 0 {
+            self.top_line = 1;
+        }
+        if row < self.top_line {
+            self.top_line = row;
+        } else if row >= self.top_line + 21 {
+            self.top_line = row - 21 + 1;
+        }
+        self.top_line != old_top
+    }
+
     // Function: load_file
     // Description: Load file contents from LatencyFS into editor buffer.
     // Worst-case execution time: ~1500 ns
@@ -80,6 +99,7 @@ impl PulseEditor {
         self.set_filename(filename);
         self.cursor = 0;
         self.buf_len = 0;
+        self.top_line = 1;
         self.esc_state = EditorEscState::Normal;
 
         if let Some(data) = fs_read(filename) {
@@ -335,7 +355,11 @@ impl PulseEditor {
     // Function: update_cursor_only
     // Description: Smoothly reposition cursor and update status header without redrawing lines (Zero Flicker).
     // Worst-case execution time: ~1200 ns
-    pub fn update_cursor_only(&self) {
+    pub fn update_cursor_only(&mut self) {
+        if self.adjust_scroll() {
+            self.redraw();
+            return;
+        }
         let (row, col) = self.get_row_col();
         // Update top line
         serial_print!(
@@ -346,7 +370,7 @@ impl PulseEditor {
             col
         );
         // Move cursor to editing position
-        let cursor_screen_row = core::cmp::min(row + 1, 22);
+        let cursor_screen_row = (row - self.top_line) + 2;
         serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
     }
 
@@ -354,6 +378,10 @@ impl PulseEditor {
     // Description: Redraw only the current line and update header (Micro-Update for instant typing/pasting with zero character drops).
     // Worst-case execution time: ~1500 ns
     pub fn redraw_current_line(&mut self) {
+        if self.adjust_scroll() {
+            self.redraw();
+            return;
+        }
         let (row, col) = self.get_row_col();
         let (line_start, _) = self.get_current_line_start_and_col();
 
@@ -366,8 +394,8 @@ impl PulseEditor {
             col
         );
 
-        let screen_row = row + 1;
-        if screen_row <= 22 {
+        if row >= self.top_line && row < self.top_line + 21 {
+            let screen_row = (row - self.top_line) + 2;
             // Position at start of current row
             serial_print!("\x1b[{};1H\x1b[90m{:3} |\x1b[0m ", screen_row, row);
 
@@ -477,18 +505,20 @@ impl PulseEditor {
 
             // Clear rest of current line
             serial_print!("\x1b[0m\x1b[K");
-        }
 
-        // Reposition cursor
-        let cursor_screen_row = core::cmp::min(row + 1, 22);
-        serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
-        self.needs_redraw = false;
+            // Reposition cursor
+            serial_print!("\x1b[{};{}H\x1b[?25h", screen_row, col + 6);
+            self.needs_redraw = false;
+        } else {
+            self.redraw();
+        }
     }
 
     // Function: redraw
-    // Description: Render full editor screen smoothly with nano-style fixed bottom shortcuts bar and zero residual lines.
+    // Description: Render full editor screen smoothly with nano-style fixed bottom shortcuts bar, dynamic scrolling line sidebar, and zero residual lines.
     // Worst-case execution time: ~40_000 ns
     pub fn redraw(&mut self) {
+        self.adjust_scroll();
         let (row, col) = self.get_row_col();
 
         // 1. Top Status Header (Row 1)
@@ -500,15 +530,25 @@ impl PulseEditor {
             col
         );
 
+        // Find starting index of line `self.top_line`
+        let mut cur_line = 1;
+        let mut start_idx = 0;
+        while start_idx < self.buf_len && cur_line < self.top_line {
+            if self.buffer[start_idx] == b'\n' {
+                cur_line += 1;
+            }
+            start_idx += 1;
+        }
+
         // 2. Render code lines (Rows 2..22)
-        let mut line_num = 1;
+        let mut line_num = self.top_line;
         let mut screen_row = 2;
         serial_print!("\x1b[2;1H\x1b[90m{:3} |\x1b[0m ", line_num);
 
         let mut in_comment = false;
         let mut in_string = false;
 
-        let mut i = 0;
+        let mut i = start_idx;
         while i < self.buf_len {
             let b = self.buffer[i];
 
@@ -519,14 +559,15 @@ impl PulseEditor {
                 in_string = false;
                 if screen_row <= 22 {
                     serial_print!("\x1b[0m\x1b[K\r\n\x1b[90m{:3} |\x1b[0m ", line_num);
+                } else {
+                    break;
                 }
                 i += 1;
                 continue;
             }
 
             if screen_row > 22 {
-                i += 1;
-                continue;
+                break;
             }
 
             if b == b'\t' {
@@ -560,7 +601,7 @@ impl PulseEditor {
                 continue;
             }
 
-            // PulseLang v2: Directives & Intrinsics (@contract, @tsc, etc.)
+            // PulseLang: Directives & Intrinsics (@contract, @tsc, etc.)
             if b == b'@' {
                 let len = self.get_word_len(i);
                 serial_print!("\x1b[1;36m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
@@ -568,7 +609,7 @@ impl PulseEditor {
                 continue;
             }
 
-            // PulseLang v2: Variables ($rtt, $sum)
+            // PulseLang: Variables ($rtt, $sum)
             if b == b'$' {
                 let len = self.get_word_len(i);
                 serial_print!("\x1b[1;32m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
@@ -576,7 +617,7 @@ impl PulseEditor {
                 continue;
             }
 
-            // PulseLang v2: Hardware Handles (#f, #frame)
+            // PulseLang: Hardware Handles (#f, #frame)
             if b == b'#' {
                 let len = self.get_word_len(i);
                 serial_print!("\x1b[1;35m{}\x1b[0m", core::str::from_utf8(&self.buffer[i..i + len]).unwrap_or(""));
@@ -650,7 +691,7 @@ impl PulseEditor {
         serial_print!("\x1b[24;1H\x1b[7m [^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear] \x1b[0m\x1b[K\x1b[J");
 
         // 6. Reposition terminal cursor at current editing position and make visible
-        let cursor_screen_row = core::cmp::min(row + 1, 22);
+        let cursor_screen_row = (row - self.top_line) + 2;
         serial_print!("\x1b[{};{}H\x1b[?25h", cursor_screen_row, col + 6);
 
         self.needs_redraw = false;

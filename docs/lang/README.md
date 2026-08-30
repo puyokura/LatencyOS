@@ -11,7 +11,7 @@ PulseLang v2 is the native, AI-optimized, temporal reactive Domain-Specific Lang
 | [**Formal Specification (`spec.md`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/spec.md) | Full language specification, formal EBNF grammar, type system, and contracts | Developers, Systems Architects |
 | [**AI Specification (`ai_spec.md`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/ai_spec.md) | Machine-readable grammar, invariant rules, and code generation templates | AI Assistants, LLMs, Static Analyzers |
 | [**Bytecode ISA Reference (`isa.md`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/isa.md) | Virtual Machine architecture, stack machine model, opcodes, and ABI | Compiler Developers, VM Engineers |
-| [**Scripts Cookbook (`cookbook.md`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/cookbook.md) | Standard `.pl` scripts, line-by-line breakdowns, and real-time recipes | Application Developers |
+| [**Scripts Cookbook (`cookbook.md`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/cookbook.md) | Standard `.pul` scripts, line-by-line breakdowns, and real-time recipes | Application Developers |
 
 ---
 

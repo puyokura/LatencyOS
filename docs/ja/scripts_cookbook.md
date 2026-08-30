@@ -6,9 +6,9 @@
 
 ## 1. 標準スクリプト解説
 
-### 1.1 `stream.pl` (GPU-to-NIC ゼロコピーパイプライン)
+### 1.1 `stream.pul` (GPU-to-NIC ゼロコピーパイプライン)
 ```pulse
-// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 @on_vblank: {
     #f := @capture();
@@ -28,9 +28,9 @@
 
 ---
 
-### 1.2 `bench.pl` (実時間数学 & レイテンシベンチマーク)
+### 1.2 `bench.pul` (実時間数学 & レイテンシベンチマーク)
 ```pulse
-// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
+// bench.pul - Realtime Math & Latency Benchmark [AI-Native Spec]
 @contract: @wcet(5us) @budget(50us);
 $t0 := @tsc();
 $sum := 0;
@@ -51,9 +51,9 @@ $dt := @tsc() - $t0;
 
 ---
 
-### 1.4 `jitter.pl` (連続 TSC によるハードウェアジッタ計測)
+### 1.4 `jitter.pul` (連続 TSC によるハードウェアジッタ計測)
 ```pulse
-// jitter.pl - Cycle-Accurate Jitter Analyzer
+// jitter.pul - Cycle-Accurate Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
 $t1 := @tsc();
 $t2 := @tsc();
@@ -67,9 +67,9 @@ $delta < 100 ? {
 };
 ```
 
-### 1.5 `echo.pl` (コマンドライン引数エコー & 文字列整形)
+### 1.5 `echo.pul` (コマンドライン引数エコー & 文字列整形)
 ```pulse
-// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+// echo.pul - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {

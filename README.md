@@ -37,8 +37,8 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 
 ### 3.1 Pulse Shell (Time-Native Unix Minimalist Shell)
 - **Time-First Prompt**: `[c0|18ns] % ` displays the active CPU core and hardware TSC execution latency ($\Delta t$) of the preceding command.
-- **Deadline Guard (`within <time> <cmd>`)**: Evaluates real-time execution against strict hardware budgets (e.g. `within 500us run filter.pl`).
-- **Hierarchical Path Resolution**: Full support for absolute paths (`/pulselang/echo.pl`), CWD relative paths (`echo.pl`), `cd`, and `pwd`.
+- **Deadline Guard (`within <time> <cmd>`)**: Evaluates real-time execution against strict hardware budgets (e.g. `within 500us run filter.pul`).
+- **Hierarchical Path Resolution**: Full support for absolute paths (`/pulselang/echo.pul`), CWD relative paths (`echo.pul`), `cd`, and `pwd`.
 - **Command-Line Arguments**: Transparent argument passing to scripts and binaries (`run /bin/echo.bin "hello world"`).
 - **Disassembler (`disasm <file.bin>`)**: Decodes `px64` binaries into 32-bit fixed instructions with x64 register names (`$rax`..`$r15`).
 - **Hardware Telemetry Commands**:
@@ -64,7 +64,7 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
   - *Branchless Math, Bits & Hash*: `@min($a, $b)`, `@max($a, $b)`, `@abs($a)`, `@clamp($v, $min, $max)`, `@popcnt($v)`, `@lzcnt($v)`, `@crc32($seed, $val)`.
   - *Zero-Copy VRAM DMA Direct Access*: `@vram_read($slot, $offset)`, `@vram_write($slot, $offset, $val)` (direct memory access to `/vram/slotN` frame buffers).
   - *Network & Pipeline*: `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`, `@streq()`.
-- **Standard Scripts**: `stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`, `math_demo.pl`, `telemetry_ext.pl`, `vram_test.pl`, `for_test.pl`, etc.
+- **Standard Scripts**: `stream.pul`, `bench.pul`, `filter.pul`, `jitter.pul`, `telemetry.pul`, `echo.pul`, `math_demo.pul`, `telemetry_ext.pul`, `vram_test.pul`, `for_test.pul`, etc.
 - **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
 
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)

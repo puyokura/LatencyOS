@@ -1,0 +1,9 @@
+[package]
+name = "pulc"
+version = "0.1.0"
+edition = "2021"
+description = "PulseLang host CLI compiler and disassembler tool for LatencyOS"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+pulselang-core = { path = "../pulselang-core", features = ["std"] }

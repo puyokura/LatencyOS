@@ -116,7 +116,7 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 PulseLang scripts executed via `run <file> [args...]` receive CLI arguments directly into static memory buffers:
 
 ```pulse
-// echo.pl - Accessing Command-Line Arguments
+// echo.pul - Accessing Command-Line Arguments
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {

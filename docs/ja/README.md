@@ -71,8 +71,8 @@ OFFSET  HEX          INSTRUCTION  OPERANDS
 ...
 0078:   16 00 00 00  HALT
 
-[c0|24ns] % edit /pulselang/stream.pl
-[c0|15ns] % within 500us run /pulselang/filter.pl
+[c0|24ns] % edit /pulselang/stream.pul
+[c0|15ns] % within 500us run /pulselang/filter.pul
 [c0|10ns] % timeline
 [c0|14ns] % ring
 [c0|11ns] % cores

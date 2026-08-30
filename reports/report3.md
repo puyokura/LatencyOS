@@ -12,8 +12,8 @@
 | `cd`, `mkdir`, `tree`, `touch`, `rm` | 動的な`/qa`を作成・移動・ツリー反映できる | 非空ディレクトリの`rm`は即時に拒否 | 前回から改善 |
 | `cp`, `mv` | `cp`と絶対パス`mv`は成功 | 相対`mv alpha_copy beta`は`FileNotFound` | **残存バグ** |
 | `within` | 100 msで`status`実行・時間計測に成功 | 1 nsはdeadline violation、無効時間文字列を拒否 | 良好 |
-| `compile`, `run`, `disasm`, `hex` | `.pl`コンパイル、`.bin`実行・解析・hex表示に成功 | 存在しない入力を一貫して拒否 | 良好 |
-| `echo.pl` | 引数なしの既定メッセージ、複数引数の連結出力に成功 | — | 良好 |
+| `compile`, `run`, `disasm`, `hex` | `.pul`コンパイル、`.bin`実行・解析・hex表示に成功 | 存在しない入力を一貫して拒否 | 良好 |
+| `echo.pul` | 引数なしの既定メッセージ、複数引数の連結出力に成功 | — | 良好 |
 
 ## 2. シェル・LatencyFSの詳細
 
@@ -90,11 +90,11 @@ mv: error: FileNotFound
 
 | スクリプト | 実行結果 | 所見 |
 | --- | --- | --- |
-| `echo.pl` | 引数なしで既定文、`alpha beta gamma`で同文言を出力 | `@argc` / `@arg`の基本経路は動作 |
-| `stream.pl` / `stream.bin` | エラーなしで完了 | `pipeline`のCapture/Encode/Networkカウンタが増加 |
-| `jitter.pl` | `Consecutive TSC Delta: 46128 cycles`、`Jitter detected` | QEMU TCG上の非決定性を正しく可視化 |
-| `telemetry.pl` | TSCとRTT（101504 ns）を出力 | テレメトリーintrinsicの基本経路は動作 |
-| `bench.pl` / `bench.bin` | 平方和でなく、仕様どおりの加算結果9900を出力 | 算術コード生成の修正を再確認 |
+| `echo.pul` | 引数なしで既定文、`alpha beta gamma`で同文言を出力 | `@argc` / `@arg`の基本経路は動作 |
+| `stream.pul` / `stream.bin` | エラーなしで完了 | `pipeline`のCapture/Encode/Networkカウンタが増加 |
+| `jitter.pul` | `Consecutive TSC Delta: 46128 cycles`、`Jitter detected` | QEMU TCG上の非決定性を正しく可視化 |
+| `telemetry.pul` | TSCとRTT（101504 ns）を出力 | テレメトリーintrinsicの基本経路は動作 |
+| `bench.pul` / `bench.bin` | 平方和でなく、仕様どおりの加算結果9900を出力 | 算術コード生成の修正を再確認 |
 
 ## 4. バイトコード形式と逆アセンブル
 
@@ -119,7 +119,7 @@ mv: error: FileNotFound
 
 ### 4.2 `stream.bin`
 
-`stream.pl`のコンパイル結果は104 B、静的WCETは約2300 nsと表示された。逆アセンブルは、ハードウェアハンドル、時間定数、デッドライン、RTT分岐、レート制御、送信を明示している。
+`stream.pul`のコンパイル結果は104 B、静的WCETは約2300 nsと表示された。逆アセンブルは、ハードウェアハンドル、時間定数、デッドライン、RTT分岐、レート制御、送信を明示している。
 
 ```
 0000: CALL_NAT     #f0 = @capture($rax)
@@ -148,7 +148,7 @@ mv: error: FileNotFound
 | --- | --- | --- | --- |
 | `/bin/test_invalid_op.bin` | `UNKNOWN_OP_0xfe`を表示 | `ERR_PX64_INVALID_OPCODE`で停止 | 良好 |
 | `/bin/test_oob_const.bin` | `LDC $rax, const[99] (0)`を表示 | `ERR_PX64_CONST_OUT_OF_BOUNDS`で停止 | 実行検証は良好、表示改善余地 |
-| 存在しない`.pl`/`.bin` | — | `compile`/`run`/`disasm`/`hex`が`cannot access` | 良好 |
+| 存在しない`.pul`/`.bin` | — | `compile`/`run`/`disasm`/`hex`が`cannot access` | 良好 |
 
 ### 5.1 低優先度: 範囲外定数の逆アセンブル表示
 

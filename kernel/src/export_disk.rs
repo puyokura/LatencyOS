@@ -620,8 +620,8 @@ pub fn export_disk_auto_import() -> Result<usize, &'static str> {
                     let _ = crate::fs::fs_create_internal(root_path, data, false);
                 }
 
-                // 2. If .PL script, also register under "/pulselang/<name>"
-                if raw_name.ends_with(".PL") || raw_name.ends_with(".pl") {
+                // 2. If .PUL or .PL script, also register under "/pulselang/<name>"
+                if raw_name.ends_with(".PUL") || raw_name.ends_with(".pul") || raw_name.ends_with(".PL") || raw_name.ends_with(".pl") {
                     let mut pl_buf = [0u8; 64];
                     let prefix = b"/pulselang/";
                     pl_buf[..prefix.len()].copy_from_slice(prefix);

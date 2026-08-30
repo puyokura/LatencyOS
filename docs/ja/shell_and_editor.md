@@ -22,10 +22,10 @@ LatencyOS の対話環境は、マイクロ秒・ナノ秒単位のハードウ�
 |---|---|---|
 | `help` | なし | 利用可能コマンド一覧と最悪実行時間の表示 |
 | `ls` | `-l`, `-t`, `[dir]` | ファイル一覧。`-l` でパーミッション・サイズ、`-t` で種別と静的 WCET を表示 |
-| `cat` | `readme.txt` | 任意のテキストファイル（`.txt`, `.json`, `.log`, `.pl`）の内容を出力 |
+| `cat` | `readme.txt` | 任意のテキストファイル（`.txt`, `.json`, `.log`, `.pul`）の内容を出力 |
 | `edit` | `test.txt` | 任意のファイルを内蔵エディタ PulseEditor で作成・編集（Ctrl ショートカット対応） |
-| `compile` / `build` | `stream.pl [out.bin]` | PulseLang スクリプトをスタンドアロンのバイトコードバイナリ（`.bin`）へコンパイル |
-| `run` / `exec` | `stream.pl` または `stream.bin` | スクリプトまたはコンパイル済みバイナリを即時実行（バイナリはコンパイル遅延ゼロ） |
+| `compile` / `build` | `stream.pul [out.bin]` | PulseLang スクリプトをスタンドアロンのバイトコードバイナリ（`.bin`）へコンパイル |
+| `run` / `exec` | `stream.pul` または `stream.bin` | スクリプトまたはコンパイル済みバイナリを即時実行（バイナリはコンパイル遅延ゼロ） |
 | `disasm` | `stream.bin` | バイトコードバイナリを逆アセンブルし、Opcode とオペランドを一覧表示 |
 | `hex` / `xxd` | `stream.bin` | バイナリ・テキストファイルの 16 進ダンプ (Hex Dump) を ASCII と共に出力 |
 | `pwd` | なし | 現在のカレントワーキングディレクトリを表示 |
@@ -34,8 +34,8 @@ LatencyOS の対話環境は、マイクロ秒・ナノ秒単位のハードウ�
 | `tree` | なし | 階層的ディレクトリ構造をツリー形式で表示 |
 | `touch` | `notes.txt` | 空のファイルを LatencyFS に新規作成 |
 | `rm` / `del` | `old.bin` | ファイルまたはディレクトリを LatencyFS から削除 |
-| `cp` | `src.pl dst.pl` | ファイルを複製 |
-| `mv` | `old.pl new.pl` | ファイル名を変更・移動 |
+| `cp` | `src.pul dst.pul` | ファイルを複製 |
+| `mv` | `old.pul new.pul` | ファイル名を変更・移動 |
 | `within` | `500us run filter.bin` | 指定時間以内にコマンドが完了するかハードウェア検証 |
 | `timeline` | なし | 6 つのパイプラインステージのマイクロ秒内訳を表示 |
 | `ring` | なし | SPSC Lock-Free リングバッファの占有率とポインタを表示 |
@@ -55,22 +55,22 @@ LatencyOS の対話環境は、マイクロ秒・ナノ秒単位のハードウ�
 ---
 
 ### 1.3 コンパイル済みバイナリの実行方法 (`compile` & `run`)
-PulseLang のスクリプト（`.pl`）は、その場でコンパイルして実行できるほか、事前に `px64` バイトコードバイナリ（`.bin`）へビルドしておくことで、**コンパイル時間ゼロの $O(1)$ 最速起動**が可能です。また、コマンドライン引数（スペース区切り）を渡すことができます。
+PulseLang のスクリプト（`.pul`）は、その場でコンパイルして実行できるほか、事前に `px64` バイトコードバイナリ（`.bin`）へビルドしておくことで、**コンパイル時間ゼロの $O(1)$ 最速起動**が可能です。また、コマンドライン引数（スペース区切り）を渡すことができます。
 
 1. **コンパイル**:
    ```text
-   [c0|14ns] % compile /pulselang/echo.pl /bin/my_echo.bin
-   [BUILD] Compiled /pulselang/echo.pl -> /bin/my_echo.bin (191 B binary bytecode, wcet ~4475 ns)
+   [c0|14ns] % compile /pulselang/echo.pul /bin/my_echo.bin
+   [BUILD] Compiled /pulselang/echo.pul -> /bin/my_echo.bin (191 B binary bytecode, wcet ~4475 ns)
    ```
 2. **実行 & 引数受け渡し**:
    ```text
    [c0|12ns] % run /bin/my_echo.bin "hello world"
    hello world
 
-   [c0|12ns] % run /pulselang/echo.pl "arg1" "arg2"
+   [c0|12ns] % run /pulselang/echo.pul "arg1" "arg2"
    arg1 arg2
    ```
-   ※ `run` コマンドは引数のファイル先頭のマジック（`PX64` または `PULS`）を自動検知するため、`.pl` と `.bin` のいずれも同じ `run <ファイル名> [引数...]` で透過的に実行可能です。
+   ※ `run` コマンドは引数のファイル先頭のマジック（`PX64` または `PULS`）を自動検知するため、`.pul` と `.bin` のいずれも同じ `run <ファイル名> [引数...]` で透過的に実行可能です。
 
 3. **バイナリビューア & 逆アセンブラ (`hex` / `disasm`)**:
    - `hex stream.bin`: バイトコードの 16 進ダンプを出力
@@ -95,19 +95,19 @@ OFFSET  HEX          INSTRUCTION  OPERANDS
 
 ### 1.4 階層的ファイルシステムとパス解決
 LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築します。
-- 絶対パス（`/pulselang/echo.pl`）
-- カレントディレクトリ相対パス（`echo.pl`、`pulselang/echo.pl`）
+- 絶対パス（`/pulselang/echo.pul`）
+- カレントディレクトリ相対パス（`echo.pul`、`pulselang/echo.pul`）
 - `cd <dir>` によるカレントワーキングディレクトリの移動と `pwd`
 
 ```text
 / (ルート)
 ├── /pulselang/         # PulseLang v2 スクリプトディレクトリ
-│   ├── echo.pl         # コマンドライン引数対応エコー
-│   ├── stream.pl       # ゼロコピー GPU-to-NIC パイプライン
-│   ├── bench.pl        # リアルタイム演算ベンチマーク
-│   ├── filter.pl       # 輻輳制御ガード
-│   ├── jitter.pl       # ジッター計測
-│   └── telemetry.pl    # ハードウェアテレメトリ
+│   ├── echo.pul         # コマンドライン引数対応エコー
+│   ├── stream.pul       # ゼロコピー GPU-to-NIC パイプライン
+│   ├── bench.pul        # リアルタイム演算ベンチマーク
+│   ├── filter.pul       # 輻輳制御ガード
+│   ├── jitter.pul       # ジッター計測
+│   └── telemetry.pul    # ハードウェアテレメトリ
 ├── /bin/               # コンパイル済み px64 実行可能バイナリ
 │   ├── echo.bin        # コンパイル済みバイナリ
 │   ├── stream.bin      # コンパイル済みバイナリ
@@ -131,7 +131,7 @@ LatencyOS は起動時に以下の標準ディレクトリ階層を自動構築�
 PulseEditor は、外部の依存関係を持たずに Core 0 上で直接動作する ANSI フルスクリーンテキストエディタです。画面最下部に Nano 風の固定ショートカットバーが常時表示されます。
 
 ```text
-  1 | // stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+  1 | // stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
   2 | @pipeline: UltraStream @budget(8000us);
   3 | @on_vblank: {
   4 |     #f := @capture();
@@ -180,7 +180,7 @@ PulseLang コンパイラは、エラー発生時に AI エージェントや自
 ==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
 [ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN
 [MESSAGE]: Unexpected token encountered in expression
-[FILE]: /home/err_syntax.pl
+[FILE]: /home/err_syntax.pul
 [LOCATION]: Line 3, Column 10 (ByteOffset: 50)
 [TOKEN_FOUND]: Kind: Number(42), Value: "42"
 [EXPECTED]: Literal value, variable ($var), hardware handle (#h), or intrinsic call (@fn)

@@ -122,7 +122,7 @@ Core 0 上で実行される各種対話処理・スクリプト実行には、�
      - `@capture()`: ノンブロッキング最新フレーム取得（5スピンタイムアウト）＋ 64KB CRC32 整合性計算 $\approx \mathbf{480\,\mu\text{s}}$（約 0.48 ms）。Core 0 の長時間停止を防ぐため、60Hz VBLANK（最大 16.6ms）のブロッキング待機は行わず、タイムアウト時は最新フレームスロットを即時返却する。
      - `@send(#f)`: 完全な SRTP 送出（45 MTU パケット分割、各パケットの AES-128-GCM ハードウェア暗号化 ＋ GMAC 認証タグ ＋ e1000 NIC DMA 送出） $\approx \mathbf{31.0\,\mu\text{s}}$（約 0.031 ms）。
    - **スクリプト実行のトリガー関係と最悪保証値**:
-     - 通常スクリプト（`stream.pl` $\approx 0.55\text{ ms}$, `echo.pl` $\approx 0.05\text{ ms}$）: どちらの上限にも達せず正常完了する。
+     - 通常スクリプト（`stream.pul` $\approx 0.55\text{ ms}$, `echo.pul` $\approx 0.05\text{ ms}$）: どちらの上限にも達せず正常完了する。
      - 純粋演算無限ループ: 10,000 ステップ上限（$\le 0.25\text{ ms}$）に先に到達し、`ERR_PX64_WCET_EXCEEDED` で即座に強制中断される。
      - ハードウェア Intrinsics 無限ループ（`@capture()` ループ等）: 約 10〜11 反復（$\approx 5.0\text{ ms}$）時点で TSC 壁時計タイマーが先に到達し、`ERR_PX64_TIMEOUT_EXCEEDED` で強制中断される。
      - **スクリプト実行の真の物理最悪値**: タイムアウト検査はディスパッチループ先頭で行われるため、最悪値は「5.0ms（タイマー閾値）＋ その直前に開始した最長単一命令の所要時間（`@capture()` 0.48ms）」＝ **約 5.48 ms** となる（実測検証済み）。
@@ -285,7 +285,7 @@ Rustクレートは `#![no_std]` かつ `alloc` クレート不使用（起動�
    - **受け入れ基準**: 階層ディレクトリ操作と相対パス解決が完全動作し、各コマンドの実行遅延がナノ秒単位でプロンプトに表示され、`within` ガードが予算超過時に適切にフォールバックすること（自動テスト `test-boot` にて検証）。
 7. **Phase 6: AIネイティブDSL (PulseLang v2) & 独自64-bitレジスタマシンアーキテクチャ (`px64` ISA & VM)**
    - **実装内容**: 20レジスタ構成（16 GPR `$rax`〜`$r15` ＋ 4 HW DMAスロット `#f0`〜`#f3`）、32-bit固定長命令エンコーディング（`PX64_OP_*`）、16バイト固定ヘッダーバイナリ（`PX64`）、単一パスコンパイラ、ゼロヒープVM（`PX64VM`）、コマンドライン引数（`@argc()`, `@arg(idx)`）、引数付きスクリプト実行（`run <file> [args...]`）、逆アセンブラ（`disasm`）。
-   - **受け入れ基準**: 全標準スクリプト（`stream.pl`, `bench.pl`, `filter.pl`, `jitter.pl`, `telemetry.pl`, `echo.pl`）がコンパイル・実行可能であり、`disasm` で正確なx64レジスタ名が出力され、引数付きバイナリ実行が正常に動作すること（自動テスト `test-px64` にて検証）。
+   - **受け入れ基準**: 全標準スクリプト（`stream.pul`, `bench.pul`, `filter.pul`, `jitter.pul`, `telemetry.pul`, `echo.pul`）がコンパイル・実行可能であり、`disasm` で正確なx64レジスタ名が出力され、引数付きバイナリ実行が正常に動作すること（自動テスト `test-px64` にて検証）。
 8. **Phase 7: カーネル内蔵フルスクリーンエディタ (PulseEditor) & 開発者体験・AI連携ツールチェーン**
    - **実装内容**: ANSIフルスクリーンエディタ、Nano風固定ショートカットバー（`[^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear]`）、UART一括バッファドレインによる超高速コード貼り付け（Paste、文字欠落・重複改行の完全排除）、DELETEキーの前方文字削除と残像クリーンアップ、機械可読 AI 診断エラー出力（`[ERROR_CODE]`, `[LOCATION]`, `[HEX_DUMP]`, `[AI_REPAIR_HINT]`）。
    - **受け入れ基準**: 長大なスクリプトを一括ペーストしても文字欠落が一切発生せず、DELETEキーで画面の再描画崩れが起きず、文法エラー時にAIが自律修復可能な構造化診断ログが出力されること（自動テスト `test-paste`, `test-compile-error`, `test-editor-delete` にて検証）。

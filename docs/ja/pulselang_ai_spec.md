@@ -107,9 +107,9 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 ## 4. AI 生成用標準コードテンプレート
 
-### テンプレート 1: ゼロコピー GPU-to-NIC パイプライン (`stream.pl`)
+### テンプレート 1: ゼロコピー GPU-to-NIC パイプライン (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -122,9 +122,9 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 };
 ```
 
-### テンプレート 2: 有界反復数学ベンチマーク (`bench.pl`)
+### テンプレート 2: 有界反復数学ベンチマーク (`bench.pul`)
 ```pulse
-// bench.pl - Real-Time Bounded Iteration Benchmark
+// bench.pul - Real-Time Bounded Iteration Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -144,9 +144,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### テンプレート 3: 適応型輻輳制御ガード (`filter.pl`)
+### テンプレート 3: 適応型輻輳制御ガード (`filter.pul`)
 ```pulse
-// filter.pl - Adaptive Congestion Controller
+// filter.pul - Adaptive Congestion Controller
 @contract: @wcet(2us) @budget(100us);
 
 $rtt := @rtt();

@@ -26,7 +26,7 @@ SECTIONS {
     .data : ALIGN(4K) {
         *(.data .data.*)
         *(.got)
-        *(.got.plt)
+        *(.got.pult)
         *(.sdata .sdata.*)
     } :kernel
     _data_end = .;

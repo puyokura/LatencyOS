@@ -300,9 +300,9 @@ Core 3 が e1000 TX 記述子のステータスビット `E1000_TXD_STAT_DD` を
 
 ## 4. 標準スクリプト一覧
 
-### 4.1 ゼロコピー GPU-to-NIC パイプライン (`stream.pl`)
+### 4.1 ゼロコピー GPU-to-NIC パイプライン (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -315,9 +315,9 @@ Core 3 が e1000 TX 記述子のステータスビット `E1000_TXD_STAT_DD` を
 };
 ```
 
-### 4.2 レイテンシベンチマーク (`bench.pl`)
+### 4.2 レイテンシベンチマーク (`bench.pul`)
 ```pulse
-// bench.pl - Realtime Math & Latency Benchmark
+// bench.pul - Realtime Math & Latency Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();

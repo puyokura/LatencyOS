@@ -23,9 +23,9 @@
 
 ## 2. 標準コード生成テンプレート
 
-### テンプレート 1: ゼロコピー GPU-to-NIC パイプライン (`stream.pl`)
+### テンプレート 1: ゼロコピー GPU-to-NIC パイプライン (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -38,9 +38,9 @@
 };
 ```
 
-### テンプレート 2: 有界反復数学ベンチマーク (`bench.pl`)
+### テンプレート 2: 有界反復数学ベンチマーク (`bench.pul`)
 ```pulse
-// bench.pl - Real-Time Bounded Iteration Benchmark
+// bench.pul - Real-Time Bounded Iteration Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -60,9 +60,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### テンプレート 3: 適応型輻輳制御ガード (`filter.pl`)
+### テンプレート 3: 適応型輻輳制御ガード (`filter.pul`)
 ```pulse
-// filter.pl - Adaptive Congestion Controller
+// filter.pul - Adaptive Congestion Controller
 @contract: @wcet(2us) @budget(100us);
 
 $rtt := @rtt();
@@ -78,9 +78,9 @@ $rtt > 300us ? {
 };
 ```
 
-### テンプレート 4: コマンドライン引数エコー (`echo.pl`)
+### テンプレート 4: コマンドライン引数エコー (`echo.pul`)
 ```pulse
-// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+// echo.pul - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {
@@ -107,7 +107,7 @@ $argc > 0 ? {
 ==================== [PULSELANG COMPILE ERROR DIAGNOSTIC (AI-ACTIONABLE)] ====================
 [ERROR_CODE]: ERR_SYNTAX_UNEXPECTED_TOKEN
 [MESSAGE]: Unexpected token encountered in expression
-[FILE]: /home/err_syntax.pl
+[FILE]: /home/err_syntax.pul
 [LOCATION]: Line 3, Column 10 (ByteOffset: 50)
 [TOKEN_FOUND]: Kind: Number(42), Value: "42"
 [EXPECTED]: Literal value, variable ($var), hardware handle (#h), or intrinsic call (@fn)

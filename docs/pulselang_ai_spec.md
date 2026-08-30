@@ -137,9 +137,9 @@ Rule (Branch-Consistency):
 
 ## 5. Standard AI Code Generation Templates
 
-### Template 1: Zero-Copy GPU-to-NIC Streaming Pipeline (`stream.pl`)
+### Template 1: Zero-Copy GPU-to-NIC Streaming Pipeline (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -152,9 +152,9 @@ Rule (Branch-Consistency):
 };
 ```
 
-### Template 2: Real-Time Bounded Math Loop (`bench.pl`)
+### Template 2: Real-Time Bounded Math Loop (`bench.pul`)
 ```pulse
-// bench.pl - Real-Time Bounded Iteration Benchmark
+// bench.pul - Real-Time Bounded Iteration Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -174,9 +174,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### Template 3: Dynamic Congestion Controller (`filter.pl`)
+### Template 3: Dynamic Congestion Controller (`filter.pul`)
 ```pulse
-// filter.pl - Adaptive Congestion Controller
+// filter.pul - Adaptive Congestion Controller
 @contract: @wcet(2us) @budget(100us);
 
 $rtt := @rtt();
@@ -192,9 +192,9 @@ $rtt > 300us ? {
 };
 ```
 
-### Template 4: Jitter Analyzer (`jitter.pl`)
+### Template 4: Jitter Analyzer (`jitter.pul`)
 ```pulse
-// jitter.pl - Cycle-Accurate Hardware Jitter Analyzer
+// jitter.pul - Cycle-Accurate Hardware Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
 
 $t1 := @tsc();

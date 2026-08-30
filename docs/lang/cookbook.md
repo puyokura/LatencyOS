@@ -6,9 +6,9 @@ Practical scripts and real-time development recipes for LatencyOS.
 
 ## 1. Standard In-Kernel Scripts
 
-### 1.1 `stream.pl` (Zero-Copy GPU-to-NIC Pipeline)
+### 1.1 `stream.pul` (Zero-Copy GPU-to-NIC Pipeline)
 ```pulse
-// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 @on_vblank: {
     #f := @capture();
@@ -20,9 +20,9 @@ Practical scripts and real-time development recipes for LatencyOS.
 };
 ```
 
-### 1.2 `bench.pl` (Cycle-Accurate Latency Benchmark)
+### 1.2 `bench.pul` (Cycle-Accurate Latency Benchmark)
 ```pulse
-// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
+// bench.pul - Realtime Math & Latency Benchmark [AI-Native Spec]
 @contract: @wcet(5us) @budget(50us);
 $t0 := @tsc();
 $sum := 0;
@@ -39,9 +39,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### 1.3 `filter.pl` (Adaptive Congestion Guard)
+### 1.3 `filter.pul` (Adaptive Congestion Guard)
 ```pulse
-// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
+// filter.pul - Adaptive Congestion Guard [AI-Native Spec]
 @contract: @wcet(2us) @budget(100us);
 $rtt := @rtt();
 @println("[FILTER] Measured RTT (ns):");
@@ -55,9 +55,9 @@ $rtt > 300us ? {
 };
 ```
 
-### 1.4 `jitter.pl` (Hardware Jitter Analyzer)
+### 1.4 `jitter.pul` (Hardware Jitter Analyzer)
 ```pulse
-// jitter.pl - Cycle-Accurate Jitter Analyzer
+// jitter.pul - Cycle-Accurate Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
 $t1 := @tsc();
 $t2 := @tsc();
@@ -71,9 +71,9 @@ $delta < 100 ? {
 };
 ```
 
-### 1.5 `telemetry.pl` (Real-Time Hardware Telemetry)
+### 1.5 `telemetry.pul` (Real-Time Hardware Telemetry)
 ```pulse
-// telemetry.pl - Real-Time Hardware Telemetry
+// telemetry.pul - Real-Time Hardware Telemetry
 @contract: @wcet(2us) @budget(20us);
 $rtt := @rtt();
 $tsc := @tsc();
@@ -85,9 +85,9 @@ $tsc := @tsc();
 $rtt < 100us ? @println("[HEALTH] Sub-100us glass-to-glass latency guaranteed.") : @println("[HEALTH] RTT backpressure active.");
 ```
 
-### 1.6 `echo.pl` (CLI Argument Echo & String Formatter)
+### 1.6 `echo.pul` (CLI Argument Echo & String Formatter)
 ```pulse
-// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+// echo.pul - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {

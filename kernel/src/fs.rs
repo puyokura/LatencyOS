@@ -169,8 +169,8 @@ pub fn fs_init() {
             file.is_dir = false;
         }
 
-        // 1. stream.pl - Ultra-low-latency pipeline stream script
-        let stream_src = br#"// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+        // 1. stream.pul - Ultra-low-latency pipeline stream script
+        let stream_src = br#"// stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 @contract: @wcet(100us) @budget(500us);
 
@@ -184,8 +184,8 @@ pub fn fs_init() {
 };
 "#;
 
-        // 2. bench.pl - Micro-benchmark script
-        let bench_src = br#"// bench.pl - Realtime Math & Latency Benchmark [AI-Native Spec]
+        // 2. bench.pul - Micro-benchmark script
+        let bench_src = br#"// bench.pul - Realtime Math & Latency Benchmark [AI-Native Spec]
 @contract: @wcet(5us) @budget(50us);
 
 let $t0 = @tsc();
@@ -202,8 +202,8 @@ let $dt = @tsc() - $t0;
 @println($dt);
 "#;
 
-        // 3. filter.pl - Packet filter and congestion controller
-        let filter_src = br#"// filter.pl - Adaptive Congestion Guard [AI-Native Spec]
+        // 3. filter.pul - Packet filter and congestion controller
+        let filter_src = br#"// filter.pul - Adaptive Congestion Guard [AI-Native Spec]
 @contract: @wcet(2us) @budget(100us);
 
 let $rtt = @rtt();
@@ -218,8 +218,8 @@ if ($rtt > 300us) {
 }
 "#;
 
-        // 4. jitter.pl - Jitter analysis measuring cycle delta
-        let jitter_src = br#"// jitter.pl - Cycle-Accurate Jitter Analyzer
+        // 4. jitter.pul - Jitter analysis measuring cycle delta
+        let jitter_src = br#"// jitter.pul - Cycle-Accurate Jitter Analyzer
 @contract: @wcet(3us) @budget(30us);
 
 let $t1 = @tsc();
@@ -234,8 +234,8 @@ if ($delta < 100) {
 }
 "#;
 
-        // 5. telemetry.pl - Real-Time Telemetry and Hardware Inspector
-        let telemetry_src = br#"// telemetry.pl - Real-Time Hardware Telemetry
+        // 5. telemetry.pul - Real-Time Telemetry and Hardware Inspector
+        let telemetry_src = br#"// telemetry.pul - Real-Time Hardware Telemetry
 @contract: @wcet(2us) @budget(20us);
 
 let $rtt = @rtt();
@@ -247,8 +247,8 @@ let $tsc = @tsc();
 @println($rtt);
 "#;
 
-        // 6. echo.pl - Quick message printer script with argument support
-        let echo_src = br#"// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+        // 6. echo.pul - Quick message printer script with argument support
+        let echo_src = br#"// echo.pul - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
 
 let $argc = @argc();
@@ -271,12 +271,12 @@ if ($argc > 0) {
         let readme_txt = br#"LatencyOS In-Memory Real-Time Filesystem (LatencyFS)
 ===================================================
 - Files are statically allocated in L1/L2 cache with zero fragmentation.
-- Supports text files (.txt, .md, .json, .log, etc.), scripts (.pl), and binaries (.bin).
-- Source scripts (.pl) are located in /pulselang/
+- Supports text files (.txt, .md, .json, .log, etc.), scripts (.pul), and binaries (.bin).
+- Source scripts (.pul) are located in /pulselang/
 - Pre-compiled binaries (.bin) are located in /bin/
 - Use 'edit <file>' to edit in PulseEditor (Ctrl+S: save, Ctrl+R: run, Ctrl+Q: quit).
-- Use 'compile <script.pl> <out.bin>' to build standalone binary bytecode.
-- Use 'run <file>' to execute either .pl scripts or .bin bytecode.
+- Use 'compile <script.pul> <out.bin>' to build standalone binary bytecode.
+- Use 'run <file>' to execute either .pul scripts or .bin bytecode.
 "#;
 
         // 8. config.json - JSON configuration file
@@ -307,8 +307,8 @@ if ($argc > 0) {
         let _ = fs_mkdir("/pulselang");
         let _ = fs_mkdir("/vram");
 
-        // Standard Utility Scripts (.pl)
-        let cat_src = br#"// cat.pl - Print argument or stream
+        // Standard Utility Scripts (.pul)
+        let cat_src = br#"// cat.pul - Print argument or stream
 @contract: @wcet(2us) @budget(20us);
 
 let $c = @argc();
@@ -318,12 +318,12 @@ if ($c > 0) {
     @println("Usage: cat <file>");
 }
 "#;
-        let ls_src = br#"// ls.pl - Directory lister
+        let ls_src = br#"// ls.pul - Directory lister
 @contract: @wcet(2us) @budget(20us);
 
 @println("[LatencyFS /bin /pulselang /home /vram /etc /var]");
 "#;
-        let head_src = br#"// head.pl - Output top arguments or lines
+        let head_src = br#"// head.pul - Output top arguments or lines
 @contract: @wcet(2us) @budget(20us);
 
 let $c = @argc();
@@ -333,37 +333,37 @@ if ($c > 0) {
     @println("head: empty operand");
 }
 "#;
-        let calc_src = br#"// calc.pl - Arithmetic evaluator
+        let calc_src = br#"// calc.pul - Arithmetic evaluator
 @contract: @wcet(5us) @budget(50us);
 
 @println("[CALC] PulseLang Fast Arithmetic Engine");
 "#;
-        let touch_src = br#"// touch.pl - Update timestamp
+        let touch_src = br#"// touch.pul - Update timestamp
 @contract: @wcet(2us) @budget(20us);
 
 @println("[TOUCH] Updated timestamp");
 "#;
-        let git_src = br#"// git.pl - Lightweight LatencyFS Version Control
+        let git_src = br#"// git.pul - Lightweight LatencyFS Version Control
 @contract: @wcet(2us) @budget(20us);
 
 @println("git: on branch main (LatencyFS clean)");
 "#;
 
         // 1. Source scripts and system files
-        let _ = fs_create_internal("/pulselang/stream.pl", stream_src, false);
-        let _ = fs_create_internal("/pulselang/bench.pl", bench_src, false);
-        let _ = fs_create_internal("/pulselang/filter.pl", filter_src, false);
-        let _ = fs_create_internal("/pulselang/jitter.pl", jitter_src, false);
-        let _ = fs_create_internal("/pulselang/telemetry.pl", telemetry_src, false);
-        let _ = fs_create_internal("/pulselang/echo.pl", echo_src, false);
-        let _ = fs_create_internal("/pulselang/cat.pl", cat_src, false);
-        let _ = fs_create_internal("/pulselang/ls.pl", ls_src, false);
-        let _ = fs_create_internal("/pulselang/head.pl", head_src, false);
-        let _ = fs_create_internal("/pulselang/calc.pl", calc_src, false);
-        let _ = fs_create_internal("/pulselang/touch.pl", touch_src, false);
-        let _ = fs_create_internal("/pulselang/git.pl", git_src, false);
+        let _ = fs_create_internal("/pulselang/stream.pul", stream_src, false);
+        let _ = fs_create_internal("/pulselang/bench.pul", bench_src, false);
+        let _ = fs_create_internal("/pulselang/filter.pul", filter_src, false);
+        let _ = fs_create_internal("/pulselang/jitter.pul", jitter_src, false);
+        let _ = fs_create_internal("/pulselang/telemetry.pul", telemetry_src, false);
+        let _ = fs_create_internal("/pulselang/echo.pul", echo_src, false);
+        let _ = fs_create_internal("/pulselang/cat.pul", cat_src, false);
+        let _ = fs_create_internal("/pulselang/ls.pul", ls_src, false);
+        let _ = fs_create_internal("/pulselang/head.pul", head_src, false);
+        let _ = fs_create_internal("/pulselang/calc.pul", calc_src, false);
+        let _ = fs_create_internal("/pulselang/touch.pul", touch_src, false);
+        let _ = fs_create_internal("/pulselang/git.pul", git_src, false);
 
-        let for_test_src = br#"// for_test.pl - Static Range For Loop Verification
+        let for_test_src = br#"// for_test.pul - Static Range For Loop Verification
 @contract: @wcet(10us) @budget(50us);
 
 let mut $sum = 0;
@@ -374,9 +374,9 @@ for $i in 0..10 {
 @println($sum);
 @assert($sum == 45);
 "#;
-        let _ = fs_create_internal("/pulselang/for_test.pl", for_test_src, false);
+        let _ = fs_create_internal("/pulselang/for_test.pul", for_test_src, false);
 
-        let err_for_wcet_src = br#"// err_for_wcet.pl - Intentional Loop Bound Exceeded
+        let err_for_wcet_src = br#"// err_for_wcet.pul - Intentional Loop Bound Exceeded
 @contract: @wcet(100us) @budget(500us);
 
 let mut $sum = 0;
@@ -385,9 +385,9 @@ for $i in 0..3000 {
 }
 @println($sum);
 "#;
-        let _ = fs_create_internal("/pulselang/err_for_wcet.pl", err_for_wcet_src, false);
+        let _ = fs_create_internal("/pulselang/err_for_wcet.pul", err_for_wcet_src, false);
 
-        let array_test_src = br#"// array_test.pl - Fixed-Size Array and Assertion Verification
+        let array_test_src = br#"// array_test.pul - Fixed-Size Array and Assertion Verification
 @contract: @wcet(20us) @budget(100us);
 let $buf: [i64; 10];
 for $i in 0..10 {
@@ -402,9 +402,9 @@ for $j in 0..10 {
 @assert($sum == 550);
 @println("[ARRAY_TEST] Assertion passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/array_test.pl", array_test_src, false);
+        let _ = fs_create_internal("/pulselang/array_test.pul", array_test_src, false);
 
-        let err_array_oob_src = br#"// err_array_oob.pl - Intentional Array Out-Of-Bounds Fault
+        let err_array_oob_src = br#"// err_array_oob.pul - Intentional Array Out-Of-Bounds Fault
 @contract: @wcet(10us) @budget(50us);
 let $buf: [i64; 4];
 $buf[0] := 10;
@@ -412,9 +412,9 @@ $buf[1] := 20;
 $buf[4] := 99;
 @println($buf[0]);
 "#;
-        let _ = fs_create_internal("/pulselang/err_array_oob.pl", err_array_oob_src, false);
+        let _ = fs_create_internal("/pulselang/err_array_oob.pul", err_array_oob_src, false);
 
-        let bitwise_test_src = br#"// bitwise_test.pl - Bitwise ALU and Constant Folding Verification
+        let bitwise_test_src = br#"// bitwise_test.pul - Bitwise ALU and Constant Folding Verification
 @contract: @wcet(15us) @budget(60us);
 let $a = (15 & 7) | 48;
 let $b = 1 << 4;
@@ -430,33 +430,33 @@ let $c = 255 ^ 170;
 @assert($c == 85);
 @println("[BITWISE_TEST] All assertions passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/bitwise_test.pl", bitwise_test_src, false);
+        let _ = fs_create_internal("/pulselang/bitwise_test.pul", bitwise_test_src, false);
 
-        let err_assert_src = br#"// err_assert.pl - Intentional Runtime Assertion Failure
+        let err_assert_src = br#"// err_assert.pul - Intentional Runtime Assertion Failure
 @contract: @wcet(10us) @budget(500us);
 let $val = 100;
 @println("[ASSERT_TEST] Testing failing assertion @assert($val == 200)...");
 @assert($val == 200);
 @println("Should not reach here");
 "#;
-        let _ = fs_create_internal("/pulselang/err_assert.pl", err_assert_src, false);
+        let _ = fs_create_internal("/pulselang/err_assert.pul", err_assert_src, false);
 
-        let err_syntax_src = br#"// err_syntax.pl - Syntax Error Test
+        let err_syntax_src = br#"// err_syntax.pul - Syntax Error Test
 @contract: @wcet(100us) @budget(500us);
 $x := := 42;
 "#;
-        let _ = fs_create_internal("/pulselang/err_syntax.pl", err_syntax_src, false);
+        let _ = fs_create_internal("/pulselang/err_syntax.pul", err_syntax_src, false);
 
-        let fold_test_src = br#"// fold_test.pl - Constant Folding Disassembly Demo
-@contract: @wcet(10us) @budget(50us);
+        let fold_test_src = br#"// fold_test.pul - Constant Folding Disassembly Demo
+@contract: @wcet(10us) @budget(500us);
 let $res = (10 + 20) * 3 + (100 >> 2);
 @println("[FOLD_TEST] Computed 30*3 + 25 = 115:");
 @println($res);
 @assert($res == 115);
 "#;
-        let _ = fs_create_internal("/pulselang/fold_test.pl", fold_test_src, false);
+        let _ = fs_create_internal("/pulselang/fold_test.pul", fold_test_src, false);
 
-        let fn_test_src = br#"// fn_test.pl - Static Function Calls and Deterministic Execution
+        let fn_test_src = br#"// fn_test.pul - Static Function Calls and Deterministic Execution
 @contract: @wcet(20us) @budget(80us);
 
 fn add($a, $b) -> i64 {
@@ -491,9 +491,9 @@ let $c3 = clamp(50, 0, 100);
 
 @println("[FN_TEST] All static function tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/fn_test.pl", fn_test_src, false);
+        let _ = fs_create_internal("/pulselang/fn_test.pul", fn_test_src, false);
 
-        let result_test_src = br#"// result_test.pl - Tagged Result Returns and Unwrap Intrinsics
+        let result_test_src = br#"// result_test.pul - Tagged Result Returns and Unwrap Intrinsics
 @contract: @wcet(20us) @budget(80us);
 
 fn safe_div($num, $denom) -> i64 {
@@ -518,9 +518,9 @@ let $err_res = safe_div(100, 0);
 @assert(!@is_ok($err_res));
 @println("[RESULT_TEST] Tagged result tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/result_test.pl", result_test_src, false);
+        let _ = fs_create_internal("/pulselang/result_test.pul", result_test_src, false);
 
-        let err_stack_overflow_src = br#"// err_stack_overflow.pl - Intentional Recursion Exceeding Call Stack
+        let err_stack_overflow_src = br#"// err_stack_overflow.pul - Intentional Recursion Exceeding Call Stack
 @contract: @wcet(20us) @budget(80us);
 
 fn recurse($n) -> i64 {
@@ -531,9 +531,9 @@ fn recurse($n) -> i64 {
 let $res = recurse(0);
 @println("Should not reach here");
 "#;
-        let _ = fs_create_internal("/pulselang/err_stack_overflow.pl", err_stack_overflow_src, false);
+        let _ = fs_create_internal("/pulselang/err_stack_overflow.pul", err_stack_overflow_src, false);
 
-        let err_unwrap_src = br#"// err_unwrap.pl - Intentional Unwrap Failure on Err Result
+        let err_unwrap_src = br#"// err_unwrap.pul - Intentional Unwrap Failure on Err Result
 @contract: @wcet(10us) @budget(50us);
 
 fn fail_op() -> i64 {
@@ -545,9 +545,9 @@ let $res = fail_op();
 let $val = @unwrap($res);
 @println("Should not reach here");
 "#;
-        let _ = fs_create_internal("/pulselang/err_unwrap.pl", err_unwrap_src, false);
+        let _ = fs_create_internal("/pulselang/err_unwrap.pul", err_unwrap_src, false);
 
-        let struct_test_src = br#"// struct_test.pl - Static Structs and Field Access
+        let struct_test_src = br#"// struct_test.pul - Static Structs and Field Access
 @contract: @wcet(20us) @budget(80us);
 
 struct Point {
@@ -597,9 +597,9 @@ let $area = calc_area($hdr.width, $hdr.height);
 
 @println("[STRUCT_TEST] All struct tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/struct_test.pl", struct_test_src, false);
+        let _ = fs_create_internal("/pulselang/struct_test.pul", struct_test_src, false);
 
-        let err_struct_field_src = br#"// err_struct_field.pl - Compile-Time Non-Existent Field Access Error
+        let err_struct_field_src = br#"// err_struct_field.pul - Compile-Time Non-Existent Field Access Error
 @contract: @wcet(10us) @budget(50us);
 
 struct Vector {
@@ -610,9 +610,9 @@ struct Vector {
 let $v: Vector;
 $v.z := 42;
 "#;
-        let _ = fs_create_internal("/pulselang/err_struct_field.pl", err_struct_field_src, false);
+        let _ = fs_create_internal("/pulselang/err_struct_field.pul", err_struct_field_src, false);
 
-        let const_table_test_src = br#"// const_table_test.pl - Constant Lookup Tables in ROM/Pool
+        let const_table_test_src = br#"// const_table_test.pul - Constant Lookup Tables in ROM/Pool
 @contract: @wcet(20us) @budget(80us);
 
 const GAMMA_LUT: [i64; 4] = [0, 64, 128, 255];
@@ -638,9 +638,9 @@ for $i in 0..4 {
 
 @println("[CONST_TABLE_TEST] All const table tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/const_table_test.pl", const_table_test_src, false);
+        let _ = fs_create_internal("/pulselang/const_table_test.pul", const_table_test_src, false);
 
-        let err_table_bounds_src = br#"// err_table_bounds.pl - Runtime Const Table Out of Bounds Violation
+        let err_table_bounds_src = br#"// err_table_bounds.pul - Runtime Const Table Out of Bounds Violation
 @contract: @wcet(10us) @budget(50us);
 
 const LUT: [i64; 3] = [10, 20, 30];
@@ -650,9 +650,9 @@ let $idx = 10;
 let $val = LUT[$idx];
 @println("Should not reach here");
 "#;
-        let _ = fs_create_internal("/pulselang/err_table_bounds.pl", err_table_bounds_src, false);
+        let _ = fs_create_internal("/pulselang/err_table_bounds.pul", err_table_bounds_src, false);
 
-        let streq_test_src = br#"// streq_test.pl - Inline Fixed-Size Strings and String Equality Comparison
+        let streq_test_src = br#"// streq_test.pul - Inline Fixed-Size Strings and String Equality Comparison
 @contract: @wcet(20us) @budget(80us);
 
 let $s1 = "hello";
@@ -677,9 +677,9 @@ let $eq2 = @streq($s1, $s3);
 
 @println("[STREQ_TEST] All string equality tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/streq_test.pl", streq_test_src, false);
+        let _ = fs_create_internal("/pulselang/streq_test.pul", streq_test_src, false);
 
-        let fold_ext_test_src = br#"// fold_ext_test.pl - Advanced Multi-Layer Constant Folding Test
+        let fold_ext_test_src = br#"// fold_ext_test.pul - Advanced Multi-Layer Constant Folding Test
 @contract: @wcet(15us) @budget(60us);
 
 let $v1 = (0xFF & 0x0F) | (1 << 4) ^ 0x05;
@@ -696,9 +696,9 @@ let $v3 = !0 && !(10 == 20);
 @assert($v3 == 1);
 @println("[FOLD_EXT_TEST] All multi-layer constant folding tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/fold_ext_test.pl", fold_ext_test_src, false);
+        let _ = fs_create_internal("/pulselang/fold_ext_test.pul", fold_ext_test_src, false);
 
-        let strict_immut_src = br#"// strict_immut_test.pl - Immutability by Default & let mut Verification
+        let strict_immut_src = br#"// strict_immut_test.pul - Immutability by Default & let mut Verification
 @contract: @wcet(10us) @budget(50us);
 
 let $x: i64 = 100;
@@ -715,17 +715,17 @@ $y := $y * 2;
 @assert($y == 150);
 @println("[STRICT_IMMUT_TEST] Immutability and mutability invariants passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/strict_immut_test.pl", strict_immut_src, false);
+        let _ = fs_create_internal("/pulselang/strict_immut_test.pul", strict_immut_src, false);
 
-        let err_immut_src = br#"// err_immut_violation.pl - Compile-Time Rejection of Immutable Mutation
+        let err_immut_src = br#"// err_immut_violation.pul - Compile-Time Rejection of Immutable Mutation
 @contract: @wcet(5us) @budget(20us);
 
 let $val = 10;
 $val := 20;
 "#;
-        let _ = fs_create_internal("/pulselang/err_immut_violation.pl", err_immut_src, false);
+        let _ = fs_create_internal("/pulselang/err_immut_violation.pul", err_immut_src, false);
 
-        let contracts_test_src = br#"// contracts_test.pl - Design-by-Contract @requires Verification
+        let contracts_test_src = br#"// contracts_test.pul - Design-by-Contract @requires Verification
 @contract: @wcet(25us) @budget(100us);
 
 fn safe_div($a, $b) -> i64 @requires($b != 0) {
@@ -759,9 +759,9 @@ let $c3 = clamp_val(5, 0, 10);
 @assert($c3 == 5);
 @println("[CONTRACTS_TEST] All contract precondition checks passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/contracts_test.pl", contracts_test_src, false);
+        let _ = fs_create_internal("/pulselang/contracts_test.pul", contracts_test_src, false);
 
-        let err_precond_src = br#"// err_precondition.pl - Runtime Rejection on Violated Precondition
+        let err_precond_src = br#"// err_precondition.pul - Runtime Rejection on Violated Precondition
 @contract: @wcet(10us) @budget(40us);
 
 fn safe_div($a, $b) -> i64 @requires($b != 0) {
@@ -770,9 +770,9 @@ fn safe_div($a, $b) -> i64 @requires($b != 0) {
 
 let $res = safe_div(100, 0);
 "#;
-        let _ = fs_create_internal("/pulselang/err_precondition.pl", err_precond_src, false);
+        let _ = fs_create_internal("/pulselang/err_precondition.pul", err_precond_src, false);
 
-        let match_test_src = br#"// match_test.pl - Exhaustive Pattern Matching on Results and Values
+        let match_test_src = br#"// match_test.pul - Exhaustive Pattern Matching on Results and Values
 @contract: @wcet(30us) @budget(120us);
 
 let $r_ok = @ok(42);
@@ -818,9 +818,9 @@ match $state {
 @assert($state_result == 300);
 @println("[MATCH_TEST] All exhaustive pattern matching tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/match_test.pl", match_test_src, false);
+        let _ = fs_create_internal("/pulselang/match_test.pul", match_test_src, false);
 
-        let err_non_exh_src = br#"// err_non_exhaustive.pl - Compile-Time Rejection of Non-Exhaustive Match
+        let err_non_exh_src = br#"// err_non_exhaustive.pul - Compile-Time Rejection of Non-Exhaustive Match
 @contract: @wcet(5us) @budget(20us);
 
 let $res = @ok(10);
@@ -830,9 +830,9 @@ match $res {
     },
 }
 "#;
-        let _ = fs_create_internal("/pulselang/err_non_exhaustive.pl", err_non_exh_src, false);
+        let _ = fs_create_internal("/pulselang/err_non_exhaustive.pul", err_non_exh_src, false);
 
-        let math_demo_src = br#"// math_demo.pl - Deterministic Math, Bit Manipulation & CRC32 Intrinsics
+        let math_demo_src = br#"// math_demo.pul - Deterministic Math, Bit Manipulation & CRC32 Intrinsics
 @contract: @wcet(25us) @budget(100us);
 
 let $min_val = @min(42, 10);
@@ -870,9 +870,9 @@ let $crc = @crc32(0, 123456789);
 @assert($crc != 0);
 @println("[MATH_DEMO] All math & bit manipulation tests passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/math_demo.pl", math_demo_src, false);
+        let _ = fs_create_internal("/pulselang/math_demo.pul", math_demo_src, false);
 
-        let telemetry_ext_src = br#"// telemetry_ext.pl - Hardware & Real-Time System Telemetry
+        let telemetry_ext_src = br#"// telemetry_ext.pul - Hardware & Real-Time System Telemetry
 @contract: @wcet(30us) @budget(120us);
 
 let $cid = @core_id();
@@ -897,9 +897,9 @@ let $q_depth = @ring_depth(0);
 @assert($q_depth >= 0);
 @println("[TELEMETRY_EXT] All telemetry assertions passed!");
 "#;
-        let _ = fs_create_internal("/pulselang/telemetry_ext.pl", telemetry_ext_src, false);
+        let _ = fs_create_internal("/pulselang/telemetry_ext.pul", telemetry_ext_src, false);
 
-        let vram_test_src = br#"// vram_test.pl - Zero-Copy VRAM DMA Direct Read/Write
+        let vram_test_src = br#"// vram_test.pul - Zero-Copy VRAM DMA Direct Read/Write
 @contract: @wcet(20us) @budget(80us);
 
 let $slot = 0;
@@ -915,7 +915,7 @@ let $read_back = @vram_read($slot, $offset);
 @assert($read_back == $magic_val);
 @println("[VRAM_TEST] VRAM DMA direct access verified successfully!");
 "#;
-        let _ = fs_create_internal("/pulselang/vram_test.pl", vram_test_src, false);
+        let _ = fs_create_internal("/pulselang/vram_test.pul", vram_test_src, false);
 
         let _ = fs_create_internal("/home/readme.txt", readme_txt, false);
         let _ = fs_create_internal("/etc/config.json", config_json, false);

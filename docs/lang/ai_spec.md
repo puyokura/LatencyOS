@@ -25,9 +25,9 @@
 
 ## 2. Standard Code Generation Templates
 
-### Template 1: Zero-Copy Pipeline (`stream.pl`)
+### Template 1: Zero-Copy Pipeline (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -40,9 +40,9 @@
 };
 ```
 
-### Template 2: Bounded Iteration Benchmark (`bench.pl`)
+### Template 2: Bounded Iteration Benchmark (`bench.pul`)
 ```pulse
-// bench.pl - Real-Time Bounded Iteration Benchmark
+// bench.pul - Real-Time Bounded Iteration Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -62,9 +62,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### Template 3: Congestion Guard (`filter.pl`)
+### Template 3: Congestion Guard (`filter.pul`)
 ```pulse
-// filter.pl - Adaptive Congestion Controller
+// filter.pul - Adaptive Congestion Controller
 @contract: @wcet(2us) @budget(100us);
 
 $rtt := @rtt();
@@ -77,9 +77,9 @@ $rtt > 300us ? {
 } : {
     @println("[ACTION] Optimal latency -> Rate: 100%");
     @rate(100);
-### Template 4: Command-Line Argument Echo (`echo.pl`)
+### Template 4: Command-Line Argument Echo (`echo.pul`)
 ```pulse
-// echo.pl - PulseLang Echo Script with Command-Line Argument Support
+// echo.pul - PulseLang Echo Script with Command-Line Argument Support
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {

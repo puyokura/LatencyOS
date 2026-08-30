@@ -3,5 +3,10 @@ members = [
     "kernel",
     "xtask",
     "runner",
+    "pulselang-core",
+    "pulc",
 ]
 resolver = "2"
+
+[profile.dev]
+opt-level = 1

@@ -602,7 +602,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("  cat <file>       concatenate files and print on stdout");
             serial_println!("  edit <file>      open full-screen text editor (Ctrl shortcuts)");
             serial_println!("  compile <file>   compile script to standalone binary bytecode (.bin)");
-            serial_println!("  run <file>       execute PulseLang script (.pl) or binary (.bin)");
+            serial_println!("  run <file>       execute PulseLang script (.pul) or binary (.bin)");
             serial_println!("  disasm <file>    disassemble binary bytecode with opcodes");
             serial_println!("  hex <file>       display binary hex dump (xxd/hexdump)");
             serial_println!("  pwd              print current working directory");
@@ -614,7 +614,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("  cp <src> <dst>   copy file");
             serial_println!("  mv <src> <dst>   rename / move file");
             serial_println!("  within <t> <cmd> execute command with hard deadline guard");
-            serial_println!("  doc pulse        show PulseLang v2 AI-Native formal specification");
+            serial_println!("  doc pulse        show PulseLang v3.1 AI-Native formal specification");
             serial_println!("  timeline         display stage-by-stage pipeline timing");
             serial_println!("  ring             display SPSC lock-free ring buffer telemetry");
             serial_println!("  cores            display hardware core status and C-states");
@@ -630,7 +630,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             serial_println!("  git <cmd>        lightweight version control (status/init/log/commit)");
             serial_println!("  clear            clear screen");
             serial_println!("  exit|halt        poweroff / halt system");
-            serial_println!("  <cmd> [args]     direct PATH execution for /bin/*.bin & /pulselang/*.pl");
+            serial_println!("  <cmd> [args]     direct PATH execution for /bin/*.bin & /pulselang/*.pul");
         }
 
         "doc" | "man" => {
@@ -789,7 +789,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                         if is_timing {
                             let type_str = if file.is_dir {
                                 "directory"
-                            } else if display_name.ends_with(".pl") {
+                            } else if display_name.ends_with(".pul") {
                                 "wcet: ~3.2us"
                             } else if display_name.ends_with(".bin") {
                                 "wcet: ~0.8us"
@@ -807,7 +807,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                         } else {
                             if file.is_dir {
                                 serial_print!("\x1b[1;34m{}{}\x1b[0m  ", display_name, suffix);
-                            } else if display_name.ends_with(".pl") {
+                            } else if display_name.ends_with(".pul") {
                                 serial_print!("\x1b[1;32m{}\x1b[0m  ", display_name);
                             } else if display_name.ends_with(".bin") {
                                 serial_print!("\x1b[1;33m{}\x1b[0m  ", display_name);
@@ -842,7 +842,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
         }
 
         "edit" => {
-            let filename = arg.split_whitespace().next().unwrap_or("untitled.pl");
+            let filename = arg.split_whitespace().next().unwrap_or("untitled.pul");
             crate::editor::start_editor(filename, tsc_freq_hz);
         }
 
@@ -850,7 +850,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             let mut parts = arg.split_whitespace();
             let script_path = parts.next().unwrap_or("");
             if script_path.is_empty() {
-                serial_println!("run: missing operand (usage: run <file.pl|file.bin> [args...])");
+                serial_println!("run: missing operand (usage: run <file.pul|file.bin> [args...])");
             } else if let Some(data) = crate::fs::fs_read(script_path) {
                 // Collect script arguments
                 let mut script_args = [""; 8];
@@ -880,7 +880,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             let dst_name = parts.next().unwrap_or("");
 
             if src_name.is_empty() {
-                serial_println!("compile: missing operand (usage: compile <src.pl> [dst.bin])");
+                serial_println!("compile: missing operand (usage: compile <src.pul> [dst.bin])");
             } else if let Some(data) = crate::fs::fs_read(src_name) {
                 static mut COMPILE_BIN_BUF: [u8; 4096] = [0u8; 4096];
                 let bin_buf = unsafe { &mut COMPILE_BIN_BUF };
@@ -889,11 +889,11 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
                         let target_name = if !dst_name.is_empty() {
                             dst_name
                         } else {
-                            if src_name == "stream.pl" { "stream.bin" }
-                            else if src_name == "bench.pl" { "bench.bin" }
-                            else if src_name == "filter.pl" { "filter.bin" }
-                            else if src_name == "jitter.pl" { "jitter.bin" }
-                            else if src_name == "telemetry.pl" { "telemetry.bin" }
+                            if src_name == "stream.pul" { "stream.bin" }
+                            else if src_name == "bench.pul" { "bench.bin" }
+                            else if src_name == "filter.pul" { "filter.bin" }
+                            else if src_name == "jitter.pul" { "jitter.bin" }
+                            else if src_name == "telemetry.pul" { "telemetry.bin" }
                             else { "out.bin" }
                         };
                         match crate::fs::fs_write(target_name, &bin_buf[..bin_size]) {
@@ -1793,10 +1793,11 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             // Search order:
             // 1. /bin/<main_cmd>.bin
             // 2. /bin/<main_cmd>
-            // 3. /pulselang/<main_cmd>.pl
-            // 4. /pulselang/<main_cmd>
-            // 5. <main_cmd> (direct relative or absolute file path)
-            // 6. /vram/<main_cmd>
+            // 3. /pulselang/<main_cmd>.pul
+            // 4. /pulselang/<main_cmd>.pl
+            // 5. /pulselang/<main_cmd>
+            // 6. <main_cmd> (direct relative or absolute file path)
+            // 7. /vram/<main_cmd>
 
             let check_path = |prefix: &str, name: &str, ext: &str| -> Option<&'static [u8]> {
                 let mut buf = [0u8; 64];
@@ -1821,19 +1822,19 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             if resolved_data.is_none() {
                 resolved_data = check_path("/bin/", main_cmd, "");
             }
-            // 3. /pulselang/<cmd>.pl
+            // 3. /pulselang/<cmd>.pul
             if resolved_data.is_none() {
-                resolved_data = check_path("/pulselang/", main_cmd, ".pl");
+                resolved_data = check_path("/pulselang/", main_cmd, ".pul");
             }
-            // 4. /pulselang/<cmd>
+            // 5. /pulselang/<cmd>
             if resolved_data.is_none() {
                 resolved_data = check_path("/pulselang/", main_cmd, "");
             }
-            // 5. Direct path (e.g. ./foo.pl or /home/bar.bin)
+            // 6. Direct path (e.g. ./foo.pul, ./foo.pl or /home/bar.bin)
             if resolved_data.is_none() {
                 resolved_data = crate::fs::fs_read(main_cmd);
             }
-            // 6. /vram/<cmd>
+            // 7. /vram/<cmd>
             if resolved_data.is_none() {
                 resolved_data = check_path("/vram/", main_cmd, "");
             }

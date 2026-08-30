@@ -307,9 +307,9 @@ Static WCET provides a conservative upper bound. Dynamic TSC evaluates real-time
 
 ## 4. Canonical Production Scripts
 
-### 4.1 Zero-Copy Stream Pipeline (`stream.pl`)
+### 4.1 Zero-Copy Stream Pipeline (`stream.pul`)
 ```pulse
-// stream.pl - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
+// stream.pul - Zero-Copy GPU-to-NIC Ultra-Low-Latency Pipeline
 @pipeline: UltraStream @budget(8000us);
 
 @on_vblank: {
@@ -322,9 +322,9 @@ Static WCET provides a conservative upper bound. Dynamic TSC evaluates real-time
 };
 ```
 
-### 4.2 Latency Benchmark (`bench.pl`)
+### 4.2 Latency Benchmark (`bench.pul`)
 ```pulse
-// bench.pl - Realtime Math & Latency Benchmark
+// bench.pul - Realtime Math & Latency Benchmark
 @contract: @wcet(5us) @budget(50us);
 
 $t0 := @tsc();
@@ -344,9 +344,9 @@ $dt := @tsc() - $t0;
 @println($dt);
 ```
 
-### 4.3 Adaptive Congestion Controller (`filter.pl`)
+### 4.3 Adaptive Congestion Controller (`filter.pul`)
 ```pulse
-// filter.pl - Adaptive Congestion Guard
+// filter.pul - Adaptive Congestion Guard
 @contract: @wcet(2us) @budget(100us);
 
 $rtt := @rtt();

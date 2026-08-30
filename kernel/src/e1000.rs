@@ -31,7 +31,7 @@ pub const E1000_RA: u32 = 0x5400;
 
 pub const NUM_TX_DESCS: usize = 64;
 pub const NUM_RX_DESCS: usize = 64;
-pub const PACKET_BUFFER_SIZE: usize = 1536;
+pub const PACKET_BUFFER_SIZE: usize = 2048;
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
@@ -85,14 +85,22 @@ struct PacketBuffer {
 static mut TX_BUFFERS: [PacketBuffer; NUM_TX_DESCS] = [PacketBuffer { data: [0; PACKET_BUFFER_SIZE] }; NUM_TX_DESCS];
 static mut RX_BUFFERS: [PacketBuffer; NUM_RX_DESCS] = [PacketBuffer { data: [0; PACKET_BUFFER_SIZE] }; NUM_RX_DESCS];
 
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+#[allow(dead_code)]
 pub struct E1000Driver {
-    bar0: u64,
+    pub bar0: u64,
     pub mac: [u8; 6],
-    tx_tail: usize,
-    rx_tail: usize,
+    pub tx_tail: usize,
+    pub rx_tail: usize,
 }
 
 pub static mut E1000: Option<E1000Driver> = None;
+pub static E1000_BAR0: AtomicU64 = AtomicU64::new(0);
+pub static E1000_TX_TAIL: AtomicUsize = AtomicUsize::new(0);
+pub static E1000_RX_TAIL: AtomicUsize = AtomicUsize::new(0);
+pub static mut E1000_MAC: [u8; 6] = [0; 6];
+pub static E1000_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 // Function: mmio_read32
 // Description: Read 32-bit register from e1000 MMIO space.
@@ -172,6 +180,12 @@ pub fn init_e1000(bar0: u64) -> Result<(), &'static str> {
         let rctl = (1 << 1) | (1 << 15) | (1 << 26);
         mmio_write32(bar0, E1000_RCTL, rctl);
 
+        E1000_BAR0.store(bar0, Ordering::Release);
+        E1000_MAC = mac;
+        E1000_TX_TAIL.store(0, Ordering::Release);
+        E1000_RX_TAIL.store(0, Ordering::Release);
+        E1000_INITIALIZED.store(true, Ordering::Release);
+
         E1000 = Some(E1000Driver {
             bar0,
             mac,
@@ -187,13 +201,17 @@ pub fn init_e1000(bar0: u64) -> Result<(), &'static str> {
 // Description: Zero-copy packet transmission via e1000 TX ring buffer.
 // Worst-case execution time: ~65 ns
 pub fn send_packet(packet: &[u8]) -> Result<(), ()> {
-    unsafe {
-        let drv = match E1000.as_mut() {
-            Some(d) => d,
-            None => return Err(()),
-        };
+    if !E1000_INITIALIZED.load(Ordering::Acquire) {
+        return Err(());
+    }
+    let bar0 = E1000_BAR0.load(Ordering::Relaxed);
+    if bar0 == 0 {
+        return Err(());
+    }
 
-        let idx = drv.tx_tail % NUM_TX_DESCS;
+    unsafe {
+        let cur_tail = E1000_TX_TAIL.load(Ordering::Relaxed);
+        let idx = cur_tail % NUM_TX_DESCS;
         let desc = &mut TX_DESCS[idx];
 
         // Check if descriptor is free (Status bit 0: DD)
@@ -209,8 +227,9 @@ pub fn send_packet(packet: &[u8]) -> Result<(), ()> {
         desc.cmd = (1 << 0) | (1 << 1) | (1 << 3);
         desc.status = 0;
 
-        drv.tx_tail = (idx + 1) % NUM_TX_DESCS;
-        mmio_write32(drv.bar0, E1000_TDT, drv.tx_tail as u32);
+        let next_tail = (idx + 1) % NUM_TX_DESCS;
+        E1000_TX_TAIL.store(next_tail, Ordering::Release);
+        mmio_write32(bar0, E1000_TDT, next_tail as u32);
 
         Ok(())
     }
@@ -220,13 +239,17 @@ pub fn send_packet(packet: &[u8]) -> Result<(), ()> {
 // Description: Poll e1000 RX ring buffer for incoming packets (e.g. RTCP / ACK packets).
 // Worst-case execution time: ~85 ns
 pub fn poll_rx_packet(out: &mut [u8]) -> Option<usize> {
-    unsafe {
-        let drv = match E1000.as_mut() {
-            Some(d) => d,
-            None => return None,
-        };
+    if !E1000_INITIALIZED.load(Ordering::Acquire) {
+        return None;
+    }
+    let bar0 = E1000_BAR0.load(Ordering::Relaxed);
+    if bar0 == 0 {
+        return None;
+    }
 
-        let idx = (drv.rx_tail + 1) % NUM_RX_DESCS;
+    unsafe {
+        let cur_tail = E1000_RX_TAIL.load(Ordering::Relaxed);
+        let idx = (cur_tail + 1) % NUM_RX_DESCS;
         let desc = &mut RX_DESCS[idx];
 
         // Status bit 0: DD (Descriptor Done)
@@ -240,8 +263,8 @@ pub fn poll_rx_packet(out: &mut [u8]) -> Option<usize> {
 
         // Reset descriptor status and advance tail
         desc.status = 0;
-        drv.rx_tail = idx % NUM_RX_DESCS;
-        mmio_write32(drv.bar0, E1000_RDT, idx as u32);
+        E1000_RX_TAIL.store(idx, Ordering::Release);
+        mmio_write32(bar0, E1000_RDT, idx as u32);
 
         Some(copy_len)
     }

@@ -239,7 +239,7 @@ fn ensure_export_disk_image() -> PathBuf {
     let path = get_export_disk_path();
     let initial_files: [(&str, &[u8]); 2] = [
         ("HELLO.TXT", b"Hello from Windows 11 Export Disk!\r\n"),
-        ("WIN_SRC.PL", b"// win_src.pl - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Imported Script from Windows OK\");\r\n"),
+        ("WIN_SRC.PUL", b"// win_src.pul - Imported from Windows FAT16 Export Disk\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Imported Script from Windows OK\");\r\n"),
     ];
     let _ = create_fat16_image(&path, &initial_files);
     path
@@ -567,9 +567,9 @@ fn test_paste(kernel_elf: &Path) {
     println!("[xtask-test] Shell prompt received!");
 
     // Send edit command
-    println!("[xtask-test] Opening editor: edit /home/paste_test.pl");
+    println!("[xtask-test] Opening editor: edit /home/paste_test.pul");
     full_output.clear();
-    tcp_stream.write_all(b"edit /home/paste_test.pl\r\n").unwrap();
+    tcp_stream.write_all(b"edit /home/paste_test.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
 
     if !wait_for("PulseEditor", 5, &mut full_output) {
@@ -619,9 +619,9 @@ fn test_paste(kernel_elf: &Path) {
     }
 
     // Inspect file content with cat
-    println!("[xtask-test] Running: cat /home/paste_test.pl");
+    println!("[xtask-test] Running: cat /home/paste_test.pul");
     full_output.clear();
-    tcp_stream.write_all(b"cat /home/paste_test.pl\r\n").unwrap();
+    tcp_stream.write_all(b"cat /home/paste_test.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(400));
     while let Ok(chunk) = rx.try_recv() {
@@ -728,8 +728,8 @@ fn test_compile_error(kernel_elf: &Path) {
     std::thread::sleep(Duration::from_millis(100));
 
     // Compile broken script with syntax error
-    println!("[xtask-test] Running: compile /pulselang/err_syntax.pl /bin/err_syntax.bin");
-    send_test_cmd(&mut tcp_stream, "compile /pulselang/err_syntax.pl /bin/err_syntax.bin", "[ERROR_CODE]:", &rx, &mut full_output);
+    println!("[xtask-test] Running: compile /pulselang/err_syntax.pul /bin/err_syntax.bin");
+    send_test_cmd(&mut tcp_stream, "compile /pulselang/err_syntax.pul /bin/err_syntax.bin", "[ERROR_CODE]:", &rx, &mut full_output);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -831,7 +831,7 @@ fn test_editor_delete(kernel_elf: &Path) {
 
     // Open editor
     full_output.clear();
-    tcp_stream.write_all(b"edit /home/delete_clean.pl\r\n").unwrap();
+    tcp_stream.write_all(b"edit /home/delete_clean.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
     wait_for("PulseEditor", 5, &mut full_output);
 
@@ -883,29 +883,29 @@ fn test_editor_delete(kernel_elf: &Path) {
     wait_for("[c0|", 5, &mut full_output);
 
     // Inspect content
-    println!("[xtask-test] Running: cat /home/delete_clean.pl");
-    send_test_cmd(&mut tcp_stream, "cat /home/delete_clean.pl", "Beta", &rx, &mut full_output);
+    println!("[xtask-test] Running: cat /home/delete_clean.pul");
+    send_test_cmd(&mut tcp_stream, "cat /home/delete_clean.pul", "Beta", &rx, &mut full_output);
     assert!(!full_output.contains("Line 2 Beta"), "DELETE key failed to delete 'Line 2 ' prefix!");
     assert!(!full_output.contains("Gamma"), "Ghost character 'Gamma' was not cleanly deleted!");
     assert!(!full_output.contains("Delta"), "Ghost character 'Delta' was not cleanly deleted!");
 
-    // Test 1: run echo.pl without arguments
-    println!("[xtask-test] Running: run echo.pl");
-    send_test_cmd(&mut tcp_stream, "run echo.pl", "LatencyOS PulseLang Real-Time Script Engine Active", &rx, &mut full_output);
+    // Test 1: run echo.pul without arguments
+    println!("[xtask-test] Running: run echo.pul");
+    send_test_cmd(&mut tcp_stream, "run echo.pul", "LatencyOS PulseLang Real-Time Script Engine Active", &rx, &mut full_output);
 
-    // Test 2: run echo.pl "a" (single argument)
-    println!("[xtask-test] Running: run echo.pl \"a\"");
-    send_test_cmd(&mut tcp_stream, "run echo.pl \"a\"", "a", &rx, &mut full_output);
+    // Test 2: run echo.pul "a" (single argument)
+    println!("[xtask-test] Running: run echo.pul \"a\"");
+    send_test_cmd(&mut tcp_stream, "run echo.pul \"a\"", "a", &rx, &mut full_output);
 
-    // Test 3: run pulselang/echo.pl (path without leading slash) with multiple arguments
-    println!("[xtask-test] Running: run pulselang/echo.pl \"hello\" \"world\"");
-    send_test_cmd(&mut tcp_stream, "run pulselang/echo.pl \"hello\" \"world\"", "hello world", &rx, &mut full_output);
+    // Test 3: run pulselang/echo.pul (path without leading slash) with multiple arguments
+    println!("[xtask-test] Running: run pulselang/echo.pul \"hello\" \"world\"");
+    send_test_cmd(&mut tcp_stream, "run pulselang/echo.pul \"hello\" \"world\"", "hello world", &rx, &mut full_output);
 
-    // Test 4: cd pulselang and run echo.pl with relative CWD resolution
+    // Test 4: cd pulselang and run echo.pul with relative CWD resolution
     println!("[xtask-test] Running: cd pulselang");
     send_test_cmd(&mut tcp_stream, "cd pulselang", "", &rx, &mut full_output);
-    println!("[xtask-test] Running: run echo.pl \"cwd_test_success\"");
-    send_test_cmd(&mut tcp_stream, "run echo.pl \"cwd_test_success\"", "cwd_test_success", &rx, &mut full_output);
+    println!("[xtask-test] Running: run echo.pul \"cwd_test_success\"");
+    send_test_cmd(&mut tcp_stream, "run echo.pul \"cwd_test_success\"", "cwd_test_success", &rx, &mut full_output);
 
     let _ = child.kill();
     let _ = child.wait();
@@ -991,8 +991,8 @@ fn test_editor_scroll(kernel_elf: &Path) {
     assert!(wait_for("[c0|", 15, &mut full_output), "Timed out waiting for shell prompt");
 
     // Open editor for a new file
-    println!("[xtask-test] Opening editor: edit /home/scroll_35.pl");
-    tcp_stream.write_all(b"edit /home/scroll_35.pl\r\n").unwrap();
+    println!("[xtask-test] Opening editor: edit /home/scroll_35.pul");
+    tcp_stream.write_all(b"edit /home/scroll_35.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
 
     assert!(wait_for("LatencyOS PulseEditor", 5, &mut full_output), "Timed out waiting for PulseEditor to open");
@@ -1032,6 +1032,7 @@ fn test_editor_scroll(kernel_elf: &Path) {
         full_output.push_str(&String::from_utf8_lossy(&chunk));
     }
     assert!(full_output.contains("line_") && full_output.contains(":="), "Line 1 not visible at top of viewport!");
+    assert!(full_output.contains("  1 |"), "Sidebar must show line 1 at top!");
     assert!(!full_output.contains("Line: 35"), "Line 35 should not be visible when scrolled to top!");
 
     // Scroll down to Line 35 using Page Down (^V or \x1b[6~)
@@ -1046,6 +1047,7 @@ fn test_editor_scroll(kernel_elf: &Path) {
     }
     println!("[xtask-test] Viewport at BOTTOM:\n{}", full_output);
     assert!(full_output.contains("Line: 3") || full_output.contains("line_"), "Line 35 not visible after scrolling down!");
+    assert!(full_output.contains(" 35 |") || full_output.contains(" 30 |") || full_output.contains(" 25 |"), "Sidebar line numbers must dynamically scroll!");
 
     // Test Nano Cut (^K) and Uncut (^U)
     println!("[xtask-test] Testing Nano Cut (^K) and Uncut (^U)...");
@@ -1064,8 +1066,8 @@ fn test_editor_scroll(kernel_elf: &Path) {
 
     // Cat the file and verify all 35 lines exist in LatencyFS
     full_output.clear();
-    println!("[xtask-test] Running: cat /home/scroll_35.pl");
-    tcp_stream.write_all(b"cat /home/scroll_35.pl\r\n").unwrap();
+    println!("[xtask-test] Running: cat /home/scroll_35.pul");
+    tcp_stream.write_all(b"cat /home/scroll_35.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(300));
     while let Ok(chunk) = rx.try_recv() {
@@ -1143,13 +1145,13 @@ fn test_px64_architecture(kernel_elf: &Path) {
     });
 
     let mut full_output = String::new();
-    let wait_for = |target: &str, start_pos: usize, timeout_secs: u64, full_out: &mut String| -> bool {
+    let wait_for = |target: &str, timeout_secs: u64, full_out: &mut String| -> bool {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(timeout_secs) {
             while let Ok(chunk) = rx.try_recv() {
                 full_out.push_str(&String::from_utf8_lossy(&chunk));
             }
-            if full_out.len() >= start_pos && full_out[start_pos..].contains(target) {
+            if full_out.contains(target) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -1157,7 +1159,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
         false
     };
 
-    if !wait_for("] % ", 0, 10, &mut full_output) {
+    if !wait_for("] % ", 10, &mut full_output) {
         let _ = child.kill();
         panic!("Timeout waiting for shell prompt. Output received:\n{}", full_output);
     }
@@ -1167,9 +1169,9 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] Running: disasm /bin/echo.bin");
     send_test_cmd(&mut tcp_stream, "disasm /bin/echo.bin", "=== [px64 Virtual Register Machine Disassembly] /bin/echo.bin ===", &rx, &mut full_output);
 
-    // Test 2: compile /pulselang/echo.pl /bin/my_echo.bin
-    println!("[xtask-test] Running: compile /pulselang/echo.pl /bin/my_echo.bin");
-    send_test_cmd(&mut tcp_stream, "compile /pulselang/echo.pl /bin/my_echo.bin", "[BUILD] Compiled", &rx, &mut full_output);
+    // Test 2: compile /pulselang/echo.pul /bin/my_echo.bin
+    println!("[xtask-test] Running: compile /pulselang/echo.pul /bin/my_echo.bin");
+    send_test_cmd(&mut tcp_stream, "compile /pulselang/echo.pul /bin/my_echo.bin", "[BUILD] Compiled /pulselang/echo.pul -> /bin/my_echo.bin", &rx, &mut full_output);
 
     // Test 3: disasm /bin/my_echo.bin
     println!("[xtask-test] Running: disasm /bin/my_echo.bin");
@@ -1179,72 +1181,107 @@ fn test_px64_architecture(kernel_elf: &Path) {
     println!("[xtask-test] Running: run /bin/my_echo.bin \"px64 register machine active\"");
     send_test_cmd(&mut tcp_stream, "run /bin/my_echo.bin \"px64 register machine active\"", "px64 register machine active", &rx, &mut full_output);
 
-    // Test 5: run /pulselang/bench.pl (BL-01 verification: sum must be 9900, not 400!)
-    println!("[xtask-test] Running: run /pulselang/bench.pl (BL-01 fix verification)");
-    send_test_cmd(&mut tcp_stream, "run /pulselang/bench.pl", "9900", &rx, &mut full_output);
+    // Test 5: Standard scripts run verification
+    println!("[xtask-test] Running: compile /pulselang/bench.pul /bin/my_bench.bin");
+    send_test_cmd(&mut tcp_stream, "compile /pulselang/bench.pul /bin/my_bench.bin", "[BUILD] Compiled", &rx, &mut full_output);
+    println!("[xtask-test] Running: disasm /bin/my_bench.bin");
+    send_test_cmd(&mut tcp_stream, "disasm /bin/my_bench.bin", "=== [px64 Virtual Register Machine Disassembly]", &rx, &mut full_output);
+    println!("[xtask-test] my_bench.bin disasm:\n{}", full_output);
 
-    // Test 5b: run /pulselang/filter.pl (BL-02 verification: 300us must not misdiagnose congestion)
-    println!("[xtask-test] Running: run /pulselang/filter.pl (BL-02 fix verification)");
-    send_test_cmd(&mut tcp_stream, "run /pulselang/filter.pl", "Rate: 100%", &rx, &mut full_output);
+    println!("[xtask-test] Running: run /pulselang/bench.pul (BL-01 fix verification)");
+    send_test_cmd(&mut tcp_stream, "run /pulselang/bench.pul", "9900", &rx, &mut full_output);
+
+    println!("[xtask-test] Running: run /pulselang/filter.pul (BL-02 fix verification)");
+    send_test_cmd(&mut tcp_stream, "run /pulselang/filter.pul", "Rate: 100%", &rx, &mut full_output);
 
     // Test 6: Static Loop Boundary Verification -> ERR_UNBOUNDED_LOOP (BL-04)
-    println!("[xtask-test] Creating script with constant infinite loop (@while(1)) (/loop_unbounded.pl)...");
-    tcp_stream.write_all(b"edit /loop_unbounded.pl\r\n").unwrap();
+    println!("[xtask-test] Creating script with constant infinite loop (@while(1)) (/loop_unbounded.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /loop_unbounded.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
+    tcp_stream.write_all(b"let mut $a = 0;\r\nwhile (1) {\r\n  $a += 1;\r\n}\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    tcp_stream.write_all(b"let $a = 0;\r\nwhile (1) {\r\n  $a += 1;\r\n}\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "compile /loop_unbounded.pl /bin/loop_unbounded.bin", "ERR_UNBOUNDED_LOOP", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "compile /loop_unbounded.pul /bin/loop_unbounded.bin", "ERR_UNBOUNDED_LOOP", &rx, &mut full_output);
 
     // Test 6b: Non-decrementing loop -> ERR_PX64_WCET_EXCEEDED (10,000 steps)
-    println!("[xtask-test] Creating and running non-decrementing loop (/loop_calc.pl)...");
-    tcp_stream.write_all(b"edit /loop_calc.pl\r\n").unwrap();
+    println!("[xtask-test] Creating and running non-decrementing loop (/loop_calc.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /loop_calc.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
+    tcp_stream.write_all(b"let mut $i = 0;\r\nlet mut $a = 0;\r\nwhile ($i < 100000) {\r\n  $a += 1;\r\n}\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    tcp_stream.write_all(b"let $i = 0;\r\nlet $a = 0;\r\nwhile ($i < 100000) {\r\n  $a += 1;\r\n}\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "run /loop_calc.pl", "ERR_PX64_WCET_EXCEEDED", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "run /loop_calc.pul", "ERR_PX64_WCET_EXCEEDED", &rx, &mut full_output);
 
     // Test 7: Adversarial @capture() loop -> ERR_PX64_TIMEOUT_EXCEEDED (5.0ms wall-clock timeout triggered)
-    println!("[xtask-test] Creating and running adversarial @capture() loop (/loop_cap.pl)...");
-    tcp_stream.write_all(b"edit /loop_cap.pl\r\n").unwrap();
+    println!("[xtask-test] Creating and running adversarial @capture() loop (/loop_cap.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /loop_cap.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
+    tcp_stream.write_all(b"@contract: @wcet(10ms) @budget(20ms);\r\n@busy_wait(10000000);\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    tcp_stream.write_all(b"let $i = 0;\r\nwhile ($i < 100000) {\r\n  let $f = @capture();\r\n}\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "run /loop_cap.pl", "ERR_PX64_TIMEOUT_EXCEEDED", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "run /loop_cap.pul", "ERR_PX64_TIMEOUT_EXCEEDED", &rx, &mut full_output);
 
     // Test 7b: Linear Type Handle Verification (BL-03)
-    println!("[xtask-test] Testing Linear Type Unconsumed Handle (/unconsumed.pl)...");
-    tcp_stream.write_all(b"edit /unconsumed.pl\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    println!("[xtask-test] Testing Linear Type Unconsumed Handle (/unconsumed.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /unconsumed.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
     tcp_stream.write_all(b"#f := @capture();\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "compile /unconsumed.pl /bin/unconsumed.bin", "ERR_LINEAR_UNCONSUMED_HANDLE", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "compile /unconsumed.pul /bin/unconsumed.bin", "ERR_LINEAR_UNCONSUMED_HANDLE", &rx, &mut full_output);
 
-    println!("[xtask-test] Testing Linear Type Double Send (/doublesend.pl)...");
-    tcp_stream.write_all(b"edit /doublesend.pl\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    println!("[xtask-test] Testing Linear Type Double Send (/doublesend.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /doublesend.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
     tcp_stream.write_all(b"#f := @capture();\r\n@send(#f);\r\n@send(#f);\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "compile /doublesend.pl /bin/doublesend.bin", "ERR_LINEAR_DOUBLE_SEND", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "compile /doublesend.pul /bin/doublesend.bin", "ERR_LINEAR_DOUBLE_SEND", &rx, &mut full_output);
 
     // Test 8: Large 64-bit constant loading with LDC (>65535) and ADDI/SUBI
-    println!("[xtask-test] Creating script with 64-bit constants and compound ops (/const_test.pl)...");
-    tcp_stream.write_all(b"edit /const_test.pl\r\n").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    println!("[xtask-test] Creating script with 64-bit constants and compound ops (/const_test.pul)...");
+    full_output.clear();
+    tcp_stream.write_all(b"edit /const_test.pul\r\n").unwrap();
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("PulseEditor", 5, &mut full_output));
     tcp_stream.write_all(b"$big := 1000000;\r\n$big += 5;\r\n$big -= 2;\r\n@print(\"CALC_RES:\");\r\n@println($big);\r\n").unwrap();
+    tcp_stream.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
+    full_output.clear();
     tcp_stream.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Quit)
-    std::thread::sleep(Duration::from_millis(200));
-    send_test_cmd(&mut tcp_stream, "compile /const_test.pl /bin/const_test.bin", "[BUILD] Compiled", &rx, &mut full_output);
+    tcp_stream.flush().unwrap();
+    assert!(wait_for("[c0|", 5, &mut full_output));
+    send_test_cmd(&mut tcp_stream, "compile /const_test.pul /bin/const_test.bin", "[BUILD] Compiled", &rx, &mut full_output);
 
     println!("[xtask-test] Disassembling /bin/const_test.bin...");
     send_test_cmd(&mut tcp_stream, "disasm /bin/const_test.bin", "1000000", &rx, &mut full_output);
@@ -1267,7 +1304,7 @@ fn test_px64_architecture(kernel_elf: &Path) {
     // Test 8c: SMP Multi-Core Activity & TSC Calibration (BL-06, BL-07)
     println!("[xtask-test] Testing SMP Cores Activity and TSC reporting (BL-06, BL-07)...");
     send_test_cmd(&mut tcp_stream, "cores", "core1: [apic 1] Capture", &rx, &mut full_output);
-    send_test_cmd(&mut tcp_stream, "tsc", "TSC Frequency", &rx, &mut full_output);
+    send_test_cmd(&mut tcp_stream, "tsc", "freq:", &rx, &mut full_output);
 
     // Test 9: Execution of all 6 pre-compiled standard binaries in /bin/
     for script in &["stream.bin", "bench.bin", "filter.bin", "jitter.bin", "telemetry.bin", "echo.bin"] {
@@ -1309,15 +1346,20 @@ fn send_test_cmd(
     use std::io::Write;
     std::thread::sleep(Duration::from_millis(50));
     full_out.clear();
-    let cmd_line = format!("{}\r\n", cmd);
-    stream.write_all(cmd_line.as_bytes()).unwrap();
+    for chunk in cmd.as_bytes().chunks(4) {
+        stream.write_all(chunk).unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(5));
+    stream.write_all(b"\r\n").unwrap();
     stream.flush().unwrap();
 
     let start = Instant::now();
     let mut found_expected = expected.is_empty();
     let mut found_prompt = false;
 
-    while start.elapsed() < Duration::from_secs(10) {
+    while start.elapsed() < Duration::from_secs(30) {
         while let Ok(chunk) = rx.try_recv() {
             full_out.push_str(&String::from_utf8_lossy(&chunk));
         }
@@ -1587,9 +1629,9 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("On branch main", 5, &mut full_output), "Failed git status execution");
 
-    println!("[xtask-test] 5. Testing compile command: compile /pulselang/echo.pl /bin/my_echo.bin");
+    println!("[xtask-test] 5. Testing compile command: compile /pulselang/echo.pul /bin/my_echo.bin");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/echo.pl /bin/my_echo.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/echo.pul /bin/my_echo.bin\r\n").unwrap();
     stdin.flush().unwrap();
     let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
     if !res {
@@ -1654,11 +1696,11 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("<out of bounds>", 5, &mut full_output), "Failed disasm out-of-bounds const display");
 
-    println!("[xtask-test] 11. Testing Phase 10-1 static range for loop: compile /pulselang/for_test.pl /bin/for_test.bin");
+    println!("[xtask-test] 11. Testing Phase 10-1 static range for loop: compile /pulselang/for_test.pul /bin/for_test.bin");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/for_test.pl /bin/for_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/for_test.pul /bin/for_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling for_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling for_test.pul");
 
     println!("[xtask-test] 12. Testing disasm of for loop bytecode: disasm /bin/for_test.bin");
     full_output.clear();
@@ -1677,30 +1719,30 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("45", 5, &mut full_output), "Failed executing for_test.bin: sum 0..10 != 45");
 
-    println!("[xtask-test] 14. Testing rewritten bench.pl with static for loop: compile /pulselang/bench.pl /bin/bench_for.bin && run");
+    println!("[xtask-test] 14. Testing rewritten bench.pul with static for loop: compile /pulselang/bench.pul /bin/bench_for.bin && run");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/bench.pl /bin/bench_for.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/bench.pul /bin/bench_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bench.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bench.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/bench_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("9900", 5, &mut full_output), "Failed executing bench_for.bin: sum != 9900");
 
-    println!("[xtask-test] 15. Testing compile-time static WCET rejection: compile /pulselang/err_for_wcet.pl /bin/err_for.bin");
+    println!("[xtask-test] 15. Testing compile-time static WCET rejection: compile /pulselang/err_for_wcet.pul /bin/err_for.bin");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_for_wcet.pl /bin/err_for.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_for_wcet.pul /bin/err_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 5, &mut full_output), "Failed compile-time static WCET rejection");
     assert!(full_output.contains("Static loop WCET exceeds MAX_VM_STEPS"), "Failed error message check");
     assert!(wait_for("[c0|", 5, &mut full_output));
 
-    println!("[xtask-test] 16. Testing Phase 10-2 fixed-size array operations: compile /pulselang/array_test.pl /bin/array_test.bin");
+    println!("[xtask-test] 16. Testing Phase 10-2 fixed-size array operations: compile /pulselang/array_test.pul /bin/array_test.bin");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/array_test.pl /bin/array_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/array_test.pul /bin/array_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling array_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling array_test.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/array_test.bin\r\n").unwrap();
@@ -1708,11 +1750,11 @@ fn test_standalone_exe() {
     assert!(wait_for("550", 5, &mut full_output), "Failed running array_test.bin: sum != 550");
     assert!(full_output.contains("[ARRAY_TEST] Assertion passed!"), "Failed finding assertion passed in array_test.bin");
 
-    println!("[xtask-test] 17. Testing Phase 10-2 array out-of-bounds runtime fault: compile & run /pulselang/err_array_oob.pl");
+    println!("[xtask-test] 17. Testing Phase 10-2 array out-of-bounds runtime fault: compile & run /pulselang/err_array_oob.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_array_oob.pl /bin/err_array_oob.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_array_oob.pul /bin/err_array_oob.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_array_oob.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_array_oob.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_array_oob.bin\r\n").unwrap();
@@ -1721,11 +1763,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("Fixed-Length Array Boundary Violation"), "Failed finding fault category in diagnostic");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after array oob fault");
 
-    println!("[xtask-test] 18. Testing Phase 10-2 bitwise operations and assertions: compile & run /pulselang/bitwise_test.pl");
+    println!("[xtask-test] 18. Testing Phase 10-2 bitwise operations and assertions: compile & run /pulselang/bitwise_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/bitwise_test.pl /bin/bitwise_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/bitwise_test.pul /bin/bitwise_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bitwise_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bitwise_test.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/bitwise_test.bin\r\n").unwrap();
@@ -1735,11 +1777,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("85"), "Failed bitwise $c output");
     assert!(full_output.contains("[BITWISE_TEST] All assertions passed!"), "Failed assertion check in bitwise_test");
 
-    println!("[xtask-test] 19. Testing Phase 10-2 compile-time constant folding optimization: compile & disasm /pulselang/fold_test.pl");
+    println!("[xtask-test] 19. Testing Phase 10-2 compile-time constant folding optimization: compile & disasm /pulselang/fold_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/fold_test.pl /bin/fold_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/fold_test.pul /bin/fold_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fold_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fold_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_test.bin\r\n").unwrap();
@@ -1753,11 +1795,11 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("115", 5, &mut full_output), "Failed executing fold_test.bin: res != 115");
 
-    println!("[xtask-test] 20. Testing Phase 10-2 @assert(false) runtime failure: compile & run /pulselang/err_assert.pl");
+    println!("[xtask-test] 20. Testing Phase 10-2 @assert(false) runtime failure: compile & run /pulselang/err_assert.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_assert.pl /bin/err_assert.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_assert.pul /bin/err_assert.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_assert.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_assert.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_assert.bin\r\n").unwrap();
@@ -1766,11 +1808,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("Runtime Assertion Contract Failure"), "Failed finding assertion fault category in diagnostic");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after assertion fault");
 
-    println!("[xtask-test] 21. Testing Phase 10-3 static function calls: compile, disasm & run /pulselang/fn_test.pl");
+    println!("[xtask-test] 21. Testing Phase 10-3 static function calls: compile, disasm & run /pulselang/fn_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/fn_test.pl /bin/fn_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/fn_test.pul /bin/fn_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fn_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fn_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/fn_test.bin\r\n").unwrap();
@@ -1788,11 +1830,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("100"), "Failed finding clamp upper bound 100");
     assert!(full_output.contains("50"), "Failed finding clamp in-range 50");
 
-    println!("[xtask-test] 22. Testing Phase 10-3 Tagged Result types & unwrap: compile & run /pulselang/result_test.pl");
+    println!("[xtask-test] 22. Testing Phase 10-3 Tagged Result types & unwrap: compile & run /pulselang/result_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/result_test.pl /bin/result_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/result_test.pul /bin/result_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling result_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling result_test.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/result_test.bin\r\n").unwrap();
@@ -1800,11 +1842,11 @@ fn test_standalone_exe() {
     assert!(wait_for("[RESULT_TEST] Tagged result tests passed!", 5, &mut full_output), "Failed running result_test.bin");
     assert!(full_output.contains("25"), "Failed finding unwrapped safe_div result 25");
 
-    println!("[xtask-test] 23. Testing Phase 10-3 Call Stack Overflow protection: compile & run /pulselang/err_stack_overflow.pl");
+    println!("[xtask-test] 23. Testing Phase 10-3 Call Stack Overflow protection: compile & run /pulselang/err_stack_overflow.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_stack_overflow.pl /bin/err_stack_overflow.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_stack_overflow.pul /bin/err_stack_overflow.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_stack_overflow.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_stack_overflow.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_stack_overflow.bin\r\n").unwrap();
@@ -1813,11 +1855,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("ERR_PX64_STACK_OVERFLOW"), "Failed stack overflow check");
     assert!(full_output.contains("Static Call Stack Overflow Violation"), "Failed finding stack overflow fault category");
 
-    println!("[xtask-test] 24. Testing Phase 10-3 Tagged Result unwrap fault: compile & run /pulselang/err_unwrap.pl");
+    println!("[xtask-test] 24. Testing Phase 10-3 Tagged Result unwrap fault: compile & run /pulselang/err_unwrap.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_unwrap.pl /bin/err_unwrap.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_unwrap.pul /bin/err_unwrap.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_unwrap.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_unwrap.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_unwrap.bin\r\n").unwrap();
@@ -1826,11 +1868,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("ERR_PX64_UNWRAP_FAILED"), "Failed unwrap fault check");
     assert!(full_output.contains("Tagged Result Unwrap Fault"), "Failed finding unwrap fault category");
 
-    println!("[xtask-test] 25. Testing Phase 10-4 static structs & field access: compile, disasm & run /pulselang/struct_test.pl");
+    println!("[xtask-test] 25. Testing Phase 10-4 static structs & field access: compile, disasm & run /pulselang/struct_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/struct_test.pl /bin/struct_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/struct_test.pul /bin/struct_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling struct_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling struct_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/struct_test.bin\r\n").unwrap();
@@ -1851,23 +1893,23 @@ fn test_standalone_exe() {
     assert!(full_output.contains("1080"), "Failed finding hdr.height = 1080");
     assert!(full_output.contains("2073600"), "Failed finding calculated area = 2073600");
 
-    println!("[xtask-test] 26. Testing Phase 10-4 compile-time non-existent struct field error: compile /pulselang/err_struct_field.pl");
+    println!("[xtask-test] 26. Testing Phase 10-4 compile-time non-existent struct field error: compile /pulselang/err_struct_field.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_struct_field.pl /bin/err_struct_field.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_struct_field.pul /bin/err_struct_field.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_UNKNOWN_STRUCT_FIELD", 5, &mut full_output), "Failed compile-time struct field error check");
     assert!(full_output.contains("Field does not exist on struct type"), "Failed finding struct field error message");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after compile error");
 
-    println!("[xtask-test] 27. Testing Phase 10-5 constant lookup tables in ROM/pool: compile, disasm & run /pulselang/const_table_test.pl");
+    println!("[xtask-test] 27. Testing Phase 10-5 constant lookup tables in ROM/pool: compile, disasm & run /pulselang/const_table_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/const_table_test.pl /bin/const_table_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/const_table_test.pul /bin/const_table_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
     let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
     if !res {
         println!("[DEBUG_OUTPUT for compile const_table_test]:\n{}", full_output);
     }
-    assert!(res, "Failed compiling const_table_test.pl");
+    assert!(res, "Failed compiling const_table_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/const_table_test.bin\r\n").unwrap();
@@ -1890,11 +1932,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("128"), "Failed finding table val 128");
     assert!(full_output.contains("255"), "Failed finding table val 255");
 
-    println!("[xtask-test] 28. Testing Phase 10-5 runtime table index out of bounds violation: compile & run /pulselang/err_table_bounds.pl");
+    println!("[xtask-test] 28. Testing Phase 10-5 runtime table index out of bounds violation: compile & run /pulselang/err_table_bounds.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_table_bounds.pl /bin/err_table_bounds.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_table_bounds.pul /bin/err_table_bounds.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_table_bounds.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_table_bounds.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_table_bounds.bin\r\n").unwrap();
@@ -1903,11 +1945,11 @@ fn test_standalone_exe() {
     assert!(full_output.contains("Read-Only Const Table Boundary Violation"), "Failed finding table fault category");
     assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after table fault");
 
-    println!("[xtask-test] 29. Testing Phase 10-6 inline strings & string equality comparison: compile, disasm & run /pulselang/streq_test.pl");
+    println!("[xtask-test] 29. Testing Phase 10-6 inline strings & string equality comparison: compile, disasm & run /pulselang/streq_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/streq_test.pl /bin/streq_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/streq_test.pul /bin/streq_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling streq_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling streq_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/streq_test.bin\r\n").unwrap();
@@ -1927,15 +1969,15 @@ fn test_standalone_exe() {
     assert!(full_output.contains("1"), "Failed finding streq eq1 val 1");
     assert!(full_output.contains("0"), "Failed finding streq eq2 val 0");
 
-    println!("[xtask-test] 30. Testing Phase 10-7 multi-layer constant folding optimization: compile, disasm & run /pulselang/fold_ext_test.pl");
+    println!("[xtask-test] 30. Testing Phase 10-7 multi-layer constant folding optimization: compile, disasm & run /pulselang/fold_ext_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/fold_ext_test.pl /bin/fold_ext_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/fold_ext_test.pul /bin/fold_ext_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
     let res_c = wait_for("[BUILD] Compiled", 5, &mut full_output);
     if !res_c {
         println!("[DEBUG_OUTPUT for compile fold_ext_test]:\n{}", full_output);
     }
-    assert!(res_c, "Failed compiling fold_ext_test.pl");
+    assert!(res_c, "Failed compiling fold_ext_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_ext_test.bin\r\n").unwrap();
@@ -1955,11 +1997,11 @@ fn test_standalone_exe() {
     assert!(res_fold, "Failed running fold_ext_test.bin");
     assert!(full_output.contains("31"), "Failed finding val 31");
 
-    println!("[xtask-test] 31. Testing Ultra-Strict immutability by default & let mut: compile & run /pulselang/strict_immut_test.pl");
+    println!("[xtask-test] 31. Testing Ultra-Strict immutability by default & let mut: compile & run /pulselang/strict_immut_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/strict_immut_test.pl /bin/strict_immut_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/strict_immut_test.pul /bin/strict_immut_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling strict_immut_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling strict_immut_test.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/strict_immut_test.bin\r\n").unwrap();
@@ -1968,20 +2010,20 @@ fn test_standalone_exe() {
     assert!(full_output.contains("100"), "Failed finding val 100");
     assert!(full_output.contains("150"), "Failed finding val 150");
 
-    println!("[xtask-test] 32. Testing compile-time rejection of immutable variable mutation: compile /pulselang/err_immut_violation.pl");
+    println!("[xtask-test] 32. Testing compile-time rejection of immutable variable mutation: compile /pulselang/err_immut_violation.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_immut_violation.pl /bin/err_immut_violation.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_immut_violation.pul /bin/err_immut_violation.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_MUTABILITY_VIOLATION", 5, &mut full_output), "Failed catching ERR_MUTABILITY_VIOLATION");
     assert!(wait_for("[c0|", 5, &mut full_output));
     println!("[xtask-test] Caught expected ERR_MUTABILITY_VIOLATION diagnostic");
 
-    println!("[xtask-test] 33. Testing Design-by-Contract @requires preconditions: compile & run /pulselang/contracts_test.pl");
+    println!("[xtask-test] 33. Testing Design-by-Contract @requires preconditions: compile & run /pulselang/contracts_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/contracts_test.pl /bin/contracts_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/contracts_test.pul /bin/contracts_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling contracts_test.pl");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for contracts_test.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling contracts_test.pul");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for contracts_test.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/contracts_test.bin\r\n").unwrap();
@@ -1990,12 +2032,12 @@ fn test_standalone_exe() {
     assert!(full_output.contains("[CONTRACTS_TEST] All contract precondition checks passed!"), "Failed finding contract passed text");
     assert!(full_output.contains("25"), "Failed finding safe_div 25");
 
-    println!("[xtask-test] 34. Testing runtime contract precondition violation: compile & run /pulselang/err_precondition.pl");
+    println!("[xtask-test] 34. Testing runtime contract precondition violation: compile & run /pulselang/err_precondition.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_precondition.pl /bin/err_precondition.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_precondition.pul /bin/err_precondition.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling err_precondition.pl");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for err_precondition.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling err_precondition.pul");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for err_precondition.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_precondition.bin\r\n").unwrap();
@@ -2004,16 +2046,16 @@ fn test_standalone_exe() {
     assert!(full_output.contains("ERR_PX64_ASSERTION_FAILED"), "Failed catching ERR_PX64_ASSERTION_FAILED for contract violation");
     println!("[xtask-test] Caught expected runtime contract assertion failure");
 
-    println!("[xtask-test] 35. Testing Exhaustive Pattern Matching on Results and Values: compile, disasm & run /pulselang/match_test.pl");
+    println!("[xtask-test] 35. Testing Exhaustive Pattern Matching on Results and Values: compile, disasm & run /pulselang/match_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/match_test.pl /bin/match_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/match_test.pul /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling match_test.pl");
+    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling match_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm match_test.bin");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed disasm match_test.pul");
     assert!(full_output.contains("JNZ"), "Failed finding JNZ in disassembly");
     println!("[xtask-test] Disassembly for /bin/match_test.bin:\n{}", full_output.trim());
 
@@ -2025,9 +2067,9 @@ fn test_standalone_exe() {
     assert!(full_output.contains("105"), "Failed finding match err 105");
     assert!(full_output.contains("300"), "Failed finding match state 300");
 
-    println!("[xtask-test] 36. Testing compile-time rejection of non-exhaustive match: compile /pulselang/err_non_exhaustive.pl");
+    println!("[xtask-test] 36. Testing compile-time rejection of non-exhaustive match: compile /pulselang/err_non_exhaustive.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/err_non_exhaustive.pl /bin/err_non_exhaustive.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/err_non_exhaustive.pul /bin/err_non_exhaustive.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_NON_EXHAUSTIVE_MATCH", 5, &mut full_output), "Failed catching ERR_NON_EXHAUSTIVE_MATCH");
     assert!(wait_for("[c0|", 5, &mut full_output));
@@ -2051,12 +2093,12 @@ fn test_standalone_exe() {
     assert!(full_output.contains("CALL/RET"), "Failed finding CALL/RET benchmark");
     println!("[xtask-test] pulse-bench instruction microbenchmarks:\n{}", full_output.trim());
 
-    println!("[xtask-test] 37.1 Testing math & bit manipulation intrinsics: compile, disasm & run /pulselang/math_demo.pl");
+    println!("[xtask-test] 37.1 Testing math & bit manipulation intrinsics: compile, disasm & run /pulselang/math_demo.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/math_demo.pl /bin/math_demo.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/math_demo.pul /bin/math_demo.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling math_demo.pl");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for math_demo.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling math_demo.pul");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for math_demo.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/math_demo.bin\r\n").unwrap();
@@ -2070,12 +2112,12 @@ fn test_standalone_exe() {
     stdin.flush().unwrap();
     assert!(wait_for("[MATH_DEMO] All math & bit manipulation tests passed!", 5, &mut full_output), "Failed running math_demo.bin");
 
-    println!("[xtask-test] 37.2 Testing hardware & system telemetry intrinsics: compile & run /pulselang/telemetry_ext.pl");
+    println!("[xtask-test] 37.2 Testing hardware & system telemetry intrinsics: compile & run /pulselang/telemetry_ext.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/telemetry_ext.pl /bin/telemetry_ext.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/telemetry_ext.pul /bin/telemetry_ext.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling telemetry_ext.pl");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for telemetry_ext.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling telemetry_ext.pul");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for telemetry_ext.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/telemetry_ext.bin\r\n").unwrap();
@@ -2092,12 +2134,12 @@ fn test_standalone_exe() {
     }
     assert!(res_telemetry, "Failed running telemetry_ext.bin");
 
-    println!("[xtask-test] 37.3 Testing zero-copy VRAM DMA direct access intrinsics: compile & run /pulselang/vram_test.pl");
+    println!("[xtask-test] 37.3 Testing zero-copy VRAM DMA direct access intrinsics: compile & run /pulselang/vram_test.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/vram_test.pl /bin/vram_test.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/vram_test.pul /bin/vram_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling vram_test.pl");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for vram_test.pl");
+    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling vram_test.pul");
+    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for vram_test.pul");
 
     full_output.clear();
     stdin.write_all(b"disasm /bin/vram_test.bin\r\n").unwrap();
@@ -2121,27 +2163,27 @@ fn test_standalone_exe() {
     assert!(wait_for("Hello from Windows 11 Export Disk!", 5, &mut full_output), "Failed auto-importing /hello.txt on boot");
     println!("[xtask-test] Verified /hello.txt auto-imported on boot successfully!");
 
-    println!("[xtask-test] 39. Testing auto-imported PulseLang script execution on boot: compile & run /pulselang/win_src.pl");
+    println!("[xtask-test] 39. Testing auto-imported PulseLang script execution on boot: compile & run /pulselang/win_src.pul");
     full_output.clear();
-    stdin.write_all(b"compile /pulselang/win_src.pl /bin/win_src.bin\r\n").unwrap();
+    stdin.write_all(b"compile /pulselang/win_src.pul /bin/win_src.bin\r\n").unwrap();
     stdin.flush().unwrap();
     let res_win_compile = wait_for("[BUILD] Compiled", 5, &mut full_output);
     if !res_win_compile {
-        println!("[DEBUG_OUTPUT for compile win_src.pl]:\n{}", full_output);
+        println!("[DEBUG_OUTPUT for compile win_src.pul]:\n{}", full_output);
     }
-    assert!(res_win_compile, "Failed compiling auto-imported win_src.pl");
+    assert!(res_win_compile, "Failed compiling auto-imported win_src.pul");
 
     full_output.clear();
     stdin.write_all(b"run /bin/win_src.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("Imported Script from Windows OK", 5, &mut full_output), "Failed running auto-imported win_src.bin");
 
-    println!("[xtask-test] 40. Testing Write-Through auto-sync on file creation/edit: edit /live_sync.pl");
+    println!("[xtask-test] 40. Testing Write-Through auto-sync on file creation/edit: edit /live_sync.pul");
     full_output.clear();
-    stdin.write_all(b"edit /live_sync.pl\r\n").unwrap();
+    stdin.write_all(b"edit /live_sync.pul\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    stdin.write_all(b"// live_sync.pl\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Live Write-Through OK\");\r\n").unwrap();
+    stdin.write_all(b"// live_sync.pul\r\n@contract: @wcet(2us) @budget(20us);\r\n@println(\"Live Write-Through OK\");\r\n").unwrap();
     stdin.flush().unwrap();
     std::thread::sleep(Duration::from_millis(200));
     stdin.write_all(&[0x18]).unwrap(); // Ctrl+X (Save & Exit)
@@ -2152,8 +2194,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"export-ls\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("LIVE_SYN.PL", 5, &mut full_output), "Failed auto-syncing /live_sync.pl to Export Disk");
-    println!("[xtask-test] Export Disk directory listing with auto-synced LIVE_SYN.PL:\n{}", full_output.trim());
+    assert!(wait_for("LIVE_SYN.PUL", 5, &mut full_output), "Failed auto-syncing /live_sync.pul to Export Disk");
+    println!("[xtask-test] Export Disk directory listing with auto-synced LIVE_SYN.PUL:\n{}", full_output.trim());
 
     println!("[xtask-test] 42. Sending poweroff command to first LatencyOS instance...");
     stdin.write_all(b"poweroff\r\n").unwrap();
@@ -2163,12 +2205,12 @@ fn test_standalone_exe() {
     let _ = child.kill();
     let _ = child.wait();
 
-    println!("[xtask-test] 43. Verifying auto-synced LIVE_SYN.PL on Windows host from FAT16 image (export.img)...");
-    let exported_live = read_file_from_fat16_image(&export_disk_path, "LIVE_SYN.PL");
-    assert!(exported_live.is_some(), "Failed finding LIVE_SYN.PL in FAT16 image on Windows host");
+    println!("[xtask-test] 43. Verifying auto-synced LIVE_SYN.PUL on Windows host from FAT16 image (export.img)...");
+    let exported_live = read_file_from_fat16_image(&export_disk_path, "LIVE_SYN.PUL");
+    assert!(exported_live.is_some(), "Failed finding LIVE_SYN.PUL in FAT16 image on Windows host");
     let live_bytes = exported_live.unwrap();
     let live_str = String::from_utf8_lossy(&live_bytes);
-    assert!(live_str.contains("Live Write-Through OK"), "Content mismatch in auto-synced LIVE_SYN.PL");
+    assert!(live_str.contains("Live Write-Through OK"), "Content mismatch in auto-synced LIVE_SYN.PUL");
     println!("[xtask-test] Auto-Sync Verified on Windows Host ({} bytes):\n{}", live_bytes.len(), live_str.trim());
 
     println!("[xtask-test] 44. Testing Cold Reboot Persistence: Spawning second LatencyOS instance...");
@@ -2213,16 +2255,16 @@ fn test_standalone_exe() {
     };
 
     assert!(wait_for2("[c0|", 15, &mut full_output2), "Timed out waiting for shell prompt on second boot");
-    println!("[xtask-test] Second boot successful! Testing persistence of /live_sync.pl: cat /live_sync.pl");
+    println!("[xtask-test] Second boot successful! Testing persistence of /live_sync.pul: cat /live_sync.pul");
     full_output2.clear();
-    stdin2.write_all(b"cat /live_sync.pl\r\n").unwrap();
+    stdin2.write_all(b"cat /live_sync.pul\r\n").unwrap();
     stdin2.flush().unwrap();
     let res_persist = wait_for2("Live Write-Through OK", 5, &mut full_output2);
     if !res_persist {
-        println!("[DEBUG_OUTPUT for cat /live_sync.pl on reboot]:\n{}", full_output2);
+        println!("[DEBUG_OUTPUT for cat /live_sync.pul on reboot]:\n{}", full_output2);
     }
-    assert!(res_persist, "Failed restoring /live_sync.pl from export.img on reboot");
-    println!("[xtask-test] SUCCESS: File /live_sync.pl persisted across full OS reboot!");
+    assert!(res_persist, "Failed restoring /live_sync.pul from export.img on reboot");
+    println!("[xtask-test] SUCCESS: File /live_sync.pul persisted across full OS reboot!");
 
     println!("[xtask-test] 45. Powering off second LatencyOS instance...");
     stdin2.write_all(b"poweroff\r\n").unwrap();

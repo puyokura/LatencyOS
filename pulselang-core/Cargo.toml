@@ -1,0 +1,11 @@
+[package]
+name = "pulselang-core"
+version = "0.1.0"
+edition = "2021"
+description = "PulseLang core compiler, lexer, ISA, and disassembler for LatencyOS"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+alloc = []
+std = ["alloc"]

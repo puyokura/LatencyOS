@@ -100,7 +100,7 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 `run <ファイル> [引数...]` で実行されたスクリプトは、ヒープ割り当てなしで引数を受信できます：
 
 ```pulse
-// echo.pl - コマンドライン引数の処理例
+// echo.pul - コマンドライン引数の処理例
 @contract: @wcet(2us) @budget(20us);
 $argc := @argc();
 $argc > 0 ? {
