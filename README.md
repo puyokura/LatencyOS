@@ -1,6 +1,7 @@
 # LatencyOS
 
-> **A Hard Real-Time, Deterministic Low-Latency Operating System Engineered from Scratch in Rust (`no_std`) for Ultra-Low-Latency Streaming Pipelines.**
+> **A Hard Real-Time, Deterministic Low-Latency Operating System in Rust (`no_std`).**  
+> **Release Version**: `v0.0.40` | **Language Specification**: `PulseLang v3.2 (px64 v3)`
 
 ---
 
@@ -50,7 +51,7 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
   - `doc pulse`: In-kernel formal specification of PulseLang v2.
   - `exit` / `poweroff`: ACPI hardware shutdown.
 
-### 3.2 PulseLang v3.1 & `px64` v3 Architecture
+### 3.2 PulseLang (Language Spec: v3.2 / Architecture: px64 v3)
 - **`px64` 64-bit Virtual Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed-length instructions.
 - **64-bit Constant Pool & Immediate ALU**: 16-bit index constant pool loading (`0x17 LDC Rd, const[idx]`) and 8-bit immediate operations (`0x18 ADDI`, `0x19 SUBI`).
 - **Safety Guards & Bounds Checking**: Out-of-bounds constant pool protection (`ERR_PX64_CONST_OUT_OF_BOUNDS`) and invalid opcode trapping (`ERR_PX64_INVALID_OPCODE`).

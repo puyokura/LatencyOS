@@ -1,13 +1,13 @@
-# PulseLang v3.1 & px64 v3 Complete Monolithic AI Reference & System Architecture Specification
+# PulseLang & px64 Complete Monolithic AI Reference & System Architecture Specification
 
 > **Document Type**: Exhaustive All-in-One AI Specification, Formal Semantics, Instruction Set Architecture (ISA) & Low-Level Architectural Reference  
 > **Target Audience**: AI Coding Assistants, LLMs, Static Analyzers, Formal Verification Engines, Kernel Engineers  
-> **Language Version**: `3.1.0-hard-realtime`  
-> **Virtual Machine Architecture**: `px64 v3 (Pulse Extended 64-bit Real-Time Architecture)`  
+> **Release Version**: `v0.0.40`  
+> **Language Specification**: `PulseLang v3.2 (px64 v3 Architecture)`  
 > **Host Kernel**: `LatencyOS (x86_64 freestanding no_std)`  
 > **Official File Extension**: Source: `.pul` | Compiled Bytecode: `.bin`  
 > **Shared Core Library**: `pulselang-core` (`no_std` zero-heap crate with optional `alloc`/`std` features)  
-> **Host Compiler Toolchain**: `pulc` (`pulc <file.pul>`, `pulc compile`, `pulc check`, `pulc disasm`, `--json`)  
+> **Host Compiler Toolchain**: `pulc` (`pulc <file.pul>`, `pulc run`, `pulc compile`, `pulc check`, `pulc disasm`, `--json`)  
 > **Zero-Dependency Guarantee**: This single document defines the complete syntax, type system, linear logic, 29 hardware intrinsics, 43 px64 opcodes, memory ordering, DMA coherency, and 43 formal architectural contracts.
 
 ---

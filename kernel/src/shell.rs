@@ -1794,7 +1794,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             // 1. /bin/<main_cmd>.bin
             // 2. /bin/<main_cmd>
             // 3. /pulselang/<main_cmd>.pul
-            // 4. /pulselang/<main_cmd>.pl
+            // 4. /pulselang/<main_cmd>
             // 5. /pulselang/<main_cmd>
             // 6. <main_cmd> (direct relative or absolute file path)
             // 7. /vram/<main_cmd>
@@ -1830,7 +1830,7 @@ fn execute_command(cmd: &str, tsc_freq_hz: u64) {
             if resolved_data.is_none() {
                 resolved_data = check_path("/pulselang/", main_cmd, "");
             }
-            // 6. Direct path (e.g. ./foo.pul, ./foo.pl or /home/bar.bin)
+            // 5. Direct path (e.g. ./foo.pul or /home/bar.bin)
             if resolved_data.is_none() {
                 resolved_data = crate::fs::fs_read(main_cmd);
             }
