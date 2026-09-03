@@ -11,8 +11,6 @@ MULTIBOOT_CHECKSUM      equ -(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS)
 extern _boot_start
 extern _data_end
 extern _bss_end
-extern _start
-
 multiboot_header:
     dd MULTIBOOT_HEADER_MAGIC
     dd MULTIBOOT_HEADER_FLAGS

@@ -22,11 +22,11 @@ jobs:
         with:
           targets: x86_64-unknown-none
 
-      - name: Install QEMU
+      - name: Install QEMU and NASM
         run: |
-          choco install qemu -y --no-progress
+          choco install qemu nasm -y --no-progress
           echo "C:\Program Files\qemu" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build and bundle LatencyOS standalone executable
         run: cargo xtask dist
 
