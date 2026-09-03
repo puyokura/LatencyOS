@@ -1,8 +1,8 @@
 //! `pulc` - PulseLang Host Compiler & Toolchain CLI for LatencyOS
 
 use pulselang_core::{
-    check, compile_pulse_to_binary, disassemble_px64_with_filename, CompileError,
-    Compiler, Lexer, Token, MAX_TOKENS,
+    check, compile_pulse_to_binary, disassemble_px64_with_filename, preprocess_includes,
+    CompileError, Compiler, Lexer, Token, MAX_TOKENS,
 };
 use std::env;
 use std::fs;
@@ -231,6 +231,26 @@ fn derive_output_path(input: &Path, explicit_out: Option<PathBuf>) -> PathBuf {
     out
 }
 
+fn read_and_preprocess(input_path: &Path, json: bool) -> Result<String, (i32, String)> {
+    let raw_src = fs::read_to_string(input_path).map_err(|e| {
+        (
+            2,
+            format!("Cannot read input file '{}': {}", input_path.display(), e),
+        )
+    })?;
+
+    let parent_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut loader = |inc_rel_path: &str| -> Option<String> {
+        let full_path = parent_dir.join(inc_rel_path);
+        fs::read_to_string(&full_path).ok()
+    };
+
+    preprocess_includes(&raw_src, &mut loader).map_err(|err| {
+        let err_msg = format_compile_error(&err, raw_src.as_bytes(), &input_path.display().to_string(), json);
+        (1, err_msg)
+    })
+}
+
 fn run_compile(
     input_path: &Path,
     explicit_out: Option<PathBuf>,
@@ -238,17 +258,7 @@ fn run_compile(
     verbose: bool,
 ) -> Result<(), (i32, String)> {
     let out_path = derive_output_path(input_path, explicit_out);
-    let src = fs::read_to_string(input_path).map_err(|e| {
-        (
-            2,
-            format!(
-                "Cannot read input file '{}': {}",
-                input_path.display(),
-                e
-            ),
-        )
-    })?;
-
+    let src = read_and_preprocess(input_path, json)?;
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src.as_bytes());
     let _tok_count = lexer.tokenize(&mut tokens).map_err(|err| {
@@ -337,17 +347,7 @@ fn run_compile(
 }
 
 fn run_check(input_path: &Path, json: bool, verbose: bool) -> Result<(), (i32, String)> {
-    let src = fs::read_to_string(input_path).map_err(|e| {
-        (
-            2,
-            format!(
-                "Cannot read input file '{}': {}",
-                input_path.display(),
-                e
-            ),
-        )
-    })?;
-
+    let src = read_and_preprocess(input_path, json)?;
     let stats = check(&src).map_err(|err| {
         let err_msg = format_compile_error(&err, src.as_bytes(), &input_path.display().to_string(), json);
         (1, err_msg)
@@ -469,27 +469,16 @@ fn run_exec(
             (1, formatted)
         })?;
     } else {
-        let src = core::str::from_utf8(&raw_bytes).map_err(|e| {
-            (
-                2,
-                format!(
-                    "File '{}' is not valid UTF-8 source code: {}",
-                    input_path.display(),
-                    e
-                ),
-            )
-        })?;
-
+        let src = read_and_preprocess(input_path, json)?;
         if verbose {
             eprintln!(
-                "[pulc] Compiling and executing source: '{}' ({} bytes, {} args)",
+                "[pulc] JIT executing PulseLang script: '{}' ({} chars, {} args)",
                 input_path.display(),
                 src.len(),
                 args.len()
             );
         }
-
-        pulselang_core::run_source(src, &args_str_refs).map_err(|err| {
+        pulselang_core::run_source(&src, &args_str_refs).map_err(|err| {
             let formatted = format_compile_error(&err, src.as_bytes(), &input_path.to_string_lossy(), json);
             (1, formatted)
         })?;

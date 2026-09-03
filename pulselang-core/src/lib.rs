@@ -19,7 +19,8 @@ pub mod isa;
 pub mod lexer;
 pub mod token;
 pub mod vm;
-
+#[cfg(any(feature = "alloc", test))]
+pub mod include;
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, FnMeta, HandleState, StructDefMeta,
     StructFieldMeta, StructInstMeta,
@@ -36,7 +37,8 @@ pub use vm::{compute_crc32, run_binary, run_binary_with_output, NullWriter, PX64
 pub use vm::StdoutWriter;
 #[cfg(any(feature = "alloc", test))]
 pub use vm::{run_source, run_source_with_output};
-
+#[cfg(any(feature = "alloc", test))]
+pub use include::preprocess_includes;
 /// Compile PulseLang source code into a binary px64 bytecode buffer (zero-heap `no_std` API).
 ///
 /// Returns the number of bytes written to `out_buf`.
@@ -631,6 +633,40 @@ mod tests {
         "#;
         let bin = compile(src).expect("Mutable spill variables compile failed");
         run_binary(&bin, &[]).expect("Mutable spill variables run failed");
+    }
+    #[test]
+    fn test_static_include_expansion() {
+        let src = r#"
+            @include "helpers.pul";
+            let $res = add_ten(50);
+            @assert($res == 60);
+        "#;
+        let mut loader = |path: &str| -> Option<alloc::string::String> {
+            if path == "helpers.pul" {
+                Some(alloc::string::String::from("fn add_ten($x) -> $r { $r := $x + 10; return $r; }\n"))
+            } else {
+                None
+            }
+        };
+        let expanded = preprocess_includes(src, &mut loader).expect("Include preprocessing failed");
+        let bin = compile(&expanded).expect("Compilation of included code failed");
+        run_binary(&bin, &[]).expect("Execution failed");
+    }
+
+    #[test]
+    fn test_circular_include_detected() {
+        let src = r#"@include "a.pul";"#;
+        let mut loader = |path: &str| -> Option<alloc::string::String> {
+            if path == "a.pul" {
+                Some(alloc::string::String::from("@include \"b.pul\";\n"))
+            } else if path == "b.pul" {
+                Some(alloc::string::String::from("@include \"a.pul\";\n"))
+            } else {
+                None
+            }
+        };
+        let err = preprocess_includes(src, &mut loader).unwrap_err();
+        assert_eq!(err.code, "ERR_CIRCULAR_INCLUDE");
     }
     #[test]
     fn test_error_json_formatting() {
