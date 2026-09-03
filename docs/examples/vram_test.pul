@@ -1,0 +1,12 @@
+// vram_test.pul - Direct Zero-Copy VRAM Framebuffer Test
+@contract: @wcet(5us) @budget(50us);
+
+let $slot = 0;
+let $offset = 64;
+let $val = 987654321;
+
+@vram_write($slot, $offset, $val);
+let $read_val = @vram_read($slot, $offset);
+
+@assert($read_val == $val);
+@println("[VRAM] Verified");

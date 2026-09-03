@@ -1,0 +1,14 @@
+// telemetry_ext.pul - Extended Hardware Telemetry
+@contract: @wcet(5us) @budget(30us);
+
+let $core = @core_id();
+let $freq = @tsc_freq();
+let $uptime = @uptime_ns();
+let $ring = @ring_depth(0);
+
+@assert($core >= 0);
+@assert($freq > 0);
+@assert($uptime >= 0);
+@assert($ring >= 0);
+
+@println("[TELEMETRY] Complete");

@@ -1,0 +1,20 @@
+// struct_test.pul - Static Struct Manipulation
+@contract: @wcet(10us) @budget(50us);
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+let mut $pt: Point;
+$pt.x := 100;
+$pt.y := 200;
+$pt.x := 150;
+$pt.y := $pt.y + 50;
+
+let $dist_x = $pt.x;
+let $dist_y = $pt.y;
+
+@assert($dist_x == 150);
+@assert($dist_y == 250);
+@println("[STRUCT] Success");

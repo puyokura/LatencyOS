@@ -1,0 +1,14 @@
+// filter.pul - Adaptive Congestion Guard
+@contract: @wcet(2us) @budget(100us);
+
+$rtt := @rtt();
+@println("[FILTER] Measured RTT (ns):");
+@println($rtt);
+
+if ($rtt > 300us) {
+    @println("[ACTION] Congestion detected -> Rate: 60%");
+    @rate(60);
+} else {
+    @println("[ACTION] Optimal latency -> Rate: 100%");
+    @rate(100);
+}

@@ -9,8 +9,8 @@ on:
       - main
 
 jobs:
-  check-and-test:
-    name: Check and Test
+  windows-ci:
+    name: Windows CI & QEMU Full Suite
     runs-on: windows-latest
 
     steps:
@@ -30,7 +30,7 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace
 
-      - name: Run unit and integration tests
+      - name: Run unit, integration & sample scripts tests
         run: cargo test --package pulselang-core --package pulc
 
       - name: Test kernel boot
@@ -53,3 +53,30 @@ jobs:
 
       - name: Test standalone bundle
         run: cargo xtask test-standalone
+
+  linux-ci:
+    name: Linux Headless CI & Sample Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-none
+
+      - name: Install QEMU on Linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86
+
+      - name: Check kernel target
+        run: cargo check --package kernel --target x86_64-unknown-none
+
+      - name: Run unit & integration tests on Linux
+        run: cargo test --package pulselang-core --package pulc
+
+      - name: Test all documented sample scripts via pulc
+        run: cargo test --package pulc --test samples

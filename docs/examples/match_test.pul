@@ -1,0 +1,22 @@
+// match_test.pul - Tagged Result Pattern Matching
+@contract: @wcet(10us) @budget(50us);
+
+let $res_ok = @ok(42);
+let $res_err = @err(105);
+
+let mut $out1 = 0;
+let mut $out2 = 0;
+
+match $res_ok {
+    Ok($v) => { $out1 := $v; },
+    Err($e) => { $out1 := 0; },
+}
+
+match $res_err {
+    Ok($v) => { $out2 := 0; },
+    Err($e) => { $out2 := $e; },
+}
+
+@assert($out1 == 42);
+@assert($out2 == 105);
+@println("[MATCH] Success");

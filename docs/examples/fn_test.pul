@@ -1,0 +1,25 @@
+// fn_test.pul - Static Function Calling & Contract Validation
+@contract: @wcet(10us) @budget(50us);
+
+fn add($a, $b) -> $ret {
+    $ret := $a + $b;
+    return $ret;
+}
+
+fn clamp_val($v, $min, $max) -> $ret {
+    if ($v < $min) {
+        return $min;
+    } else if ($v > $max) {
+        return $max;
+    } else {
+        return $v;
+    }
+}
+
+let $sum = add(15, 25);
+@assert($sum == 40);
+
+let $clamped = clamp_val(150, 0, 100);
+@assert($clamped == 100);
+
+@println("[FN_TEST] Success");

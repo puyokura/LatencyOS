@@ -1,0 +1,16 @@
+// math_demo.pul - Hardware Bit & Math Demonstration
+@contract: @wcet(10us) @budget(50us);
+
+let $min_val = @min(42, 10);
+let $max_val = @max(42, 10);
+let $abs_val = @abs(-123);
+let $clamped = @clamp(100, 10, 50);
+let $popcnt_val = @popcnt(7); // 3 bits set
+
+@assert($min_val == 10);
+@assert($max_val == 42);
+@assert($abs_val == 123);
+@assert($clamped == 50);
+@assert($popcnt_val == 3);
+
+@println("Math demo successful");

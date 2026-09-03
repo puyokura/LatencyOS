@@ -1,0 +1,14 @@
+// bench.pul - Realtime Math & Latency Benchmark
+@contract: @wcet(5us) @budget(50us);
+
+$t0 := @tsc();
+let mut $sum = 0;
+
+for $i in 0..100 {
+    $sum += $i * 2;
+}
+
+$dt := @tsc() - $t0;
+@println("[BENCH] Iterations: 100");
+@println($sum);
+@assert($sum == 9900);

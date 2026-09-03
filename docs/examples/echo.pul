@@ -1,0 +1,10 @@
+// echo.pul - CLI Argument Echo & String Formatter
+@contract: @wcet(2us) @budget(20us);
+
+let $argc = @argc();
+if ($argc > 0) {
+    let $arg0 = @arg(0);
+    @println($arg0);
+} else {
+    @println("echo: no arguments provided");
+}
