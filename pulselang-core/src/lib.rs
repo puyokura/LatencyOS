@@ -719,6 +719,19 @@ mod tests {
         run_binary(&bin, &[]).expect("Run with enlarged pool_size failed");
     }
     #[test]
+    fn test_combinator_with_builtin_function() {
+        let src = r#"
+            let $a = [10, 50, 30];
+            let $b = [20, 40, 60];
+            // Use built-in @min in @zip_with
+            let $min_sum = @zip_with($a, $b, @min) |> @sum();
+            // min(10,20)=10, min(50,40)=40, min(30,60)=30 -> sum = 80
+            @assert($min_sum == 80);
+        "#;
+        let bin = compile(src).expect("Combinator with builtin min compile failed");
+        run_binary(&bin, &[]).expect("Execution with builtin min failed");
+    }
+    #[test]
     fn test_error_json_formatting() {
         let src = "let $x = 10;\n$x := 20;\n";
         let mut buf = [0u8; 1024];

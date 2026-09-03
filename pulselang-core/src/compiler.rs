@@ -11,7 +11,7 @@ pub enum HandleState {
     Consumed,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct FnMeta {
     pub name: [u8; 16],
     pub name_len: usize,
@@ -134,6 +134,12 @@ impl ConstTableMeta {
         }
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub enum CombinatorFnTarget {
+    UserDefined(FnMeta),
+    Builtin(u8),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ViewMeta {
     pub name: [u8; 16],
@@ -433,6 +439,41 @@ impl<'a> Compiler<'a> {
         self.lookup_view(tok).is_some()
     }
 
+    pub fn lookup_combinator_fn(&self, name: &[u8]) -> Result<CombinatorFnTarget, CompileError> {
+        for i in 0..self.fn_count {
+            let meta = &self.functions[i];
+            if meta.name_len == name.len() && &meta.name[..meta.name_len] == name {
+                return Ok(CombinatorFnTarget::UserDefined(*meta));
+            }
+        }
+        let builtin_id = match name {
+            b"@min" | b"min" => Some(NATIVE_MATH_MIN),
+            b"@max" | b"max" => Some(NATIVE_MATH_MAX),
+            b"@abs" | b"abs" => Some(NATIVE_MATH_ABS),
+            b"@clamp" | b"clamp" => Some(NATIVE_MATH_CLAMP),
+            b"@popcnt" | b"popcnt" => Some(NATIVE_BIT_POPCNT),
+            b"@lzcnt" | b"lzcnt" => Some(NATIVE_BIT_LZCNT),
+            b"@crc32" | b"crc32" => Some(NATIVE_CRC32),
+            b"@to_fix" | b"to_fix" => Some(NATIVE_FIX_TO_FIX),
+            b"@to_i64" | b"to_i64" => Some(NATIVE_FIX_TO_I64),
+            b"@fix_mul" | b"fix_mul" => Some(NATIVE_FIX_MUL),
+            b"@fix_div" | b"fix_div" => Some(NATIVE_FIX_DIV),
+            b"@print" | b"print" => Some(NATIVE_PRINT),
+            b"@println" | b"println" => Some(NATIVE_PRINTLN),
+            _ => None,
+        };
+        if let Some(id) = builtin_id {
+            return Ok(CombinatorFnTarget::Builtin(id));
+        }
+        Err(self.error(
+            "ERR_UNKNOWN_FUNCTION",
+            "Function name passed to combinator is not defined",
+            "Valid function or intrinsic name",
+            "Combinator -> Function Lookup",
+            "Define static function with 'fn name(...) { ... }' or pass built-in intrinsic",
+        ))
+    }
+
     pub fn lookup_fn_by_name(&self, name: &[u8]) -> Result<FnMeta, CompileError> {
         for i in 0..self.fn_count {
             let meta = &self.functions[i];
@@ -576,7 +617,7 @@ impl<'a> Compiler<'a> {
         fn_name: &[u8],
         is_sum: bool,
     ) -> Result<(), CompileError> {
-        let fn_meta = self.lookup_fn_by_name(fn_name)?;
+        let fn_target = self.lookup_combinator_fn(fn_name)?;
         let count = core::cmp::min(v1.len_imm, v2.len_imm);
 
         if is_sum {
@@ -610,8 +651,6 @@ impl<'a> Compiler<'a> {
         let elem1_reg = self.alloc_temp()?;
         self.emit_inst(PX64_OP_ARR_LOAD, elem1_reg, v1.arr_id, idx1_reg)?;
         self.free_temp(idx1_reg);
-        self.emit_inst(PX64_OP_MOV_REG, 7, elem1_reg, 0)?;
-        self.free_temp(elem1_reg);
 
         let idx2_reg = self.alloc_temp()?;
         if v2.stride_imm == 1 {
@@ -626,17 +665,31 @@ impl<'a> Compiler<'a> {
         let elem2_reg = self.alloc_temp()?;
         self.emit_inst(PX64_OP_ARR_LOAD, elem2_reg, v2.arr_id, idx2_reg)?;
         self.free_temp(idx2_reg);
-        self.emit_inst(PX64_OP_MOV_REG, 6, elem2_reg, 0)?;
-        self.free_temp(elem2_reg);
 
-        self.emit_imm16(PX64_OP_CALL, 0, fn_meta.entry_pc)?;
-
-        if is_sum {
-            self.emit_inst(PX64_OP_ADD, dst, dst, 0)?;
-        } else {
-            self.emit_inst(PX64_OP_MOV_REG, dst, 0, 0)?;
+        match fn_target {
+            CombinatorFnTarget::UserDefined(fn_meta) => {
+                self.emit_inst(PX64_OP_MOV_REG, 7, elem1_reg, 0)?;
+                self.emit_inst(PX64_OP_MOV_REG, 6, elem2_reg, 0)?;
+                self.free_temp(elem2_reg);
+                self.free_temp(elem1_reg);
+                self.emit_imm16(PX64_OP_CALL, 0, fn_meta.entry_pc)?;
+                if is_sum {
+                    self.emit_inst(PX64_OP_ADD, dst, dst, 0)?;
+                } else {
+                    self.emit_inst(PX64_OP_MOV_REG, dst, 0, 0)?;
+                }
+            }
+            CombinatorFnTarget::Builtin(func_id) => {
+                self.emit_inst(PX64_OP_CALL_NAT, elem1_reg, func_id, elem1_reg)?;
+                self.free_temp(elem2_reg);
+                if is_sum {
+                    self.emit_inst(PX64_OP_ADD, dst, dst, elem1_reg)?;
+                } else {
+                    self.emit_inst(PX64_OP_MOV_REG, dst, elem1_reg, 0)?;
+                }
+                self.free_temp(elem1_reg);
+            }
         }
-
         self.emit_inst(PX64_OP_ADDI, loop_i, loop_i, 1)?;
         self.emit_imm16(PX64_OP_JMP, 0, loop_start_pc as u16)?;
 
@@ -2125,8 +2178,9 @@ impl<'a> Compiler<'a> {
                         let name = &self.src[next_tok.start..next_tok.start + next_tok.len];
                         if name == b"@row" || name == b"@col" || name == b"@slice" {
                             self.advance(); // consume '=' or ':='
-                            let view = self.parse_view_source()?;
-                            self.declare_view(ident, view.arr_id, view.base_reg, view.stride_imm, view.len_imm)?;
+                            let var_reg = self.declare_var(ident, is_mut)?;
+                            let view = self.parse_view_source_to_reg(var_reg)?;
+                            self.declare_view(ident, view.arr_id, var_reg, view.stride_imm, view.len_imm)?;
                             self.match_token(TokenKind::Semi);
                             return Ok(());
                         }
