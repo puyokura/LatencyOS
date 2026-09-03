@@ -58,7 +58,7 @@ AssignStmt      ::= (VarIdent | HardwareIdent) ":=" Expression ";"
 CompoundAssign  ::= (VarIdent | HardwareIdent) ( "+=" | "-=" ) Expression ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
 WhileStmt       ::= "@while(" Expression ")" Block
-IfStmt          ::= "if" "(" Expression ")" Block ( "else" Block )?
+IfStmt          ::= "if" "(" Expression ")" Block ( "else" ( IfStmt | Block ) )?
 ExprStmt        ::= Expression ";"
 
 Block           ::= "{" Statement* "}"

@@ -560,6 +560,50 @@ mod tests {
         assert_eq!(err.code, "ERR_PX64_DIV_BY_ZERO");
     }
     #[test]
+    fn test_else_if_chain_syntax() {
+        let src = r#"
+            let $val = 3;
+            let mut $res = 0;
+            if ($val == 1) {
+                $res := 10;
+            } else if ($val == 2) {
+                $res := 20;
+            } else if ($val == 3) {
+                $res := 30;
+            } else {
+                $res := 99;
+            }
+            @assert($res == 30);
+        "#;
+        let bin = compile(src).expect("Else-if chain compilation failed");
+        run_binary(&bin, &[]).expect("Else-if chain execution failed");
+    }
+    #[test]
+    fn test_else_if_fizzbuzz_multi_branch() {
+        let src = r#"
+            @contract: @wcet(10us) @budget(100us);
+            for $i in 1..16 {
+                if (($i % 15) == 0) {
+                    @println("FizzBuzz");
+                } else if (($i % 3) == 0) {
+                    @println("Fizz");
+                } else if (($i % 5) == 0) {
+                    @println("Buzz");
+                } else {
+                    @println($i);
+                }
+            }
+        "#;
+        let bin = compile(src).expect("FizzBuzz else-if chain compile failed");
+        let mut out = alloc::string::String::new();
+        run_binary_with_output(&bin, &[], &mut out).expect("FizzBuzz run failed");
+        let lines: alloc::vec::Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines[0], "1");
+        assert_eq!(lines[2], "Fizz");
+        assert_eq!(lines[4], "Buzz");
+        assert_eq!(lines[14], "FizzBuzz");
+    }
+    #[test]
     fn test_error_json_formatting() {
         let src = "let $x = 10;\n$x := 20;\n";
         let mut buf = [0u8; 1024];

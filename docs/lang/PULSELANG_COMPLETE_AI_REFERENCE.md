@@ -183,7 +183,7 @@ AssertStmt      ::= "@assert(" Expression ")" ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
 WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" Block
 ForStmt         ::= ( "for" | "@for" ) VarIdent "in" Expression ".." Expression Block
-IfStmt          ::= "if" "(" Expression ")" Block ( "else" Block )?
+IfStmt          ::= "if" "(" Expression ")" Block ( "else" ( IfStmt | Block ) )?
 ExprStmt        ::= Expression ";"
 
 Block           ::= "{" Statement* "}"
@@ -409,72 +409,41 @@ PulseLang incorporates zero-overhead Result types using bit 60 tagging (`ERR_TAG
 ```pulse
 fn compute_ratio($numerator, $denominator) {
     if ($denominator == 0) {
-        return @err(101); // Return Err(101)
+        return @err(400); // Return error tagged value
     }
-    return @ok($numerator / $denominator); // Return Ok(value)
+    return @ok($numerator / $denominator); // Return Ok tagged value
 }
 
 let $res = compute_ratio(100, 5);
-
-// Check and unwrap
 if (@is_ok($res)) {
     let $val = @unwrap($res);
     @println($val);
-} else {
-    @println("[ERROR] Division error encountered.");
 }
 ```
 
 ### 3.9 Control Flow: Conditionals, Bounded Loops & Deadlines
 
-#### 1. Conditionals (`if` / `else` & Strict Block Requirements)
+#### 1. Conditionals (`if` / `else if` / `else`)
 
-PulseLang v3.1 strictly enforces block-delimited control flow. An `if` statement requires parentheses around its condition, followed immediately by a block enclosed in curly braces `{ ... }`.
+PulseLang v3.2 fully supports `if`, `else if` chaining, and `else` branches. An `if` statement requires parentheses around its condition, followed by a block enclosed in curly braces `{ ... }`. `else if` branches are automatically desugared by the compiler into structured nested blocks with zero runtime overhead.
 
-> **CRITICAL AI & COMPILER RULE: No Direct `else if` Syntax**
-> - PulseLang v3.1 does **NOT** directly support `else if` syntax.
-> - The `else` keyword **MUST** be followed immediately by an opening brace `{` defining a Block (`{ ... }`).
-> - For multi-branch decision trees, you **MUST** nest the subsequent `if` statement inside the `else` block: `else { if (...) { ... } else { ... } }`.
-> - Writing `else if` triggers the compile error:
->   `error[ERR_EXPECTED_LBRACE]: Missing opening brace '{' after else keyword`
-
-**Standard If / Else Branch:**
-```pulse
-let $rtt = @rtt();
-
-if ($rtt < 100us) {
-    @rate(100);
-} else {
-    @rate(80);
-}
-```
-
-**Valid Multi-Branch Condition (Nested `else { if (...) { ... } }`):**
+**Standard If / Else If / Else Chaining:**
 ```pulse
 let $x = 2;
+let mut $res = 0;
 
 if ($x == 1) {
-    @println("one");
-} else {
-    if ($x == 2) {
-        @println("two");
-    } else {
-        @println("other");
-    }
-}
-```
-
-**Invalid Syntax (Triggers `ERR_EXPECTED_LBRACE`):**
-```pulse
-// INVALID: Triggers ERR_EXPECTED_LBRACE at compile time
-if ($x == 1) {
-    @println("one");
+    $res := 10;
 } else if ($x == 2) {
-    @println("two");
+    $res := 20;
+} else if ($x == 3) {
+    $res := 30;
+} else {
+    $res := 99;
 }
 ```
 
-**Complete Real-Time Multi-Branch FizzBuzz Recipe:**
+**Multi-Branch FizzBuzz Recipe (1-Level Nesting with `else if`):**
 ```pulse
 // fizzbuzz.pul - Real-Time Multi-Branch FizzBuzz Recipe
 @contract: @wcet(10us) @budget(100us);
@@ -482,20 +451,15 @@ if ($x == 1) {
 for $i in 1..16 {
     if (($i % 15) == 0) {
         @println("FizzBuzz");
+    } else if (($i % 3) == 0) {
+        @println("Fizz");
+    } else if (($i % 5) == 0) {
+        @println("Buzz");
     } else {
-        if (($i % 3) == 0) {
-            @println("Fizz");
-        } else {
-            if (($i % 5) == 0) {
-                @println("Buzz");
-            } else {
-                @println($i);
-            }
-        }
+        @println($i);
     }
 }
 ```
-
 #### 2. Ternary Operator & Ternary Blocks
 ```pulse
 let $rtt = @rtt();

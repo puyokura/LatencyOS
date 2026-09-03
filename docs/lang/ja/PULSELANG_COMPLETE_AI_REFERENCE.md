@@ -194,7 +194,7 @@ AssertStmt      ::= "@assert(" Expression ")" ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
 WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" Block
 ForStmt         ::= ( "for" | "@for" ) VarIdent "in" ( IntegerLiteral | TimeLiteral ) ".." ( IntegerLiteral | TimeLiteral ) Block
-IfStmt          ::= "if" "(" Expression ")" Block ( "else" Block )?
+IfStmt          ::= "if" "(" Expression ")" Block ( "else" ( IfStmt | Block ) )?
 ExprStmt        ::= Expression ";"
 Block           ::= "{" Statement* "}"
 
@@ -333,83 +333,48 @@ for $i in 0..3 {
 
 ### 4.3 制御構文 (if, for, while, match)
 
-#### 1. 条件分岐 (`if` / `else` および 三項演算子)
+#### 1. 条件分岐 (`if` / `else if` / `else` および 三項演算子)
 
-PulseLang v3.1 における条件分岐は、決定論的かつ高速な単一パス構文解析を保証するため、厳格な構文規則を持ちます。
+PulseLang v3.2 では、多分岐条件を自然に記述できるように `if`、`else if` チェーン、`else` 分岐を第一級でサポートしています。コンパイラは `else if` を構造化されたネストブロックへと自動デシュガーし、ゼロオーバーヘッドでコンパイルします。
 
-> **`else if` 非対応と `else` ブロックの厳格仕様**:
-> - **PulseLang v3.1 では `else if` 構文を直接サポートしていません。**
-> - **`else` キーワードの直後には必ず `{ ... }` のブロックが必要です。**
-> - 複数条件を評価する場合は、`else` ブロック内に `if` 文をネストして記述します（`else { if (...) { ... } else { ... } }`）。
-> - `else if` を記述した場合、コンパイラ（`pulc` / `pulselang-core`）は `ERR_EXPECTED_LBRACE: Missing opening brace '{' after else keyword` エラーを発生させます。
+##### 基本構文 (`if` / `else if` / `else`)
+```pulse
+let $x = 2;
+let mut $res = 0;
 
-##### 基本構文と三項演算子
+if ($x == 1) {
+    $res := 10;
+} else if ($x == 2) {
+    $res := 20;
+} else if ($x == 3) {
+    $res := 30;
+} else {
+    $res := 99;
+}
+```
+
+##### 1段ネストで記述可能な FizzBuzz レシピ
+```pulse
+// fizzbuzz.pul - 1段ネストの多分岐 FizzBuzz
+@contract: @wcet(10us) @budget(100us);
+
+for $i in 1..16 {
+    if (($i % 15) == 0) {
+        @println("FizzBuzz");
+    } else if (($i % 3) == 0) {
+        @println("Fizz");
+    } else if (($i % 5) == 0) {
+        @println("Buzz");
+    } else {
+        @println($i);
+    }
+}
+```
+
+##### 三項演算子 (`? :`)
 ```pulse
 let $rtt = @rtt();
-
-// 標準 if-else 構文 (else の直後は必ずブロック '{ ... }')
-if ($rtt > 200us) {
-    @rate(60);
-    @println("[ALERT] High latency detected");
-} else {
-    @rate(100);
-}
-
-// 三項式 / 三項ブロック
 $rtt > 300us ? @rate(50) : @rate(90);
-$rtt > 500us ? {
-    @println("[DROP] Critical jitter");
-} : {
-    @println("[OK] Stable");
-};
-```
-
-##### 正しい記述例（ネスト形式）
-```pulse
-// 正しい記述例: else ブロック内に if 文をネスト
-let $x = 2;
-
-if ($x == 1) {
-    @println("one");
-} else {
-    if ($x == 2) {
-        @println("two");
-    } else {
-        @println("other");
-    }
-}
-```
-
-##### 構文エラーとなる不正例
-```pulse
-// 構文エラー: ERR_EXPECTED_LBRACE が発生
-let $x = 2;
-
-if ($x == 1) {
-    @println("one");
-} else if ($x == 2) {
-    @println("two");
-}
-```
-
-##### 正しい FizzBuzz 実装例
-```pulse
-// 正しい FizzBuzz 実装例 (for ループと else 内 if ネスト)
-for $i in 1..16 {
-    if ($i % 15 == 0) {
-        @println("FizzBuzz");
-    } else {
-        if ($i % 3 == 0) {
-            @println("Fizz");
-        } else {
-            if ($i % 5 == 0) {
-                @println("Buzz");
-            } else {
-                @println($i);
-            }
-        }
-    }
-}
 ```
 
 #### 2. 静的有界ループ (`for in 0..N`)

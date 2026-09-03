@@ -2069,19 +2069,24 @@ impl<'a> Compiler<'a> {
                     let jmp_pos = self.emit_inst(PX64_OP_JMP, 0, 0, 0)?;
                     self.patch_imm16(jz_pos, self.code_len as u16);
 
-                    if !self.match_token(TokenKind::LBrace) {
-                        return Err(self.error(
-                            "ERR_EXPECTED_LBRACE",
-                            "Missing opening brace '{' after else keyword",
-                            "Left brace '{'",
-                            "Statement -> Else Branch",
-                            "Add opening brace '{' after else",
-                        ));
-                    }
-                    while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
+                    if self.peek().kind == TokenKind::If {
+                        // Desugar `else if (...) { ... }` into nested if statement
                         self.statement()?;
+                    } else {
+                        if !self.match_token(TokenKind::LBrace) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_LBRACE",
+                                "Missing opening brace '{' after else keyword",
+                                "Left brace '{' or 'if'",
+                                "Statement -> Else Branch",
+                                "Add opening brace '{' or 'if' after else",
+                            ));
+                        }
+                        while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
+                            self.statement()?;
+                        }
+                        self.match_token(TokenKind::RBrace);
                     }
-                    self.match_token(TokenKind::RBrace);
                     self.patch_imm16(jmp_pos, self.code_len as u16);
                 } else {
                     self.patch_imm16(jz_pos, self.code_len as u16);
