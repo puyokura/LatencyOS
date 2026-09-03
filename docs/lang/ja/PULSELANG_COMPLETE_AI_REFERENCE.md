@@ -526,31 +526,42 @@ if ($s1 == $s2) {
 
 ---
 
-### 4.9 契約プログラミングと時限制御
+### 4.9 契約プログラミングと静的 WCET ステップ上限検証
+
+PulseLang は、決定論的実行タイミングを担保するため、コンパイル時静的ステップ計算と実行時二重 Watchdog の 2 段階で時間境界を検証・制限します。
+
+#### 1. コンパイル時静的 WCET ステップ上限検証
+反復範囲が確定している `for $var in start..end` ループについて、コンパイラはコード生成時に最悪命令実行ステップ数を事前計算します：
+
+- **実装参照**: `Compiler::statement` (`pulselang-core/src/compiler.rs:1833-1848`)
+- **計算モデル**:
+  $$\text{ループ本体命令数} = \frac{\text{body\_code\_end} - \text{body\_code\_start}}{4}$$
+  $$\text{1反復あたり命令数} = \text{本体命令数} + 4 \quad (\text{CMP\_LT} + \text{JZ} + \text{ADDI} + \text{JMP})$$
+  $$\text{総推定ステップ数} = \text{1反復あたり命令数} \times \text{反復回数}$$
+- **静的拒絶規則**: 総推定ステップ数が $\text{MAX\_VM\_STEPS}\ (10,000\ \text{ステップ})$ を超過した場合、コンパイル時に `ERR_FOR_WCET_EXCEEDED` を発生させてスクリプトを拒絶します。
+
+#### 2. `while` ループの静的境界検査
+- **実装参照**: `Compiler::statement` (`pulselang-core/src/compiler.rs:1659-1671`)
+- 定数条件 `@while(1)` のような自明な無限ループは、コンパイル時に `ERR_UNBOUNDED_LOOP` で静的拒絶されます。
+
+#### 3. 実行時ステップ数およびハードウェア TSC Watchdog 上限
+- **実装参照**: `PX64VM::run` (`pulselang-core/src/vm.rs:245-255` および `kernel/src/lang.rs:595-605`)
+- **ステップ上限**: 実行ステップ数が $10,000$ ステップに達した時点で `ERR_PX64_WCET_EXCEEDED` により強制終了。
+- **ウォールクロック上限**: 8 命令ごとにハードウェア TSC (`read_tsc_serialized()`) を確認し、5.0ms ($5,000,000\ \text{ns}$) を超過した時点で `ERR_PX64_TIMEOUT_EXCEEDED` により強制終了。
 
 ```pulse
 // 1. スクリプト全体の WCET / 予算契約
 @contract: @wcet(5us) @budget(50us);
 
-// 2. パイプライン定義
-@pipeline: UltraStream @budget(8000us);
+// 2. パイプライン全体の遅延予算
+@pipeline: StreamNetwork @budget(8000us);
 
-// 3. VBLANK 垂直同期ブロック
-@on_vblank: {
-    #f := @capture();
-    
-    // 4. マイクロ秒時限ガード (!drop による過渡パケット破棄)
-    @within(500us) {
-        $rtt := @rtt();
-        $rtt > 200us ? @rate(80) : @rate(100);
-        @send(#f);
-    } !drop;
-};
-
-// 5. 事前条件 & アサーション
-@assert($rtt >= 0);
+// 3. 関数不変条件契約
+fn process_sample($sample) @requires($sample >= 0) {
+    @assert($sample < 65536); // 実行時不変条件アサーション
+    return $sample * 2;
+}
 ```
-
 ---
 
 ### 4.10 AI-Native 宣言的コンビネータ & ストライドビュー

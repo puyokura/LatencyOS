@@ -546,7 +546,28 @@ let $safe_rate = clamp_rate(120, 10, 100); // Returns 100
 @println($safe_rate);
 ```
 
-### 3.12 Design-by-Contract & Formal Directives
+### 3.12 Design-by-Contract & Static WCET Bound Verification
+
+PulseLang enforces deterministic execution timing using a dual-layer strategy: compile-time static step estimation and runtime watchdog caps.
+
+#### 1. Compile-Time Static WCET Step Bound Verification
+For statically bounded `for $var in start..end` loops, the compiler mathematically calculates the exact worst-case instruction steps before emitting bytecode:
+
+- **Implementation Reference**: `Compiler::statement` in `pulselang-core/src/compiler.rs:1833-1848`.
+- **Calculation Model**:
+  $$\text{Body Instructions} = \frac{\text{body\_code\_end} - \text{body\_code\_start}}{4}$$
+  $$\text{Instructions Per Iteration} = \text{Body Instructions} + 4 \quad (\text{CMP\_LT} + \text{JZ} + \text{ADDI} + \text{JMP})$$
+  $$\text{Total Estimated Steps} = \text{Instructions Per Iteration} \times \text{Iterations}$$
+- **Static Rejection Rule**: If $\text{Total Estimated Steps} > \text{MAX\_VM\_STEPS}\ (10,000\ \text{steps})$, the compiler immediately rejects the script with `ERR_FOR_WCET_EXCEEDED`.
+
+#### 2. Static Loop Bound Verification for `while`
+- **Implementation Reference**: `Compiler::statement` in `pulselang-core/src/compiler.rs:1659-1671`.
+- Constant infinite loops (e.g. `@while(1)`) are rejected at compile time with `ERR_UNBOUNDED_LOOP`.
+
+#### 3. Dual Runtime Step & Hardware TSC Watchdog Caps
+- **Implementation Reference**: `PX64VM::run` in `pulselang-core/src/vm.rs:245-255` and `kernel/src/lang.rs:595-605`.
+- **Step Cap**: Execution is forcibly terminated with `ERR_PX64_WCET_EXCEEDED` if $\text{steps} \ge 10,000$.
+- **Wall-Clock Cap**: Every 8 instructions, the hardware serialized TSC (`read_tsc_serialized()`) is checked. Execution exceeding 5.0ms (5,000,000 ns) is terminated with `ERR_PX64_TIMEOUT_EXCEEDED`.
 
 ```pulse
 // Top-Level Script Contract
@@ -557,11 +578,10 @@ let $safe_rate = clamp_rate(120, 10, 100); // Returns 100
 
 // Function Invariant Contract
 fn process_sample($sample) @requires($sample >= 0) {
-    @assert($sample < 65536); // Runtime validation; fails if false
+    @assert($sample < 65536); // Runtime invariant assertion
     return $sample * 2;
 }
 ```
-
 ### 3.13 Linear Type Ownership & DMA Safety Proofs
 
 Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear ownership. The compiler performs static flow analysis to guarantee single consumption:
