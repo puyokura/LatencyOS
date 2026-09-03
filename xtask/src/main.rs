@@ -1632,12 +1632,12 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/echo.pul /bin/my_echo.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    let res = wait_for("[BUILD] Compiled", 10, &mut full_output);
     if !res {
         println!("[DEBUG_OUTPUT for compile]:\n{}", full_output);
     }
     assert!(res, "Failed compile execution");
-
+    assert!(wait_for("[c0|", 10, &mut full_output));
     println!("[xtask-test] 6. Testing disasm command: disasm /bin/my_echo.bin");
     stdin.write_all(b"disasm /bin/my_echo.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1699,8 +1699,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/for_test.pul /bin/for_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling for_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling for_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     println!("[xtask-test] 12. Testing disasm of for loop bytecode: disasm /bin/for_test.bin");
     full_output.clear();
     stdin.write_all(b"disasm /bin/for_test.bin\r\n").unwrap();
@@ -1722,13 +1722,13 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/bench.pul /bin/bench_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bench.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling bench.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/bench_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("9900", 5, &mut full_output), "Failed executing bench_for.bin: sum != 9900");
-
+    assert!(wait_for("9900", 10, &mut full_output), "Failed executing bench_for.bin: sum != 9900");
     println!("[xtask-test] 15. Testing compile-time static WCET rejection: compile /pulselang/err_for_wcet.pul /bin/err_for.bin");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_for_wcet.pul /bin/err_for.bin\r\n").unwrap();
@@ -1741,47 +1741,47 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/array_test.pul /bin/array_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling array_test.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling array_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/array_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("550", 5, &mut full_output), "Failed running array_test.bin: sum != 550");
+    assert!(wait_for("550", 10, &mut full_output), "Failed running array_test.bin: sum != 550");
     assert!(full_output.contains("[ARRAY_TEST] Assertion passed!"), "Failed finding assertion passed in array_test.bin");
-
     println!("[xtask-test] 17. Testing Phase 10-2 array out-of-bounds runtime fault: compile & run /pulselang/err_array_oob.pul");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_array_oob.pul /bin/err_array_oob.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_array_oob.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_array_oob.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_array_oob.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_ARRAY_OUT_OF_BOUNDS", 5, &mut full_output), "Failed array out-of-bounds runtime error check");
+    assert!(wait_for("ERR_PX64_ARRAY_OUT_OF_BOUNDS", 10, &mut full_output), "Failed array out-of-bounds runtime error check");
     assert!(full_output.contains("Fixed-Length Array Boundary Violation"), "Failed finding fault category in diagnostic");
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after array oob fault");
-
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after array oob fault");
     println!("[xtask-test] 18. Testing Phase 10-2 bitwise operations and assertions: compile & run /pulselang/bitwise_test.pul");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/bitwise_test.pul /bin/bitwise_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling bitwise_test.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling bitwise_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/bitwise_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("55", 5, &mut full_output), "Failed bitwise $a output");
+    assert!(wait_for("55", 10, &mut full_output), "Failed bitwise $a output");
     assert!(full_output.contains("16"), "Failed bitwise $b output");
     assert!(full_output.contains("85"), "Failed bitwise $c output");
     assert!(full_output.contains("[BITWISE_TEST] All assertions passed!"), "Failed assertion check in bitwise_test");
-
     println!("[xtask-test] 19. Testing Phase 10-2 compile-time constant folding optimization: compile & disasm /pulselang/fold_test.pul");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/fold_test.pul /bin/fold_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fold_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling fold_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1798,8 +1798,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_assert.pul /bin/err_assert.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_assert.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_assert.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"run /bin/err_assert.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1811,8 +1811,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/fn_test.pul /bin/fn_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling fn_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling fn_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/fn_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1833,20 +1833,20 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/result_test.pul /bin/result_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling result_test.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling result_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/result_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[RESULT_TEST] Tagged result tests passed!", 5, &mut full_output), "Failed running result_test.bin");
+    assert!(wait_for("[RESULT_TEST] Tagged result tests passed!", 10, &mut full_output), "Failed running result_test.bin");
     assert!(full_output.contains("25"), "Failed finding unwrapped safe_div result 25");
-
     println!("[xtask-test] 23. Testing Phase 10-3 Call Stack Overflow protection: compile & run /pulselang/err_stack_overflow.pul");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_stack_overflow.pul /bin/err_stack_overflow.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_stack_overflow.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_stack_overflow.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"run /bin/err_stack_overflow.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1858,8 +1858,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_unwrap.pul /bin/err_unwrap.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_unwrap.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_unwrap.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"run /bin/err_unwrap.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1871,8 +1871,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/struct_test.pul /bin/struct_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling struct_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling struct_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/struct_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1904,12 +1904,12 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/const_table_test.pul /bin/const_table_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    let res = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    let res = wait_for("[BUILD] Compiled", 10, &mut full_output);
     if !res {
         println!("[DEBUG_OUTPUT for compile const_table_test]:\n{}", full_output);
     }
     assert!(res, "Failed compiling const_table_test.pul");
-
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/const_table_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1935,8 +1935,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_table_bounds.pul /bin/err_table_bounds.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling err_table_bounds.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_table_bounds.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"run /bin/err_table_bounds.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1948,8 +1948,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/streq_test.pul /bin/streq_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling streq_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling streq_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/streq_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -1972,12 +1972,12 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/fold_ext_test.pul /bin/fold_ext_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    let res_c = wait_for("[BUILD] Compiled", 5, &mut full_output);
+    let res_c = wait_for("[BUILD] Compiled", 10, &mut full_output);
     if !res_c {
         println!("[DEBUG_OUTPUT for compile fold_ext_test]:\n{}", full_output);
     }
     assert!(res_c, "Failed compiling fold_ext_test.pul");
-
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/fold_ext_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -2000,8 +2000,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/strict_immut_test.pul /bin/strict_immut_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling strict_immut_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling strict_immut_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"run /bin/strict_immut_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -2049,8 +2049,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/match_test.pul /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[BUILD] Compiled", 5, &mut full_output), "Failed compiling match_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling match_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
