@@ -86,14 +86,14 @@ pub struct PX64VM<'a> {
     pub call_sp: usize,
     pub deadline_stack: [u64; 8],
     pub dl_sp: usize,
-    pub array_slots: [i64; 256],
-    pub array_lens: [u16; 8],
-    pub array_bases: [u16; 8],
-    pub struct_slots: [i64; 256],
-    pub struct_field_counts: [u8; 8],
-    pub struct_bases: [u16; 8],
-    pub table_lens: [u8; 8],
-    pub table_bases: [u8; 8],
+    pub array_slots: [i64; 1024],
+    pub array_lens: [u16; 16],
+    pub array_bases: [u16; 16],
+    pub struct_slots: [i64; 1024],
+    pub struct_field_counts: [u8; 16],
+    pub struct_bases: [u16; 16],
+    pub table_lens: [u8; 16],
+    pub table_bases: [u8; 16],
     pub vram: [[u8; 4096]; 4],
     pub spill_slots: [i64; 32],
     pub steps: usize,
@@ -120,14 +120,14 @@ impl<'a> PX64VM<'a> {
             call_sp: 0,
             deadline_stack: [0; 8],
             dl_sp: 0,
-            array_slots: [0; 256],
-            array_lens: [0; 8],
-            array_bases: [0; 8],
-            struct_slots: [0; 256],
-            struct_field_counts: [0; 8],
-            struct_bases: [0; 8],
-            table_lens: [0; 8],
-            table_bases: [0; 8],
+            array_slots: [0; 1024],
+            array_lens: [0; 16],
+            array_bases: [0; 16],
+            struct_slots: [0; 1024],
+            struct_field_counts: [0; 16],
+            struct_bases: [0; 16],
+            table_lens: [0; 16],
+            table_bases: [0; 16],
             vram: [
                 [0x5A; 4096],
                 [0xA5; 4096],
@@ -291,14 +291,14 @@ impl<'a> PX64VM<'a> {
                 PX64_OP_ARR_DEF => {
                     let arr_id = rd;
                     let len = imm16 as usize;
-                    if arr_id < 8 {
+                    if arr_id < 16 {
                         self.array_lens[arr_id] = len as u16;
                         let mut base = 0;
                         for i in 0..arr_id {
                             base += self.array_lens[i] as usize;
                         }
                         self.array_bases[arr_id] = base as u16;
-                        if base + len <= 256 {
+                        if base + len <= 1024 {
                             self.array_slots[base..base + len].fill(0);
                         }
                     }
@@ -312,7 +312,7 @@ impl<'a> PX64VM<'a> {
                     } else {
                         -1
                     };
-                    if arr_id >= 8 {
+                    if arr_id >= 16 {
                         return Err(CompileError::simple(
                             "ERR_PX64_ARRAY_INVALID_ID",
                             "Array ID is invalid",
@@ -345,7 +345,7 @@ impl<'a> PX64VM<'a> {
                     } else {
                         0
                     };
-                    if arr_id >= 8 {
+                    if arr_id >= 16 {
                         return Err(CompileError::simple(
                             "ERR_PX64_ARRAY_INVALID_ID",
                             "Array ID is invalid",
@@ -365,9 +365,9 @@ impl<'a> PX64VM<'a> {
                 PX64_OP_STRUCT_DEF => {
                     let inst_id = rd;
                     let field_count = rs1 as u8;
-                    if inst_id < 8 {
+                    if inst_id < 16 {
                         self.struct_field_counts[inst_id] = field_count;
-                        let mut base = 0u16;
+                        let mut base = 0;
                         for i in 0..inst_id {
                             base += self.struct_field_counts[i] as u16;
                         }
@@ -378,7 +378,7 @@ impl<'a> PX64VM<'a> {
                 PX64_OP_STRUCT_LOAD => {
                     let inst_id = rs1;
                     let offset = rs2;
-                    if inst_id >= 8 || offset >= self.struct_field_counts[inst_id] as usize {
+                    if inst_id >= 16 || offset >= self.struct_field_counts[inst_id] as usize {
                         return Err(CompileError::simple(
                             "ERR_PX64_STRUCT_OUT_OF_BOUNDS",
                             "Struct field offset out of bounds",
@@ -400,7 +400,7 @@ impl<'a> PX64VM<'a> {
                     } else {
                         0
                     };
-                    if inst_id >= 8 || offset >= self.struct_field_counts[inst_id] as usize {
+                    if inst_id >= 16 || offset >= self.struct_field_counts[inst_id] as usize {
                         return Err(CompileError::simple(
                             "ERR_PX64_STRUCT_OUT_OF_BOUNDS",
                             "Struct field offset out of bounds",
@@ -414,7 +414,7 @@ impl<'a> PX64VM<'a> {
                     let tbl_id = rd;
                     let base_idx = rs1 as u8;
                     let len = rs2 as u8;
-                    if tbl_id < 8 {
+                    if tbl_id < 16 {
                         self.table_bases[tbl_id] = base_idx;
                         self.table_lens[tbl_id] = len;
                     }
@@ -428,7 +428,7 @@ impl<'a> PX64VM<'a> {
                     } else {
                         -1
                     };
-                    if tbl_id >= 8 {
+                    if tbl_id >= 16 {
                         return Err(CompileError::simple(
                             "ERR_PX64_TABLE_INVALID_ID",
                             "Const table ID is invalid",

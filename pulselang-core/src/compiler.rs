@@ -208,6 +208,12 @@ pub struct Compiler<'a> {
     pub const_table_count: usize,
     pub views: [ViewMeta; 8],
     pub view_count: usize,
+    pub max_elements: usize,
+    pub max_arrays: usize,
+    pub max_struct_defs: usize,
+    pub max_struct_insts: usize,
+    pub max_struct_fields: usize,
+    pub max_const_tables: usize,
 }
 
 impl<'a> Compiler<'a> {
@@ -247,6 +253,12 @@ impl<'a> Compiler<'a> {
             const_table_count: 0,
             views: [ViewMeta::empty(); 8],
             view_count: 0,
+            max_elements: 256,
+            max_arrays: 8,
+            max_struct_defs: 8,
+            max_struct_insts: 8,
+            max_struct_fields: 256,
+            max_const_tables: 8,
         }
     }
 
@@ -275,22 +287,22 @@ impl<'a> Compiler<'a> {
         } else {
             &[]
         };
-        if self.array_count >= 8 {
+        if self.array_count >= self.max_arrays || self.array_count >= 16 {
             return Err(self.error(
                 "ERR_MAX_ARRAYS_EXCEEDED",
-                "Maximum distinct arrays limit reached (8 arrays limit)",
-                "Fewer distinct arrays",
+                "Maximum distinct arrays limit reached",
+                "Fewer distinct arrays or configure with @pool_size(arrays: N)",
                 "Array Allocation",
-                "Reduce distinct array declarations across script",
+                "Reduce distinct array declarations across script or declare @pool_size",
             ));
         }
-        if self.total_array_elements + len > 256 {
+        if self.total_array_elements + len > self.max_elements || self.total_array_elements + len > 1024 {
             return Err(self.error(
                 "ERR_ARRAY_CAPACITY_EXCEEDED",
-                "Total static array capacity exceeded (max 256 elements)",
-                "Smaller array size",
+                "Total static array capacity exceeded",
+                "Smaller array size or configure with @pool_size(elements: N)",
                 "Array Allocation",
-                "Reduce total array elements in script",
+                "Reduce total array elements in script or declare @pool_size",
             ));
         }
         let arr_id = self.array_count as u8;
@@ -304,6 +316,52 @@ impl<'a> Compiler<'a> {
         self.array_count += 1;
         self.total_array_elements += len;
         Ok(arr_id)
+    }
+
+    pub fn declare_pool_size(&mut self) -> Result<(), CompileError> {
+        self.match_token(TokenKind::LParen);
+        while self.peek().kind != TokenKind::RParen && self.peek().kind != TokenKind::Eof {
+            let tok = self.advance();
+            match tok.kind {
+                TokenKind::Number(n) if n > 0 => {
+                    self.max_elements = core::cmp::min(n as usize, 1024);
+                }
+                TokenKind::Ident => {
+                    let name = &self.src[tok.start..tok.start + tok.len];
+                    self.match_token(TokenKind::Colon);
+                    let val_tok = self.advance();
+                    if let TokenKind::Number(n) = val_tok.kind {
+                        let val = if n > 0 { n as usize } else { 1 };
+                        match name {
+                            b"elements" | b"capacity" => {
+                                self.max_elements = core::cmp::min(val, 1024);
+                            }
+                            b"arrays" => {
+                                self.max_arrays = core::cmp::min(val, 16);
+                            }
+                            b"structs" => {
+                                self.max_struct_defs = core::cmp::min(val, 16);
+                                self.max_struct_insts = core::cmp::min(val, 16);
+                            }
+                            b"fields" => {
+                                self.max_struct_fields = core::cmp::min(val, 1024);
+                            }
+                            b"tables" => {
+                                self.max_const_tables = core::cmp::min(val, 16);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if !self.match_token(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.match_token(TokenKind::RParen);
+        self.match_token(TokenKind::Semi);
+        Ok(())
     }
 
     pub fn lookup_array(&self, tok: Token) -> Result<u8, CompileError> {
@@ -1597,6 +1655,11 @@ impl<'a> Compiler<'a> {
                     ));
                 }
             }
+            TokenKind::AtPoolSize => {
+                self.advance(); // consume '@pool_size'
+                self.declare_pool_size()?;
+            }
+
 
             TokenKind::AtPipeline | TokenKind::Pipeline => {
                 self.advance();

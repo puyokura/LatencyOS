@@ -311,6 +311,7 @@ impl<'a> Lexer<'a> {
                         b"loop" => TokenKind::AtLoop,
                         b"on_vblank" => TokenKind::AtOnVblank,
                         b"drop" => TokenKind::Drop,
+                        b"pool_size" => TokenKind::AtPoolSize,
                         _ => TokenKind::IntrinsicIdent,
                     }
                 }

@@ -708,6 +708,17 @@ mod tests {
         run_binary(&bin, &[]).expect("Sine LUT fixed point run failed");
     }
     #[test]
+    fn test_declarative_pool_size_override() {
+        let src = r#"
+            @pool_size(elements: 512, arrays: 16);
+            let $big: [i64; 300];
+            $big[299] := 42;
+            @assert($big[299] == 42);
+        "#;
+        let bin = compile(src).expect("Compile with enlarged pool_size failed");
+        run_binary(&bin, &[]).expect("Run with enlarged pool_size failed");
+    }
+    #[test]
     fn test_error_json_formatting() {
         let src = "let $x = 10;\n$x := 20;\n";
         let mut buf = [0u8; 1024];
