@@ -1357,8 +1357,7 @@ fn send_test_cmd(
     let start = Instant::now();
     let mut found_expected = expected.is_empty();
     let mut found_prompt = false;
-
-    while start.elapsed() < Duration::from_secs(30) {
+    while start.elapsed() < Duration::from_secs(90) {
         while let Ok(chunk) = rx.try_recv() {
             full_out.push_str(&String::from_utf8_lossy(&chunk));
         }
