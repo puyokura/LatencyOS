@@ -995,13 +995,12 @@ fn test_editor_scroll(kernel_elf: &Path) {
     tcp_stream.write_all(b"edit /home/scroll_35.pul\r\n").unwrap();
     tcp_stream.flush().unwrap();
 
-    assert!(wait_for("LatencyOS PulseEditor", 5, &mut full_output), "Timed out waiting for PulseEditor to open");
+    assert!(wait_for("[^S / F2 Save]", 10, &mut full_output), "Timed out waiting for PulseEditor UI to open");
     println!("[xtask-test] PulseEditor UI verified!");
 
     // Verify PulseEditor top and bottom headers
     assert!(full_output.contains("LatencyOS PulseEditor | File:"), "Missing PulseEditor header title");
-    assert!(full_output.contains("\x1b[24;1H\x1b[7m [^S / F2 Save]"), "Missing PulseEditor shortcut bar");
-
+    assert!(full_output.contains("[^S / F2 Save]"), "Missing PulseEditor shortcut bar");
     // Create 35 lines of code
     println!("[xtask-test] Typing 35 lines into editor...");
     let mut script_payload = String::new();

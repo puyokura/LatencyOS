@@ -51,7 +51,7 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
     #[cfg(not(feature = "alloc"))]
     {
         static mut NO_STD_TOKENS: [Token; 512] = [Token::empty(); 512];
-        let tokens = unsafe { &mut NO_STD_TOKENS };
+        let tokens = unsafe { &mut *(&raw mut NO_STD_TOKENS) };
         compile_pulse_to_binary_with_tokens(src, tokens, out_buf)
     }
 }
