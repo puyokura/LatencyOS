@@ -458,14 +458,12 @@ mod tests {
 
     #[test]
     fn test_variable_limit_maintained() {
-        // 14 variables should trigger ERR_MAX_VARS_EXCEEDED
-        let src = r#"
-            let $v1 = 1; let $v2 = 2; let $v3 = 3; let $v4 = 4;
-            let $v5 = 5; let $v6 = 6; let $v7 = 7; let $v8 = 8;
-            let $v9 = 9; let $v10 = 10; let $v11 = 11; let $v12 = 12;
-            let $v13 = 13; let $v14 = 14;
-        "#;
-        let err = compile(src).unwrap_err();
+        // 46 distinct variables (13 GPRs + 32 spill slots + 1) should trigger ERR_MAX_VARS_EXCEEDED
+        let mut src = alloc::string::String::new();
+        for i in 1..=46 {
+            src.push_str(&alloc::format!("let $v{} = {}; ", i, i));
+        }
+        let err = compile(&src).unwrap_err();
         assert_eq!(err.code, "ERR_MAX_VARS_EXCEEDED");
     }
 
@@ -602,6 +600,37 @@ mod tests {
         assert_eq!(lines[2], "Fizz");
         assert_eq!(lines[4], "Buzz");
         assert_eq!(lines[14], "FizzBuzz");
+    }
+    #[test]
+    fn test_register_spill_over_13_variables() {
+        let src = r#"
+            let $v1 = 1;  let $v2 = 2;  let $v3 = 3;  let $v4 = 4;
+            let $v5 = 5;  let $v6 = 6;  let $v7 = 7;  let $v8 = 8;
+            let $v9 = 9;  let $v10 = 10; let $v11 = 11; let $v12 = 12;
+            let $v13 = 13; let $v14 = 14; let $v15 = 15; let $v16 = 16;
+            let $v17 = 17; let $v18 = 18;
+            let $sum = $v1 + $v2 + $v3 + $v4 + $v5 + $v6 + $v7 + $v8 + $v9 + $v10 + $v11 + $v12 + $v13 + $v14 + $v15 + $v16 + $v17 + $v18;
+            @assert($sum == 171);
+        "#;
+        let bin = compile(src).expect("Compilation with 18 spilled variables failed");
+        run_binary(&bin, &[]).expect("Execution with 18 spilled variables failed");
+    }
+    #[test]
+    fn test_spill_variable_mutations() {
+        let src = r#"
+            let $v1 = 1;  let $v2 = 2;  let $v3 = 3;  let $v4 = 4;
+            let $v5 = 5;  let $v6 = 6;  let $v7 = 7;  let $v8 = 8;
+            let $v9 = 9;  let $v10 = 10; let $v11 = 11; let $v12 = 12;
+            let $v13 = 13;
+            let mut $v14 = 100;
+            let mut $v15 = 200;
+            $v14 += 50;
+            $v15 -= 25;
+            let $total = $v14 + $v15;
+            @assert($total == 325);
+        "#;
+        let bin = compile(src).expect("Mutable spill variables compile failed");
+        run_binary(&bin, &[]).expect("Mutable spill variables run failed");
     }
     #[test]
     fn test_error_json_formatting() {

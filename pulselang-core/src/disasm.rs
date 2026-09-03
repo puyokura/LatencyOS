@@ -193,6 +193,12 @@ pub fn disassemble_px64_with_filename<W: core::fmt::Write>(
                 PX64_OP_STREQ => {
                     writeln!(w, "{:04x}:   2a {:02x} {:02x} {:02x}  STREQ        {}, {}, {}", op_ip, rd, rs1, rs2, rd_str, rs1_str, rs2_str)?;
                 }
+                PX64_OP_SPILL_STORE => {
+                    writeln!(w, "{:04x}:   2b {:02x} {:02x} {:02x}  SPILL_STORE  slot[{}], {}", op_ip, rd, rs1, rs2, rd, rs1_str)?;
+                }
+                PX64_OP_SPILL_LOAD => {
+                    writeln!(w, "{:04x}:   2c {:02x} {:02x} {:02x}  SPILL_LOAD   {}, slot[{}]", op_ip, rd, rs1, rs2, rd_str, rs1)?;
+                }
                 _ => {
                     writeln!(w, "{:04x}:   {:02x} {:02x} {:02x} {:02x}  UNKNOWN_OP_0x{:02x}", op_ip, op, rd, rs1, rs2, op)?;
                 }

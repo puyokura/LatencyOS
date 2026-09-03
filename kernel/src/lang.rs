@@ -251,6 +251,7 @@ pub struct PX64VM<'a> {
     pub struct_bases: [u16; 8],
     pub table_lens: [u8; 8],
     pub table_bases: [u8; 8],
+    pub spill_slots: [i64; 32],
 }
 
 impl<'a> PX64VM<'a> {
@@ -274,6 +275,7 @@ impl<'a> PX64VM<'a> {
             struct_bases: [0; 8],
             table_lens: [0; 8],
             table_bases: [0; 8],
+            spill_slots: [0; 32],
         }
     }
 
@@ -683,6 +685,31 @@ impl<'a> PX64VM<'a> {
                             0
                         };
                         self.regs[rd] = eq;
+                    }
+                }
+
+                PX64_OP_SPILL_STORE => {
+                    let slot_id = rd;
+                    let val_reg = rs1;
+                    let val = if val_reg < PX64_NUM_REGISTERS {
+                        self.regs[val_reg]
+                    } else {
+                        0
+                    };
+                    if slot_id < 32 {
+                        self.spill_slots[slot_id] = val;
+                    }
+                }
+
+                PX64_OP_SPILL_LOAD => {
+                    let slot_id = rs1;
+                    let val = if slot_id < 32 {
+                        self.spill_slots[slot_id]
+                    } else {
+                        0
+                    };
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = val;
                     }
                 }
 

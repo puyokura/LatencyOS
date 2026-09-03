@@ -47,6 +47,8 @@ pub const PX64_OP_STRUCT_STORE: u8 = 39; // [39, InstId, FieldOffset, Rs_val] ->
 pub const PX64_OP_TBL_DEF: u8 = 40;      // [40, TblId, Base8, Len8]    -> table_bases[TblId] = Base, table_lens[TblId] = Len (0x28)
 pub const PX64_OP_TBL_LOAD: u8 = 41;     // [41, Rd, TblId, Rs_idx]     -> Rd = const_pool[base + Rs_idx] (0x29)
 pub const PX64_OP_STREQ: u8 = 42;        // [42, Rd, Rs1, Rs2]          -> Rd = (streq(Rs1, Rs2)) ? 1 : 0 (0x2a)
+pub const PX64_OP_SPILL_STORE: u8 = 43;  // [43, SlotId, Rs_val, 0]     -> spill_slots[SlotId] = Rs_val (0x2b)
+pub const PX64_OP_SPILL_LOAD: u8 = 44;   // [44, Rd, SlotId, 0]         -> Rd = spill_slots[SlotId] (0x2c)
 
 // Legacy Bytecode Instruction Set (PULS v1/v2 backward compatibility)
 pub const OP_NOP: u8 = 0;
@@ -87,7 +89,7 @@ pub const PULSE_HEADER_SIZE: usize = 16;
 // Resource limits
 pub const MAX_TOKENS: usize = 2048;
 pub const MAX_BYTECODE_SIZE: usize = 4096;
-pub const MAX_VARS: usize = 32;
+pub const MAX_VARS: usize = 48;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;
 pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 5_000_000; // 5.0 ms wall-clock hard watchdog limit
@@ -241,6 +243,8 @@ pub fn px64_op_name(op: u8) -> &'static str {
         PX64_OP_TBL_DEF => "TBL_DEF",
         PX64_OP_TBL_LOAD => "TBL_LOAD",
         PX64_OP_STREQ => "STREQ",
+        PX64_OP_SPILL_STORE => "SPILL_STORE",
+        PX64_OP_SPILL_LOAD => "SPILL_LOAD",
         _ => "UNKNOWN_OP",
     }
 }

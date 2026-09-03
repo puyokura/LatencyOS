@@ -95,6 +95,7 @@ pub struct PX64VM<'a> {
     pub table_lens: [u8; 8],
     pub table_bases: [u8; 8],
     pub vram: [[u8; 4096]; 4],
+    pub spill_slots: [i64; 32],
     pub steps: usize,
     pub max_steps: usize,
 }
@@ -130,9 +131,10 @@ impl<'a> PX64VM<'a> {
             vram: [
                 [0x5A; 4096],
                 [0xA5; 4096],
-                [0x3C; 4096],
-                [0xC3; 4096],
+                [0x00; 4096],
+                [0xFF; 4096],
             ],
+            spill_slots: [0; 32],
             steps: 0,
             max_steps: MAX_VM_STEPS,
         }
@@ -575,6 +577,31 @@ impl<'a> PX64VM<'a> {
                             0
                         };
                         self.regs[rd] = eq;
+                    }
+                }
+
+                PX64_OP_SPILL_STORE => {
+                    let slot_id = rd;
+                    let val_reg = rs1;
+                    let val = if val_reg < PX64_NUM_REGISTERS {
+                        self.regs[val_reg]
+                    } else {
+                        0
+                    };
+                    if slot_id < 32 {
+                        self.spill_slots[slot_id] = val;
+                    }
+                }
+
+                PX64_OP_SPILL_LOAD => {
+                    let slot_id = rs1;
+                    let val = if slot_id < 32 {
+                        self.spill_slots[slot_id]
+                    } else {
+                        0
+                    };
+                    if rd < PX64_NUM_REGISTERS {
+                        self.regs[rd] = val;
                     }
                 }
 

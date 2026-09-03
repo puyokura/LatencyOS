@@ -183,7 +183,10 @@ pub struct Compiler<'a> {
     pub var_lens: [usize; MAX_VARS],
     pub var_regs: [u8; MAX_VARS],
     pub var_mut: [bool; MAX_VARS],
+    pub var_spill: [bool; MAX_VARS],
+    pub var_spill_slot: [u8; MAX_VARS],
     pub var_count: usize,
+    pub spill_count: usize,
     pub str_pool: [u8; MAX_STRING_POOL],
     pub str_pool_len: usize,
     pub const_pool: [i64; MAX_CONST_POOL],
@@ -219,7 +222,10 @@ impl<'a> Compiler<'a> {
             var_lens: [0; MAX_VARS],
             var_regs: [0; MAX_VARS],
             var_mut: [true; MAX_VARS],
+            var_spill: [false; MAX_VARS],
+            var_spill_slot: [0; MAX_VARS],
             var_count: 0,
+            spill_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
             const_pool: [0; MAX_CONST_POOL],
@@ -1383,25 +1389,63 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        if self.var_count >= 13 {
+        if self.var_count >= MAX_VARS {
             return Err(self.error(
                 "ERR_MAX_VARS_EXCEEDED",
-                "Maximum distinct variables limit reached (13 general-purpose registers)",
+                "Maximum distinct variables limit reached (13 GPRs + 32 spill slots limit)",
                 "Reuse existing $variables or registers ($rax, $rcx, etc.)",
                 "Register Allocation",
                 "Reduce distinct variable count in script",
             ));
         }
 
-        let reg = (1 + self.var_count) as u8;
         let idx = self.var_count;
         let len = core::cmp::min(name.len(), 16);
         self.var_names[idx][..len].copy_from_slice(&name[..len]);
         self.var_lens[idx] = len;
-        self.var_regs[idx] = reg;
         self.var_mut[idx] = is_mut;
-        self.var_count += 1;
-        Ok(reg)
+
+        if self.var_count < 13 {
+            let reg = (1 + self.var_count) as u8;
+            self.var_regs[idx] = reg;
+            self.var_spill[idx] = false;
+            self.var_spill_slot[idx] = 0;
+            self.var_count += 1;
+            Ok(reg)
+        } else {
+            if self.spill_count >= 32 {
+                return Err(self.error(
+                    "ERR_MAX_VARS_EXCEEDED",
+                    "Maximum distinct variables limit reached (32 spill slots exhausted)",
+                    "Reuse existing variables",
+                    "Register Allocation",
+                    "Reduce distinct variable count in script",
+                ));
+            }
+            let slot = self.spill_count as u8;
+            self.spill_count += 1;
+            self.var_regs[idx] = 255;
+            self.var_spill[idx] = true;
+            self.var_spill_slot[idx] = slot;
+            self.var_count += 1;
+            Ok(255)
+        }
+    }
+
+    pub fn is_spilled_var(&self, tok: Token) -> Option<u8> {
+        let name = if tok.start + tok.len <= self.src.len() {
+            &self.src[tok.start..tok.start + tok.len]
+        } else {
+            &[]
+        };
+        for i in 0..self.var_count {
+            if self.var_lens[i] == name.len() && &self.var_names[i][..self.var_lens[i]] == name {
+                if self.var_spill[i] {
+                    return Some(self.var_spill_slot[i]);
+                }
+            }
+        }
+        None
     }
 
     fn check_var_mutation(&self, tok: Token) -> Result<(), CompileError> {
@@ -2027,7 +2071,14 @@ impl<'a> Compiler<'a> {
                 }
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
-                    self.expression(var_reg)?;
+                    if let Some(slot) = self.is_spilled_var(ident) {
+                        let temp_val = self.alloc_temp()?;
+                        self.expression(temp_val)?;
+                        self.emit_inst(PX64_OP_SPILL_STORE, slot, temp_val, 0)?;
+                        self.free_temp(temp_val);
+                    } else {
+                        self.expression(var_reg)?;
+                    }
                 }
                 self.match_token(TokenKind::Semi);
             }
@@ -2585,8 +2636,68 @@ impl<'a> Compiler<'a> {
                 }
 
                 let ident = self.advance();
-                let var_reg = self.resolve_var(ident)?;
 
+                if let Some(slot) = self.is_spilled_var(ident) {
+                    if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
+                        self.check_var_mutation(ident)?;
+                        let temp_val = self.alloc_temp()?;
+                        self.expression(temp_val)?;
+                        self.emit_inst(PX64_OP_SPILL_STORE, slot, temp_val, 0)?;
+                        self.free_temp(temp_val);
+                        if !self.match_token(TokenKind::Semi) {
+                            return Err(self.error(
+                                "ERR_MISSING_SEMICOLON",
+                                "Missing semicolon ';' at end of assignment",
+                                "Semicolon ';'",
+                                "Statement -> Variable Assignment",
+                                "Append ';' at end of assignment statement",
+                            ));
+                        }
+                        return Ok(());
+                    } else if self.match_token(TokenKind::PlusEq) {
+                        self.check_var_mutation(ident)?;
+                        let temp_lhs = self.alloc_temp()?;
+                        self.emit_inst(PX64_OP_SPILL_LOAD, temp_lhs, slot, 0)?;
+                        let temp_rhs = self.alloc_temp()?;
+                        self.expression(temp_rhs)?;
+                        self.emit_inst(PX64_OP_ADD, temp_lhs, temp_lhs, temp_rhs)?;
+                        self.emit_inst(PX64_OP_SPILL_STORE, slot, temp_lhs, 0)?;
+                        self.free_temp(temp_rhs);
+                        self.free_temp(temp_lhs);
+                        if !self.match_token(TokenKind::Semi) {
+                            return Err(self.error(
+                                "ERR_MISSING_SEMICOLON",
+                                "Missing semicolon ';' at end of compound assignment",
+                                "Semicolon ';'",
+                                "Statement -> Compound Addition Assignment",
+                                "Append ';' at end of statement",
+                            ));
+                        }
+                        return Ok(());
+                    } else if self.match_token(TokenKind::MinusEq) {
+                        self.check_var_mutation(ident)?;
+                        let temp_lhs = self.alloc_temp()?;
+                        self.emit_inst(PX64_OP_SPILL_LOAD, temp_lhs, slot, 0)?;
+                        let temp_rhs = self.alloc_temp()?;
+                        self.expression(temp_rhs)?;
+                        self.emit_inst(PX64_OP_SUB, temp_lhs, temp_lhs, temp_rhs)?;
+                        self.emit_inst(PX64_OP_SPILL_STORE, slot, temp_lhs, 0)?;
+                        self.free_temp(temp_rhs);
+                        self.free_temp(temp_lhs);
+                        if !self.match_token(TokenKind::Semi) {
+                            return Err(self.error(
+                                "ERR_MISSING_SEMICOLON",
+                                "Missing semicolon ';' at end of compound assignment",
+                                "Semicolon ';'",
+                                "Statement -> Compound Subtraction Assignment",
+                                "Append ';' at end of statement",
+                            ));
+                        }
+                        return Ok(());
+                    }
+                }
+
+                let var_reg = self.resolve_var(ident)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.check_var_mutation(ident)?;
                     // Handle hardware handle allocation tracking
@@ -3202,6 +3313,9 @@ impl<'a> Compiler<'a> {
                     let field_name = &self.src[field_tok.start..field_tok.start + field_tok.len];
                     let (inst_id, field_offset) = self.lookup_struct_field(var_name, field_name)?;
                     self.emit_inst(PX64_OP_STRUCT_LOAD, dst, inst_id, field_offset)?;
+                    Ok(None)
+                } else if let Some(slot) = self.is_spilled_var(tok) {
+                    self.emit_inst(PX64_OP_SPILL_LOAD, dst, slot, 0)?;
                     Ok(None)
                 } else {
                     let var_reg = self.resolve_var(tok)?;
