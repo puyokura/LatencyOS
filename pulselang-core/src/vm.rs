@@ -529,22 +529,26 @@ impl<'a> PX64VM<'a> {
                 PX64_OP_DIV => {
                     if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
                         let denom = self.regs[rs2];
-                        self.regs[rd] = if denom != 0 {
-                            self.regs[rs1] / denom
-                        } else {
-                            0
-                        };
+                        if denom == 0 {
+                            return Err(CompileError::simple(
+                                "ERR_PX64_DIV_BY_ZERO",
+                                "Division by zero in px64 virtual register machine",
+                            ));
+                        }
+                        self.regs[rd] = self.regs[rs1].wrapping_div(denom);
                     }
                 }
 
                 PX64_OP_MOD => {
                     if rd < PX64_NUM_REGISTERS && rs1 < PX64_NUM_REGISTERS && rs2 < PX64_NUM_REGISTERS {
                         let denom = self.regs[rs2];
-                        self.regs[rd] = if denom != 0 {
-                            self.regs[rs1] % denom
-                        } else {
-                            0
-                        };
+                        if denom == 0 {
+                            return Err(CompileError::simple(
+                                "ERR_PX64_DIV_BY_ZERO",
+                                "Modulo by zero in px64 virtual register machine",
+                            ));
+                        }
+                        self.regs[rd] = self.regs[rs1].wrapping_rem(denom);
                     }
                 }
 

@@ -61,9 +61,9 @@ pub fn compile_pulse_to_binary_with_tokens(
     out_buf: &mut [u8],
 ) -> Result<usize, CompileError> {
     let mut lexer = Lexer::new(src);
-    let _tok_count = lexer.tokenize(tokens)?;
+    let tok_count = lexer.tokenize(tokens)?;
 
-    let mut compiler = Compiler::new(src, tokens);
+    let mut compiler = Compiler::new(src, &tokens[..=tok_count]);
     let code_len = compiler.compile()?;
 
     let str_pool_len = compiler.str_pool_len;
@@ -116,9 +116,9 @@ pub fn compile(src: &str) -> Result<alloc::vec::Vec<u8>, CompileError> {
 pub fn check(src: &str) -> Result<CompileStats, CompileError> {
     let mut tokens = alloc::vec![Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src.as_bytes());
-    let _tok_count = lexer.tokenize(&mut tokens)?;
+    let tok_count = lexer.tokenize(&mut tokens)?;
 
-    let mut compiler = Compiler::new(src.as_bytes(), &tokens);
+    let mut compiler = Compiler::new(src.as_bytes(), &tokens[..=tok_count]);
     let _code_len = compiler.compile()?;
     Ok(compiler.stats())
 }
@@ -528,6 +528,36 @@ mod tests {
         run_binary_with_output(&bin, &[], &mut out).expect("Combinator matrix multiplication run failed");
         let lines: alloc::vec::Vec<&str> = out.trim().lines().collect();
         assert_eq!(lines, &["30", "24", "18", "84", "69", "54", "138", "114", "90"]);
+    }
+    #[test]
+    fn test_compile_time_div_by_zero() {
+        let src = "let $x = 10 / 0;\n";
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_DIV_BY_ZERO");
+    }
+
+    #[test]
+    fn test_runtime_div_by_zero() {
+        let src = r#"
+            let $a = 10;
+            let $b = 0;
+            let $c = $a / $b;
+        "#;
+        let bin = compile(src).expect("Compilation should succeed for variable division");
+        let err = run_binary(&bin, &[]).unwrap_err();
+        assert_eq!(err.code, "ERR_PX64_DIV_BY_ZERO");
+    }
+
+    #[test]
+    fn test_runtime_mod_by_zero() {
+        let src = r#"
+            let $a = 10;
+            let $b = 0;
+            let $c = $a % $b;
+        "#;
+        let bin = compile(src).expect("Compilation should succeed for variable modulo");
+        let err = run_binary(&bin, &[]).unwrap_err();
+        assert_eq!(err.code, "ERR_PX64_DIV_BY_ZERO");
     }
     #[test]
     fn test_error_json_formatting() {

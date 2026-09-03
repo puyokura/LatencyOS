@@ -264,7 +264,11 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn declare_array(&mut self, tok: Token, len: usize) -> Result<u8, CompileError> {
-        let name = &self.src[tok.start..tok.start + tok.len];
+        let name = if tok.start + tok.len <= self.src.len() {
+            &self.src[tok.start..tok.start + tok.len]
+        } else {
+            &[]
+        };
         if self.array_count >= 8 {
             return Err(self.error(
                 "ERR_MAX_ARRAYS_EXCEEDED",
@@ -1343,7 +1347,11 @@ impl<'a> Compiler<'a> {
     }
 
     fn declare_var(&mut self, tok: Token, is_mut: bool) -> Result<u8, CompileError> {
-        let name = &self.src[tok.start..tok.start + tok.len];
+        let name = if tok.start + tok.len <= self.src.len() {
+            &self.src[tok.start..tok.start + tok.len]
+        } else {
+            &[]
+        };
         match name {
             b"$rax" | b"$r0" => return Ok(0),
             b"$rcx" | b"$r1" => return Ok(1),
@@ -2006,16 +2014,17 @@ impl<'a> Compiler<'a> {
                     && (self.peek_ahead(1).kind == TokenKind::IntrinsicIdent || self.peek_ahead(1).kind == TokenKind::Ident)
                 {
                     let next_tok = self.peek_ahead(1);
-                    let name = &self.src[next_tok.start..next_tok.start + next_tok.len];
-                    if name == b"@row" || name == b"@col" || name == b"@slice" {
-                        self.advance(); // consume '=' or ':='
-                        let view = self.parse_view_source()?;
-                        self.declare_view(ident, view.arr_id, view.base_reg, view.stride_imm, view.len_imm)?;
-                        self.match_token(TokenKind::Semi);
-                        return Ok(());
+                    if next_tok.start + next_tok.len <= self.src.len() {
+                        let name = &self.src[next_tok.start..next_tok.start + next_tok.len];
+                        if name == b"@row" || name == b"@col" || name == b"@slice" {
+                            self.advance(); // consume '=' or ':='
+                            let view = self.parse_view_source()?;
+                            self.declare_view(ident, view.arr_id, view.base_reg, view.stride_imm, view.len_imm)?;
+                            self.match_token(TokenKind::Semi);
+                            return Ok(());
+                        }
                     }
                 }
-
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.expression(var_reg)?;
@@ -3080,18 +3089,28 @@ impl<'a> Compiler<'a> {
                 val = Some(match op {
                     TokenKind::Star => a.wrapping_mul(b),
                     TokenKind::Slash => {
-                        if b != 0 {
-                            a.wrapping_div(b)
-                        } else {
-                            0
+                        if b == 0 {
+                            return Err(self.error(
+                                "ERR_DIV_BY_ZERO",
+                                "Division by zero encountered in constant expression",
+                                "Non-zero divisor",
+                                "Expression -> Constant Division",
+                                "Ensure denominator constant is not zero",
+                            ));
                         }
+                        a.wrapping_div(b)
                     }
                     TokenKind::Percent => {
-                        if b != 0 {
-                            a.wrapping_rem(b)
-                        } else {
-                            0
+                        if b == 0 {
+                            return Err(self.error(
+                                "ERR_DIV_BY_ZERO",
+                                "Modulo by zero encountered in constant expression",
+                                "Non-zero divisor",
+                                "Expression -> Constant Modulo",
+                                "Ensure denominator constant is not zero",
+                            ));
                         }
+                        a.wrapping_rem(b)
                     }
                     _ => 0,
                 });

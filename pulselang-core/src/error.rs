@@ -206,6 +206,11 @@ impl CompileError {
                 writeln!(w, "[ROOT_CAUSE]: Attempted to unwrap an Err tagged value without checking @is_ok()")?;
                 writeln!(w, "[AI_REPAIR_HINT]: Guard @unwrap($res) with 'if (@is_ok($res))' check")?;
             }
+            "ERR_PX64_DIV_BY_ZERO" => {
+                writeln!(w, "[RUNTIME_FAULT_CATEGORY]: Division or Modulo by Zero Fault")?;
+                writeln!(w, "[ROOT_CAUSE]: Division (/) or modulo (%) operation attempted with a zero divisor")?;
+                writeln!(w, "[AI_REPAIR_HINT]: Ensure divisor variable is non-zero before dividing or computing modulo")?;
+            }
             "ERR_PX64_INVALID_OPCODE" => {
                 writeln!(w, "[RUNTIME_FAULT_CATEGORY]: Invalid Opcode Execution Fault")?;
                 writeln!(w, "[ROOT_CAUSE]: Virtual machine encountered an unrecognized or unregistered instruction opcode")?;
