@@ -3569,6 +3569,10 @@ impl<'a> Compiler<'a> {
                         b"@crc32" | b"hash.crc32" => (NATIVE_CRC32, 2),
                         b"@vram_read" | b"vram.read" => (NATIVE_VRAM_READ, 2),
                         b"@vram_write" | b"vram.write" => (NATIVE_VRAM_WRITE, 3),
+                        b"@to_fix" | b"fix.to_fix" => (NATIVE_FIX_TO_FIX, 2),
+                        b"@to_i64" | b"fix.to_i64" => (NATIVE_FIX_TO_I64, 2),
+                        b"@fix_mul" | b"fix.mul" => (NATIVE_FIX_MUL, 3),
+                        b"@fix_div" | b"fix.div" => (NATIVE_FIX_DIV, 3),
                         _ => {
                             return Err(self.error(
                                 "ERR_UNKNOWN_INTRINSIC",

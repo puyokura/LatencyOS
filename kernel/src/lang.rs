@@ -1102,6 +1102,58 @@ impl<'a> PX64VM<'a> {
                             0
                         }
 
+                        NATIVE_FIX_TO_FIX => {
+                            let q = if arg_reg > 0 {
+                                (self.regs[(arg_reg - 1) as usize] & 63) as u32
+                            } else {
+                                16
+                            };
+                            arg_val.wrapping_shl(q)
+                        }
+
+                        NATIVE_FIX_TO_I64 => {
+                            let q = if arg_reg > 0 {
+                                (self.regs[(arg_reg - 1) as usize] & 63) as u32
+                            } else {
+                                16
+                            };
+                            arg_val.wrapping_shr(q)
+                        }
+
+                        NATIVE_FIX_MUL => {
+                            let b = if arg_reg > 0 {
+                                self.regs[(arg_reg - 1) as usize]
+                            } else {
+                                0
+                            };
+                            let q = if arg_reg > 1 {
+                                (self.regs[(arg_reg - 2) as usize] & 63) as u32
+                            } else {
+                                16
+                            };
+                            arg_val.wrapping_mul(b).wrapping_shr(q)
+                        }
+
+                        NATIVE_FIX_DIV => {
+                            let b = if arg_reg > 0 {
+                                self.regs[(arg_reg - 1) as usize]
+                            } else {
+                                0
+                            };
+                            let q = if arg_reg > 1 {
+                                (self.regs[(arg_reg - 2) as usize] & 63) as u32
+                            } else {
+                                16
+                            };
+                            if b == 0 {
+                                return Err(CompileError::simple(
+                                    "ERR_PX64_DIV_BY_ZERO",
+                                    "Division by zero in fixed-point division",
+                                ));
+                            }
+                            arg_val.wrapping_shl(q).wrapping_div(b)
+                        }
+
                         _ => 0,
                     };
 

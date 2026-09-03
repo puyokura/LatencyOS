@@ -133,6 +133,10 @@ pub const NATIVE_BIT_LZCNT: u8 = 26;
 pub const NATIVE_CRC32: u8 = 27;
 pub const NATIVE_VRAM_READ: u8 = 28;
 pub const NATIVE_VRAM_WRITE: u8 = 29;
+pub const NATIVE_FIX_TO_FIX: u8 = 30;
+pub const NATIVE_FIX_TO_I64: u8 = 31;
+pub const NATIVE_FIX_MUL: u8 = 32;
+pub const NATIVE_FIX_DIV: u8 = 33;
 
 /// Map register index to canonical x64-compatible register name ($rax..$r15, #f0..#f3).
 pub fn px64_reg_name(reg_id: u8) -> &'static str {
@@ -193,6 +197,10 @@ pub fn px64_native_name(func_id: u8) -> &'static str {
         NATIVE_CRC32 => "@crc32",
         NATIVE_VRAM_READ => "@vram_read",
         NATIVE_VRAM_WRITE => "@vram_write",
+        NATIVE_FIX_TO_FIX => "@to_fix",
+        NATIVE_FIX_TO_I64 => "@to_i64",
+        NATIVE_FIX_MUL => "@fix_mul",
+        NATIVE_FIX_DIV => "@fix_div",
         _ => "@native",
     }
 }

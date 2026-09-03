@@ -669,6 +669,45 @@ mod tests {
         assert_eq!(err.code, "ERR_CIRCULAR_INCLUDE");
     }
     #[test]
+    fn test_fixed_point_q_format_arithmetic() {
+        let src = r#"
+            // Q16.16 fixed-point arithmetic test
+            let $a = @to_fix(3, 16);  // 3 * 65536 = 196608
+            let $b = @to_fix(4, 16);  // 4 * 65536 = 262144
+            let $prod = @fix_mul($a, $b, 16); // 12 in Q16.16 = 786432
+            let $quot = @fix_div($prod, $a, 16); // 4 in Q16.16 = 262144
+            let $int_res = @to_i64($quot, 16); // 4
+            @assert($int_res == 4);
+            @assert($prod == 786432);
+        "#;
+        let bin = compile(src).expect("Fixed point compilation failed");
+        run_binary(&bin, &[]).expect("Fixed point execution failed");
+    }
+    #[test]
+    fn test_fixed_point_sine_lut_interpolation() {
+        let src = r#"
+            // Sine LUT in Q16.16: sin(0)=0, sin(pi/6)=0.5, sin(pi/2)=1.0
+            // 0 -> 0, 0.5 -> 32768, 1.0 -> 65536
+            const SINE_Q16: [i64; 3] = [0, 32768, 65536];
+            let $sin_0 = SINE_Q16[0];
+            let $sin_half = SINE_Q16[1];
+            let $sin_one = SINE_Q16[2];
+
+            // Amplitude scaling: 10 * sin(pi/2) = 10
+            let $amp = @to_fix(10, 16);
+            let $scaled = @fix_mul($amp, $sin_one, 16);
+            let $res_int = @to_i64($scaled, 16);
+            @assert($res_int == 10);
+
+            // Half scaling: 10 * sin(pi/6) = 5
+            let $scaled_half = @fix_mul($amp, $sin_half, 16);
+            let $res_half = @to_i64($scaled_half, 16);
+            @assert($res_half == 5);
+        "#;
+        let bin = compile(src).expect("Sine LUT fixed point compile failed");
+        run_binary(&bin, &[]).expect("Sine LUT fixed point run failed");
+    }
+    #[test]
     fn test_error_json_formatting() {
         let src = "let $x = 10;\n$x := 20;\n";
         let mut buf = [0u8; 1024];
