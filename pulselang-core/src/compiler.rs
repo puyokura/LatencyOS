@@ -19,8 +19,9 @@ pub struct FnMeta {
     pub param_names: [[u8; 16]; 4],
     pub param_lens: [usize; 4],
     pub param_count: u8,
+    pub ensures_tokens: [(usize, usize); 4], // (start_token_idx, end_token_idx)
+    pub ensures_count: u8,
 }
-
 impl FnMeta {
     pub const fn empty() -> Self {
         Self {
@@ -30,6 +31,8 @@ impl FnMeta {
             param_names: [[0; 16]; 4],
             param_lens: [0; 4],
             param_count: 0,
+            ensures_tokens: [(0, 0); 4],
+            ensures_count: 0,
         }
     }
 }
@@ -90,6 +93,43 @@ impl StructDefMeta {
         }
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub struct EnumDefMeta {
+    pub name: [u8; 32],
+    pub name_len: usize,
+    pub variants: [[u8; 32]; MAX_ENUM_VARIANTS],
+    pub variant_lens: [usize; MAX_ENUM_VARIANTS],
+    pub variant_count: usize,
+}
+
+impl EnumDefMeta {
+    pub const fn empty() -> Self {
+        Self {
+            name: [0; 32],
+            name_len: 0,
+            variants: [[0; 32]; MAX_ENUM_VARIANTS],
+            variant_lens: [0; MAX_ENUM_VARIANTS],
+            variant_count: 0,
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("Enum")
+    }
+
+    pub fn variant_str(&self, idx: usize) -> &str {
+        if idx < self.variant_count {
+            core::str::from_utf8(&self.variants[idx][..self.variant_lens[idx]]).unwrap_or("Variant")
+        } else {
+            "Variant"
+        }
+    }
+
+    pub fn variants_suggestion(&self) -> &'static str {
+        "[AI_REPAIR_HINT] Valid variants are declared in the enum definition"
+    }
+}
+
 
 #[derive(Clone, Copy)]
 pub struct StructInstMeta {
@@ -192,6 +232,10 @@ pub struct Compiler<'a> {
     pub var_spill: [bool; MAX_VARS],
     pub var_spill_slot: [u8; MAX_VARS],
     pub var_count: usize,
+    pub var_enum_types: [Option<usize>; MAX_VARS],
+    pub enums: [EnumDefMeta; MAX_ENUMS],
+    pub enum_count: usize,
+    pub current_expr_enum_type: Option<usize>,
     pub spill_count: usize,
     pub str_pool: [u8; MAX_STRING_POOL],
     pub str_pool_len: usize,
@@ -237,6 +281,10 @@ impl<'a> Compiler<'a> {
             var_spill: [false; MAX_VARS],
             var_spill_slot: [0; MAX_VARS],
             var_count: 0,
+            var_enum_types: [None; MAX_VARS],
+            enums: [EnumDefMeta::empty(); MAX_ENUMS],
+            enum_count: 0,
+            current_expr_enum_type: None,
             spill_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
@@ -925,6 +973,163 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    pub fn declare_enum_def(&mut self) -> Result<(), CompileError> {
+        let name_tok = self.advance();
+        if name_tok.kind != TokenKind::Ident {
+            return Err(self.error(
+                "ERR_EXPECTED_ENUM_NAME",
+                "Expected enum identifier name after 'enum' keyword",
+                "Enum name identifier",
+                "Statement -> Enum Definition",
+                "Specify enum name, e.g. 'enum State'",
+            ));
+        }
+        let e_name = &self.src[name_tok.start..name_tok.start + name_tok.len];
+        if self.enum_count >= MAX_ENUMS {
+            return Err(self.error(
+                "ERR_MAX_ENUMS_EXCEEDED",
+                "Maximum distinct enum definitions reached (16 enum types limit)",
+                "Fewer enum definitions",
+                "Enum Definition",
+                "Reduce distinct enum declarations across script",
+            ));
+        }
+
+        for i in 0..self.enum_count {
+            let def = &self.enums[i];
+            if def.name_len == e_name.len() && &def.name[..def.name_len] == e_name {
+                return Err(self.error(
+                    "ERR_DUPLICATE_ENUM_NAME",
+                    "Enum type name is already defined",
+                    "Unique enum type name",
+                    "Enum Definition",
+                    "Rename duplicate enum type",
+                ));
+            }
+        }
+
+        if !self.match_token(TokenKind::LBrace) {
+            return Err(self.error(
+                "ERR_EXPECTED_LBRACE",
+                "Expected opening brace '{' after enum name",
+                "Left brace '{'",
+                "Statement -> Enum Definition",
+                "Add '{' to start enum variant list",
+            ));
+        }
+
+        let mut def = EnumDefMeta::empty();
+        def.name_len = core::cmp::min(e_name.len(), 32);
+        def.name[..def.name_len].copy_from_slice(&e_name[..def.name_len]);
+
+        while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
+            let v_tok = self.advance();
+            if v_tok.kind != TokenKind::Ident {
+                return Err(self.error(
+                    "ERR_EXPECTED_VARIANT_NAME",
+                    "Expected variant identifier in enum definition",
+                    "Variant name identifier",
+                    "Statement -> Enum Variants",
+                    "Specify variant name, e.g. 'Idle'",
+                ));
+            }
+            let v_name = &self.src[v_tok.start..v_tok.start + v_tok.len];
+            let v_idx = def.variant_count;
+            if v_idx >= MAX_ENUM_VARIANTS {
+                return Err(self.error(
+                    "ERR_MAX_VARIANTS_EXCEEDED",
+                    "Maximum enum variants reached (16 variants limit per enum)",
+                    "Fewer enum variants",
+                    "Statement -> Enum Variants",
+                    "Reduce variant count to 16 or fewer",
+                ));
+            }
+
+            for j in 0..v_idx {
+                if def.variant_lens[j] == v_name.len() && &def.variants[j][..def.variant_lens[j]] == v_name {
+                    return Err(self.error(
+                        "ERR_DUPLICATE_ENUM_VARIANT",
+                        "Duplicate enum variant name within enum definition",
+                        "Unique variant identifier",
+                        "Statement -> Enum Variants",
+                        "Rename or remove duplicate enum variant",
+                    ));
+                }
+            }
+
+            let len = core::cmp::min(v_name.len(), 32);
+            def.variants[v_idx][..len].copy_from_slice(&v_name[..len]);
+            def.variant_lens[v_idx] = len;
+            def.variant_count += 1;
+
+            if self.match_token(TokenKind::Comma) || self.match_token(TokenKind::Semi) {
+                // Optional trailing separator
+            }
+        }
+
+        if !self.match_token(TokenKind::RBrace) {
+            return Err(self.error(
+                "ERR_EXPECTED_RBRACE",
+                "Expected closing brace '}' after enum definition variants",
+                "Right brace '}'",
+                "Statement -> Enum Definition",
+                "Close enum variants with '}'",
+            ));
+        }
+        self.match_token(TokenKind::Semi);
+
+        self.enums[self.enum_count] = def;
+        self.enum_count += 1;
+
+        Ok(())
+    }
+
+    pub fn lookup_enum_by_name(&self, name: &[u8]) -> Option<usize> {
+        for i in 0..self.enum_count {
+            let def = &self.enums[i];
+            if def.name_len == name.len() && &def.name[..def.name_len] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn lookup_enum_variant(&self, enum_idx: usize, variant_name: &[u8]) -> Option<usize> {
+        if enum_idx >= self.enum_count {
+            return None;
+        }
+        let def = &self.enums[enum_idx];
+        for j in 0..def.variant_count {
+            if def.variant_lens[j] == variant_name.len() && &def.variants[j][..def.variant_lens[j]] == variant_name {
+                return Some(j);
+            }
+        }
+        None
+    }
+
+    pub fn get_var_index(&self, tok: Token) -> Option<usize> {
+        let name = if tok.start + tok.len <= self.src.len() {
+            &self.src[tok.start..tok.start + tok.len]
+        } else {
+            return None;
+        };
+        for i in 0..self.var_count {
+            if self.var_lens[i] == name.len() && &self.var_names[i][..self.var_lens[i]] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn get_var_enum_type(&self, tok: Token) -> Option<usize> {
+        if let Some(var_idx) = self.get_var_index(tok) {
+            if var_idx < MAX_VARS {
+                return self.var_enum_types[var_idx];
+            }
+        }
+        None
+    }
+
     pub fn is_struct_type(&self, type_tok: Token) -> bool {
         let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
         for i in 0..self.struct_def_count {
@@ -1470,7 +1675,7 @@ impl<'a> Compiler<'a> {
             &[]
         };
         match name {
-            b"$rax" | b"$r0" => return Ok(0),
+            b"$rax" | b"$r0" | b"$result" | b"$ret" => return Ok(0),
             b"$rcx" | b"$r1" => return Ok(1),
             b"$rdx" | b"$r2" => return Ok(2),
             b"$rbx" | b"$r3" => return Ok(3),
@@ -1563,6 +1768,8 @@ impl<'a> Compiler<'a> {
         let name = &self.src[tok.start..tok.start + tok.len];
         if name.starts_with(b"#")
             || name == b"$rax"
+            || name == b"$result"
+            || name == b"$ret"
             || name == b"$rcx"
             || name == b"$rdx"
             || name == b"$rbx"
@@ -1595,7 +1802,7 @@ impl<'a> Compiler<'a> {
     fn resolve_var(&mut self, tok: Token) -> Result<u8, CompileError> {
         let name = &self.src[tok.start..tok.start + tok.len];
         match name {
-            b"$rax" | b"$r0" => return Ok(0),
+            b"$rax" | b"$r0" | b"$result" | b"$ret" => return Ok(0),
             b"$rcx" | b"$r1" => return Ok(1),
             b"$rdx" | b"$r2" => return Ok(2),
             b"$rbx" | b"$r3" => return Ok(3),
@@ -1684,7 +1891,24 @@ impl<'a> Compiler<'a> {
         Ok(self.code_len)
     }
 
-    fn statement(&mut self) -> Result<(), CompileError> {
+    fn emit_ensures_checks(&mut self, fn_idx: usize) -> Result<(), CompileError> {
+        let count = self.functions[fn_idx].ensures_count as usize;
+        if count == 0 {
+            return Ok(());
+        }
+        let saved_current = self.current;
+        for i in 0..count {
+            let (start_tok, _) = self.functions[fn_idx].ensures_tokens[i];
+            self.current = start_tok;
+            let cond_reg = self.alloc_temp()?;
+            self.expression(cond_reg)?;
+            self.emit_inst(PX64_OP_ASSERT, cond_reg, 0, 0)?;
+            self.free_temp(cond_reg);
+        }
+        self.current = saved_current;
+        Ok(())
+    }
+    pub(crate) fn statement(&mut self) -> Result<(), CompileError> {
         let tok = self.peek();
 
         match tok.kind {
@@ -1692,6 +1916,40 @@ impl<'a> Compiler<'a> {
                 self.advance();
                 return Ok(());
             }
+            TokenKind::AtTest => {
+                self.advance(); // consume '@test'
+                if self.peek().kind == TokenKind::StringLit {
+                    self.advance();
+                }
+                if self.peek().kind == TokenKind::AtBudget || self.peek().kind == TokenKind::Budget {
+                    self.advance();
+                    if self.match_token(TokenKind::LParen) {
+                        self.advance(); // consume budget literal
+                        self.match_token(TokenKind::RParen);
+                    }
+                }
+                if self.match_token(TokenKind::LBrace) {
+                    let mut depth = 1usize;
+                    while self.current < self.tokens.len() && depth > 0 {
+                        match self.tokens[self.current].kind {
+                            TokenKind::LBrace => depth += 1,
+                            TokenKind::RBrace => depth -= 1,
+                            TokenKind::Eof => break,
+                            _ => {}
+                        }
+                        self.current += 1;
+                    }
+                } else if self.match_token(TokenKind::LParen) {
+                    // Legacy or alternative syntax @test(...)
+                    while self.peek().kind != TokenKind::RParen && self.peek().kind != TokenKind::Eof {
+                        self.advance();
+                    }
+                    self.match_token(TokenKind::RParen);
+                    self.match_token(TokenKind::Semi);
+                }
+                self.match_token(TokenKind::Semi);
+            }
+
             TokenKind::AtContract => {
                 self.advance();
                 self.match_token(TokenKind::Colon);
@@ -2024,6 +2282,7 @@ impl<'a> Compiler<'a> {
                 self.advance();
                 let is_mut = self.match_token(TokenKind::Mut);
                 let ident = self.advance();
+                let mut annotated_enum_type = None;
                 if self.match_token(TokenKind::Colon) {
                     // Array declaration: let $buf: [i64; N]; or let $buf: [i64; N] = [1, 2, 3];
                     if self.match_token(TokenKind::LBracket) {
@@ -2111,17 +2370,20 @@ impl<'a> Compiler<'a> {
                         self.match_token(TokenKind::Semi);
                         return Ok(());
                     } else {
-                        // Struct instance declaration: let $pt: Point; or type annotation let $x: i64 = 10;
+                        // Struct instance declaration: let $pt: Point; or type annotation let $x: i64 = 10; or let $s: State = State::Idle;
                         let type_tok = self.advance();
                         if self.is_struct_type(type_tok) {
                             self.declare_struct_inst(ident, type_tok)?;
                             self.match_token(TokenKind::Semi);
                             return Ok(());
                         }
+                        let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
+                        if let Some(e_idx) = self.lookup_enum_by_name(type_name) {
+                            annotated_enum_type = Some(e_idx);
+                        }
                         // Primitive type annotation, e.g. let $x: i64 = 10;
                     }
                 }
-
                 // Check for array literal initialization without type annotation:
                 // e.g. let $a = [1, 2, 3]; or let mut $a = [1, 2, 3];
                 if (self.peek().kind == TokenKind::ColonEq || self.peek().kind == TokenKind::Eq)
@@ -2188,6 +2450,7 @@ impl<'a> Compiler<'a> {
                 }
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
+                    self.current_expr_enum_type = None;
                     if let Some(slot) = self.is_spilled_var(ident) {
                         let temp_val = self.alloc_temp()?;
                         self.expression(temp_val)?;
@@ -2195,6 +2458,18 @@ impl<'a> Compiler<'a> {
                         self.free_temp(temp_val);
                     } else {
                         self.expression(var_reg)?;
+                    }
+                    let final_enum_type = annotated_enum_type.or(self.current_expr_enum_type);
+                    if let Some(var_idx) = self.get_var_index(ident) {
+                        if var_idx < MAX_VARS {
+                            self.var_enum_types[var_idx] = final_enum_type;
+                        }
+                    }
+                } else if annotated_enum_type.is_some() {
+                    if let Some(var_idx) = self.get_var_index(ident) {
+                        if var_idx < MAX_VARS {
+                            self.var_enum_types[var_idx] = annotated_enum_type;
+                        }
                     }
                 }
                 self.match_token(TokenKind::Semi);
@@ -2263,8 +2538,10 @@ impl<'a> Compiler<'a> {
 
             TokenKind::Match => {
                 self.advance(); // consume 'match'
+                self.current_expr_enum_type = None;
                 let match_reg = self.alloc_temp()?;
                 self.expression(match_reg)?;
+                let mut match_enum_type = self.current_expr_enum_type;
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
                         "ERR_EXPECTED_LBRACE",
@@ -2280,6 +2557,7 @@ impl<'a> Compiler<'a> {
                 let mut has_ok_arm = false;
                 let mut has_err_arm = false;
                 let mut has_wildcard = false;
+                let mut handled_variants = [false; MAX_ENUM_VARIANTS];
 
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     if arm_count >= 16 {
@@ -2298,6 +2576,7 @@ impl<'a> Compiler<'a> {
                     if pat_tok.kind == TokenKind::Underscore || name == b"_" {
                         self.advance(); // consume '_'
                         has_wildcard = true;
+                        handled_variants.fill(true);
                         if !self.match_token(TokenKind::FatArrow) {
                             return Err(self.error(
                                 "ERR_EXPECTED_FAT_ARROW",
@@ -2321,6 +2600,121 @@ impl<'a> Compiler<'a> {
                         arm_jmp_ends[arm_count] = jmp_end;
                         arm_count += 1;
                         break;
+                    } else if (pat_tok.kind == TokenKind::Ident || pat_tok.kind == TokenKind::IntrinsicIdent)
+                        && self.peek_ahead(1).kind == TokenKind::ColonColon
+                    {
+                        let enum_tok = self.advance(); // consume EnumName
+                        self.advance(); // consume '::'
+                        let var_tok = self.advance(); // consume VariantName
+                        if var_tok.kind != TokenKind::Ident {
+                            return Err(self.error(
+                                "ERR_EXPECTED_VARIANT_NAME",
+                                "Expected variant identifier after '::'",
+                                "Enum variant identifier",
+                                "Match Pattern -> Enum Arm",
+                                "Specify arm as 'EnumName::Variant => { ... }'",
+                            ));
+                        }
+                        let enum_name = &self.src[enum_tok.start..enum_tok.start + enum_tok.len];
+                        let var_name = &self.src[var_tok.start..var_tok.start + var_tok.len];
+
+                        let enum_idx = match self.lookup_enum_by_name(enum_name) {
+                            Some(idx) => idx,
+                            None => {
+                                return Err(self.error(
+                                    "ERR_UNKNOWN_ENUM_TYPE",
+                                    "Enum type name is not defined",
+                                    "Declared enum type name",
+                                    "Match Pattern -> Enum Arm",
+                                    "Declare enum before matching its variants, e.g. 'enum State { ... }'",
+                                ));
+                            }
+                        };
+
+                        if let Some(expected_enum) = match_enum_type {
+                            if expected_enum != enum_idx {
+                                return Err(self.error(
+                                    "ERR_ENUM_TYPE_MISMATCH",
+                                    "Pattern enum type does not match matched expression enum type",
+                                    "Matching enum type",
+                                    "Match Pattern -> Enum Arm",
+                                    "Use variants from the same enum type being matched",
+                                ));
+                            }
+                        } else {
+                            match_enum_type = Some(enum_idx);
+                        }
+
+                        let variant_idx = match self.lookup_enum_variant(enum_idx, var_name) {
+                            Some(idx) => idx,
+                            None => {
+                                let suggestion = self.enums[enum_idx].variants_suggestion();
+                                let tok = self.peek();
+                                return Err(CompileError {
+                                    code: "ERR_UNKNOWN_ENUM_VARIANT",
+                                    message: "Enum variant does not exist on enum type",
+                                    line: tok.line,
+                                    col: tok.col,
+                                    byte_offset: tok.start,
+                                    token_kind: tok.kind,
+                                    token_len: tok.len,
+                                    expected: "Valid enum variant name",
+                                    stage: "Match Pattern -> Enum Arm",
+                                    suggestion,
+                                });
+                            }
+                        };
+
+                        if handled_variants[variant_idx] {
+                            let tok = self.peek();
+                            return Err(CompileError {
+                                code: "ERR_UNREACHABLE_PATTERN",
+                                message: "Duplicate or unreachable match pattern arm",
+                                line: tok.line,
+                                col: tok.col,
+                                byte_offset: tok.start,
+                                token_kind: tok.kind,
+                                token_len: tok.len,
+                                expected: "Unique pattern arm",
+                                stage: "Statement -> Match Arm",
+                                suggestion: "[AI_REPAIR_HINT] Remove duplicate or unreachable pattern arm",
+                            });
+                        }
+                        handled_variants[variant_idx] = true;
+
+                        if !self.match_token(TokenKind::FatArrow) {
+                            return Err(self.error(
+                                "ERR_EXPECTED_FAT_ARROW",
+                                "Expected '=>' after match pattern",
+                                "Fat arrow '=>'",
+                                "Statement -> Match Arm",
+                                "Specify arm as 'Enum::Variant => { ... },'",
+                            ));
+                        }
+
+                        let pat_reg = self.alloc_temp()?;
+                        self.emit_imm16(PX64_OP_MOV_IMM, pat_reg, variant_idx as u16)?;
+                        let cmp_reg = self.alloc_temp()?;
+                        self.emit_inst(PX64_OP_CMP_EQ, cmp_reg, match_reg, pat_reg)?;
+                        self.free_temp(pat_reg);
+                        let jz_skip = self.emit_imm16(PX64_OP_JZ, cmp_reg, 0)?;
+                        self.free_temp(cmp_reg);
+
+                        if self.match_token(TokenKind::LBrace) {
+                            while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
+                                self.statement()?;
+                            }
+                            self.match_token(TokenKind::RBrace);
+                        } else {
+                            self.statement()?;
+                        }
+                        self.match_token(TokenKind::Comma);
+
+                        let jmp_end = self.emit_imm16(PX64_OP_JMP, 0, 0)?;
+                        arm_jmp_ends[arm_count] = jmp_end;
+                        arm_count += 1;
+
+                        self.patch_imm16(jz_skip, self.code_len as u16);
                     } else if name == b"Ok" {
                         self.advance(); // consume 'Ok'
                         has_ok_arm = true;
@@ -2484,7 +2878,28 @@ impl<'a> Compiler<'a> {
                     ));
                 }
 
-                if (has_ok_arm || has_err_arm) && (!has_ok_arm || !has_err_arm) && !has_wildcard {
+                if let Some(enum_idx) = match_enum_type {
+                    if !has_wildcard {
+                        let def = &self.enums[enum_idx];
+                        for v_idx in 0..def.variant_count {
+                            if !handled_variants[v_idx] {
+                                let tok = self.peek();
+                                return Err(CompileError {
+                                    code: "ERR_NON_EXHAUSTIVE_MATCH",
+                                    message: "Non-exhaustive match: missing variant EnumName::MissingVariant",
+                                    line: tok.line,
+                                    col: tok.col,
+                                    byte_offset: tok.start,
+                                    token_kind: tok.kind,
+                                    token_len: tok.len,
+                                    expected: "Exhaustive match covering all enum variants",
+                                    stage: "Pattern Matching -> Exhaustiveness Check",
+                                    suggestion: "Add a match arm for 'EnumName::MissingVariant => ...' or add a wildcard arm '_ => ...'",
+                                });
+                            }
+                        }
+                    }
+                } else if (has_ok_arm || has_err_arm) && (!has_ok_arm || !has_err_arm) && !has_wildcard {
                     return Err(self.error(
                         "ERR_NON_EXHAUSTIVE_MATCH",
                         "Result pattern match is not exhaustive: must handle both 'Ok($val)' and 'Err($code)', or provide wildcard '_' arm",
@@ -2620,32 +3035,69 @@ impl<'a> Compiler<'a> {
                 self.current_fn = Some(fn_idx);
                 let saved_var_count = self.var_count;
 
-                // Parse 0 or more @requires(condition) clauses
-                while self.match_token(TokenKind::AtRequires) {
-                    if !self.match_token(TokenKind::LParen) {
-                        return Err(self.error(
-                            "ERR_CONTRACT_SYNTAX",
-                            "Expected '(' after @requires",
-                            "Left parenthesis '('",
-                            "Function Contract -> Precondition",
-                            "Specify precondition as '@requires(condition)'",
-                        ));
+                // Parse 0 or more contract clauses: @requires(condition) or @ensures(condition)
+                while self.peek().kind == TokenKind::AtRequires || self.peek().kind == TokenKind::AtEnsures {
+                    if self.match_token(TokenKind::AtRequires) {
+                        if !self.match_token(TokenKind::LParen) {
+                            return Err(self.error(
+                                "ERR_CONTRACT_SYNTAX",
+                                "Expected '(' after @requires",
+                                "Left parenthesis '('",
+                                "Function Contract -> Precondition",
+                                "Specify precondition as '@requires(condition)'",
+                            ));
+                        }
+                        let cond_reg = self.alloc_temp()?;
+                        self.expression(cond_reg)?;
+                        if !self.match_token(TokenKind::RParen) {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @requires condition",
+                                "Closing parenthesis ')'",
+                                "Function Contract -> Precondition",
+                                "Add matching ')' after @requires condition",
+                            ));
+                        }
+                        self.emit_inst(PX64_OP_ASSERT, cond_reg, 0, 0)?;
+                        self.free_temp(cond_reg);
+                    } else if self.match_token(TokenKind::AtEnsures) {
+                        if !self.match_token(TokenKind::LParen) {
+                            return Err(self.error(
+                                "ERR_CONTRACT_SYNTAX",
+                                "Expected '(' after @ensures",
+                                "Left parenthesis '('",
+                                "Function Contract -> Postcondition",
+                                "Specify postcondition as '@ensures(condition)'",
+                            ));
+                        }
+                        let start_tok = self.current;
+                        let mut depth = 1usize;
+                        while self.current < self.tokens.len() && depth > 0 {
+                            match self.tokens[self.current].kind {
+                                TokenKind::LParen => depth += 1,
+                                TokenKind::RParen => depth -= 1,
+                                TokenKind::Eof => break,
+                                _ => {}
+                            }
+                            self.current += 1;
+                        }
+                        if depth > 0 {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @ensures condition",
+                                "Closing parenthesis ')'",
+                                "Function Contract -> Postcondition",
+                                "Add matching ')' after @ensures condition",
+                            ));
+                        }
+                        let end_tok = self.current - 1; // index of RParen
+                        let c = self.functions[fn_idx].ensures_count as usize;
+                        if c < 4 {
+                            self.functions[fn_idx].ensures_tokens[c] = (start_tok, end_tok);
+                            self.functions[fn_idx].ensures_count += 1;
+                        }
                     }
-                    let cond_reg = self.alloc_temp()?;
-                    self.expression(cond_reg)?;
-                    if !self.match_token(TokenKind::RParen) {
-                        return Err(self.error(
-                            "ERR_UNCLOSED_PAREN",
-                            "Missing closing parenthesis ')' in @requires condition",
-                            "Closing parenthesis ')'",
-                            "Function Contract -> Precondition",
-                            "Add matching ')' after @requires condition",
-                        ));
-                    }
-                    self.emit_inst(PX64_OP_ASSERT, cond_reg, 0, 0)?;
-                    self.free_temp(cond_reg);
                 }
-
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
                         "ERR_EXPECTED_LBRACE",
@@ -2660,8 +3112,8 @@ impl<'a> Compiler<'a> {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
-
                 // Default return at end of function
+                self.emit_ensures_checks(fn_idx)?;
                 self.emit_inst(PX64_OP_RET, 0, 0, 0)?;
 
                 self.var_count = saved_var_count;
@@ -2678,12 +3130,20 @@ impl<'a> Compiler<'a> {
                     self.expression(ret_reg)?;
                 }
                 self.match_token(TokenKind::Semi);
+                if let Some(fn_idx) = self.current_fn {
+                    self.emit_ensures_checks(fn_idx)?;
+                }
                 self.emit_inst(PX64_OP_RET, 0, 0, 0)?;
             }
 
             TokenKind::Struct => {
                 self.advance(); // consume 'struct'
                 self.declare_struct_def()?;
+            }
+
+            TokenKind::Enum => {
+                self.advance(); // consume 'enum'
+                self.declare_enum_def()?;
             }
 
             TokenKind::Const => {
@@ -2757,10 +3217,16 @@ impl<'a> Compiler<'a> {
                 if let Some(slot) = self.is_spilled_var(ident) {
                     if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                         self.check_var_mutation(ident)?;
+                        self.current_expr_enum_type = None;
                         let temp_val = self.alloc_temp()?;
                         self.expression(temp_val)?;
                         self.emit_inst(PX64_OP_SPILL_STORE, slot, temp_val, 0)?;
                         self.free_temp(temp_val);
+                        if let Some(var_idx) = self.get_var_index(ident) {
+                            if var_idx < MAX_VARS {
+                                self.var_enum_types[var_idx] = self.current_expr_enum_type;
+                            }
+                        }
                         if !self.match_token(TokenKind::Semi) {
                             return Err(self.error(
                                 "ERR_MISSING_SEMICOLON",
@@ -2834,7 +3300,13 @@ impl<'a> Compiler<'a> {
                             col: ident.col,
                         };
                     }
+                    self.current_expr_enum_type = None;
                     self.expression(var_reg)?;
+                    if let Some(var_idx) = self.get_var_index(ident) {
+                        if var_idx < MAX_VARS {
+                            self.var_enum_types[var_idx] = self.current_expr_enum_type;
+                        }
+                    }
                     if !self.match_token(TokenKind::Semi) {
                         return Err(self.error(
                             "ERR_MISSING_SEMICOLON",
@@ -3432,9 +3904,11 @@ impl<'a> Compiler<'a> {
                     self.emit_inst(PX64_OP_STRUCT_LOAD, dst, inst_id, field_offset)?;
                     Ok(None)
                 } else if let Some(slot) = self.is_spilled_var(tok) {
+                    self.current_expr_enum_type = self.get_var_enum_type(tok);
                     self.emit_inst(PX64_OP_SPILL_LOAD, dst, slot, 0)?;
                     Ok(None)
                 } else {
+                    self.current_expr_enum_type = self.get_var_enum_type(tok);
                     let var_reg = self.resolve_var(tok)?;
                     if var_reg != dst {
                         self.emit_inst(PX64_OP_MOV_REG, dst, var_reg, 0)?;
@@ -3445,6 +3919,55 @@ impl<'a> Compiler<'a> {
 
             TokenKind::IntrinsicIdent | TokenKind::Ident => {
                 let name = &self.src[tok.start..tok.start + tok.len];
+                if self.peek().kind == TokenKind::ColonColon {
+                    self.advance(); // consume '::'
+                    let variant_tok = self.advance();
+                    if variant_tok.kind != TokenKind::Ident {
+                        return Err(self.error(
+                            "ERR_EXPECTED_VARIANT_NAME",
+                            "Expected variant identifier after '::'",
+                            "Enum variant identifier",
+                            "Expression -> Enum Variant",
+                            "Specify variant name, e.g. 'State::Idle'",
+                        ));
+                    }
+                    let variant_name = &self.src[variant_tok.start..variant_tok.start + variant_tok.len];
+                    let enum_idx = match self.lookup_enum_by_name(name) {
+                        Some(idx) => idx,
+                        None => {
+                            return Err(self.error(
+                                "ERR_UNKNOWN_ENUM_TYPE",
+                                "Enum type name is not defined",
+                                "Declared enum type name",
+                                "Expression -> Enum Variant",
+                                "Declare enum before using variants, e.g. 'enum State { ... }'",
+                            ));
+                        }
+                    };
+                    let variant_idx = match self.lookup_enum_variant(enum_idx, variant_name) {
+                        Some(idx) => idx,
+                        None => {
+                            let suggestion = self.enums[enum_idx].variants_suggestion();
+                            let tok = self.peek();
+                            return Err(CompileError {
+                                code: "ERR_UNKNOWN_ENUM_VARIANT",
+                                message: "Enum variant does not exist on enum type",
+                                line: tok.line,
+                                col: tok.col,
+                                byte_offset: tok.start,
+                                token_kind: tok.kind,
+                                token_len: tok.len,
+                                expected: "Valid enum variant name",
+                                stage: "Expression -> Enum Variant",
+                                suggestion,
+                            });
+                        }
+                    };
+                    self.current_expr_enum_type = Some(enum_idx);
+                    self.emit_imm16(PX64_OP_MOV_IMM, dst, variant_idx as u16)?;
+                    return Ok(Some(variant_idx as i64));
+                }
+
                 if self.peek().kind == TokenKind::LBracket {
                     let (tbl_id, _len) = self.lookup_const_table(name)?;
                     self.advance(); // consume '['
@@ -3455,7 +3978,6 @@ impl<'a> Compiler<'a> {
                     self.free_temp(idx_reg);
                     return Ok(None);
                 }
-
                 if self.peek().kind == TokenKind::LParen {
                     // Check if calling a user-defined static function
                     let mut fn_match = None;

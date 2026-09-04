@@ -22,8 +22,8 @@ pub mod vm;
 #[cfg(any(feature = "alloc", test))]
 pub mod include;
 pub use compiler::{
-    ArrayMeta, CompileStats, Compiler, ConstTableMeta, FnMeta, HandleState, StructDefMeta,
-    StructFieldMeta, StructInstMeta,
+    ArrayMeta, CompileStats, Compiler, ConstTableMeta, EnumDefMeta, FnMeta, HandleState,
+    StructDefMeta, StructFieldMeta, StructInstMeta,
 };
 pub use disasm::{disassemble_px64, disassemble_px64_with_filename};
 #[cfg(any(feature = "alloc", test))]
@@ -48,7 +48,17 @@ pub fn compile_pulse_to_binary(src: &[u8], out_buf: &mut [u8]) -> Result<usize, 
         let mut tokens = alloc::vec![Token::empty(); MAX_TOKENS];
         compile_pulse_to_binary_with_tokens(src, &mut tokens, out_buf)
     }
-    #[cfg(not(feature = "alloc"))]
+    #[cfg(all(not(feature = "alloc"), test))]
+    {
+        std::thread_local! {
+            static NO_STD_TOKENS: core::cell::RefCell<[Token; MAX_TOKENS]> = core::cell::RefCell::new([Token::empty(); MAX_TOKENS]);
+        }
+        NO_STD_TOKENS.with(|cell| {
+            let mut tokens = cell.borrow_mut();
+            compile_pulse_to_binary_with_tokens(src, &mut tokens[..], out_buf)
+        })
+    }
+    #[cfg(all(not(feature = "alloc"), not(test)))]
     {
         static mut NO_STD_TOKENS: [Token; 512] = [Token::empty(); 512];
         let tokens = unsafe { &mut *(&raw mut NO_STD_TOKENS) };
@@ -123,6 +133,264 @@ pub fn check(src: &str) -> Result<CompileStats, CompileError> {
     let mut compiler = Compiler::new(src.as_bytes(), &tokens[..=tok_count]);
     let _code_len = compiler.compile()?;
     Ok(compiler.stats())
+}
+
+/// Compiled unit test case with metadata and runnable bytecode payload.
+#[cfg(any(feature = "alloc", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestCaseCompiled {
+    pub name: alloc::string::String,
+    pub line: usize,
+    pub budget_ns: Option<u64>,
+    pub bytecode: alloc::vec::Vec<u8>,
+}
+
+/// Result of executing a unit test case in the px64 VM.
+#[cfg(any(feature = "alloc", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestExecutionResult {
+    pub passed: bool,
+    pub error: Option<alloc::string::String>,
+    pub steps: usize,
+    pub elapsed_ns: u64,
+    pub budget_ns: Option<u64>,
+}
+
+/// Compile all `@test` blocks in PulseLang source script into runnable unit test cases.
+#[cfg(any(feature = "alloc", test))]
+pub fn compile_pulse_tests(src: &[u8]) -> Result<alloc::vec::Vec<TestCaseCompiled>, CompileError> {
+    let mut tokens = alloc::vec![Token::empty(); MAX_TOKENS];
+    let mut lexer = Lexer::new(src);
+    let tok_count = lexer.tokenize(&mut tokens)?;
+
+    // Pass 1: Find all @test blocks
+    struct TestBlockInfo {
+        name: alloc::string::String,
+        line: usize,
+        budget_ns: Option<u64>,
+        body_start_tok: usize,
+        body_end_tok: usize,
+        test_tok_start: usize,
+        test_tok_end: usize,
+    }
+
+    let mut test_blocks = alloc::vec::Vec::new();
+    let mut i = 0;
+    while i <= tok_count {
+        if tokens[i].kind == TokenKind::AtTest {
+            let test_tok_start = i;
+            let line = tokens[i].line;
+            i += 1;
+            let mut name = alloc::string::String::new();
+            if i <= tok_count && tokens[i].kind == TokenKind::StringLit {
+                let tok = tokens[i];
+                if tok.len >= 2 {
+                    let s_bytes = &src[tok.start + 1..tok.start + tok.len - 1];
+                    name = alloc::string::String::from_utf8_lossy(s_bytes).into_owned();
+                }
+                i += 1;
+            }
+
+            let mut budget_ns = None;
+            if i <= tok_count && (tokens[i].kind == TokenKind::AtBudget || tokens[i].kind == TokenKind::Budget) {
+                i += 1;
+                if i <= tok_count && tokens[i].kind == TokenKind::LParen {
+                    i += 1;
+                    if i <= tok_count {
+                        match tokens[i].kind {
+                            TokenKind::TimeLiteral(ns) => budget_ns = Some(ns),
+                            TokenKind::Number(n) if n >= 0 => budget_ns = Some(n as u64),
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    if i <= tok_count && tokens[i].kind == TokenKind::RParen {
+                        i += 1;
+                    }
+                }
+            }
+
+            if i <= tok_count && tokens[i].kind == TokenKind::LBrace {
+                let body_start_tok = i + 1;
+                let mut depth = 1usize;
+                i += 1;
+                while i <= tok_count && depth > 0 {
+                    match tokens[i].kind {
+                        TokenKind::LBrace => depth += 1,
+                        TokenKind::RBrace => depth -= 1,
+                        TokenKind::Eof => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                let body_end_tok = i - 1; // index of RBrace
+                let test_tok_end = i;
+                test_blocks.push(TestBlockInfo {
+                    name,
+                    line,
+                    budget_ns,
+                    body_start_tok,
+                    body_end_tok,
+                    test_tok_start,
+                    test_tok_end,
+                });
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    let mut compiled_tests = alloc::vec::Vec::new();
+
+    for test in test_blocks {
+        // Synthesize token stream: all tokens outside @test blocks, plus the statements inside this @test block, plus EOF
+        let mut test_tokens = alloc::vec::Vec::new();
+        let mut idx = 0;
+        while idx <= tok_count {
+            if idx == test.test_tok_start {
+                // Insert this test's body tokens
+                for b_idx in test.body_start_tok..test.body_end_tok {
+                    test_tokens.push(tokens[b_idx]);
+                }
+                idx = test.test_tok_end;
+            } else {
+                test_tokens.push(tokens[idx]);
+                idx += 1;
+            }
+        }
+        if test_tokens.is_empty() || test_tokens.last().map(|t| t.kind) != Some(TokenKind::Eof) {
+            test_tokens.push(Token {
+                kind: TokenKind::Eof,
+                start: src.len(),
+                len: 0,
+                line: test.line,
+                col: 1,
+            });
+        }
+
+        let mut compiler = Compiler::new(src, &test_tokens);
+        let code_len = compiler.compile()?;
+
+        let str_pool_len = compiler.str_pool_len;
+        let const_pool_count = compiler.const_pool_len;
+        let const_pool_bytes = const_pool_count * 8;
+        let total_size = PX64_HEADER_SIZE + code_len + str_pool_len + const_pool_bytes;
+
+        let mut bin = alloc::vec![0u8; total_size];
+        bin[0..4].copy_from_slice(&PX64_BIN_MAGIC);
+        bin[4..6].copy_from_slice(&PX64_BIN_VERSION.to_be_bytes());
+        bin[6..8].copy_from_slice(&(code_len as u16).to_be_bytes());
+        bin[8..10].copy_from_slice(&(str_pool_len as u16).to_be_bytes());
+        bin[10..12].copy_from_slice(&(const_pool_count as u16).to_be_bytes());
+        bin[12..14].copy_from_slice(&(PX64_NUM_REGISTERS as u16).to_be_bytes());
+        bin[14..16].copy_from_slice(&[0u8, 0u8]);
+
+        bin[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len].copy_from_slice(&compiler.code[..code_len]);
+        bin[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len]
+            .copy_from_slice(&compiler.str_pool[..str_pool_len]);
+        let const_start = PX64_HEADER_SIZE + code_len + str_pool_len;
+        for (c_i, &c) in compiler.const_pool[..const_pool_count].iter().enumerate() {
+            bin[const_start + c_i * 8..const_start + (c_i + 1) * 8].copy_from_slice(&c.to_be_bytes());
+        }
+
+        compiled_tests.push(TestCaseCompiled {
+            name: test.name,
+            line: test.line,
+            budget_ns: test.budget_ns,
+            bytecode: bin,
+        });
+    }
+
+    Ok(compiled_tests)
+}
+
+#[cfg(any(feature = "alloc", test))]
+pub fn run_test_case(test: &TestCaseCompiled) -> TestExecutionResult {
+    let bin = &test.bytecode;
+    if bin.len() < PX64_HEADER_SIZE || bin[0..4] != PX64_BIN_MAGIC {
+        return TestExecutionResult {
+            passed: false,
+            error: Some(alloc::string::String::from("Invalid px64 binary payload")),
+            steps: 0,
+            elapsed_ns: 0,
+            budget_ns: test.budget_ns,
+        };
+    }
+
+    let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+    let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+    let const_count = u16::from_be_bytes([bin[10], bin[11]]) as usize;
+    let const_bytes = const_count * 8;
+
+    if bin.len() < PX64_HEADER_SIZE + code_len + str_pool_len + const_bytes {
+        return TestExecutionResult {
+            passed: false,
+            error: Some(alloc::string::String::from("Truncated px64 binary payload")),
+            steps: 0,
+            elapsed_ns: 0,
+            budget_ns: test.budget_ns,
+        };
+    }
+
+    let code = &bin[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len];
+    let str_pool = &bin[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len];
+
+    let mut const_pool = [0i64; 64];
+    let const_start = PX64_HEADER_SIZE + code_len + str_pool_len;
+    let const_slice_raw = &bin[const_start..const_start + const_bytes];
+    let count = core::cmp::min(const_count, 64);
+    for i in 0..count {
+        let b = &const_slice_raw[i * 8..(i + 1) * 8];
+        const_pool[i] = i64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+    }
+
+    let mut vm = PX64VM::new(code, str_pool, &const_pool[..count], &[]);
+    let mut null_writer = NullWriter;
+
+    #[cfg(feature = "std")]
+    let start_time = std::time::Instant::now();
+
+    let exec_res = vm.run_with_output(&mut null_writer);
+
+    #[cfg(feature = "std")]
+    let elapsed_ns = start_time.elapsed().as_nanos() as u64;
+    #[cfg(not(feature = "std"))]
+    let elapsed_ns = (vm.steps as u64).saturating_mul(15);
+
+    let steps = vm.steps;
+
+    match exec_res {
+        Ok(()) => {
+            if let Some(budget) = test.budget_ns {
+                if elapsed_ns > budget {
+                    return TestExecutionResult {
+                        passed: false,
+                        error: Some(alloc::format!(
+                            "Test exceeded budget: elapsed {}ns > budget {}ns",
+                            elapsed_ns, budget
+                        )),
+                        steps,
+                        elapsed_ns,
+                        budget_ns: test.budget_ns,
+                    };
+                }
+            }
+            TestExecutionResult {
+                passed: true,
+                error: None,
+                steps,
+                elapsed_ns,
+                budget_ns: test.budget_ns,
+            }
+        }
+        Err(err) => TestExecutionResult {
+            passed: false,
+            error: Some(alloc::format!("{}: {}", err.code, err.message)),
+            steps,
+            elapsed_ns,
+            budget_ns: test.budget_ns,
+        },
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -740,5 +1008,251 @@ mod tests {
         err.format_json("script.pul", &mut json_out).unwrap();
         assert!(json_out.contains("\"success\":false"));
         assert!(json_out.contains("ERR_MUTABILITY_VIOLATION"));
+    }
+
+    #[test]
+    fn test_ensures_contract_success_and_failure() {
+        let src_valid = r#"
+            fn abs_val($x) -> i64
+            @ensures($result >= 0)
+            {
+                if ($x < 0) {
+                    return -$x;
+                }
+                return $x;
+            }
+            let $a = abs_val(-42);
+            @assert($a == 42);
+            let $b = abs_val(10);
+            @assert($b == 10);
+        "#;
+        let mut out = alloc::string::String::new();
+        run_source_with_output(src_valid, &[], &mut out).expect("Valid @ensures failed");
+
+        let src_violating = r#"
+            fn bad_inc($x) -> i64
+            @ensures($result > $x)
+            {
+                return $x; // Does not increase, violates @ensures
+            }
+            let $res = bad_inc(5);
+        "#;
+        let mut out2 = alloc::string::String::new();
+        let err = run_source_with_output(src_violating, &[], &mut out2).unwrap_err();
+        assert_eq!(err.code, "ERR_PX64_ASSERTION_FAILED");
+    }
+
+    #[test]
+    fn test_test_block_compilation_and_runner() {
+        let src = r#"
+            fn add($x, $y) -> i64
+            @requires($x >= 0)
+            @ensures($result >= $x)
+            {
+                return $x + $y;
+            }
+
+            @test "add two numbers" @budget(50us) {
+                let $res = add(10, 20);
+                @assert($res == 30);
+            }
+
+            @test "add with zero" {
+                let $res = add(5, 0);
+                @assert($res == 5);
+            }
+
+            @test "failing test" {
+                let $res = add(1, 1);
+                @assert($res == 999);
+            }
+        "#;
+
+        // 1. Normal compilation strips @test blocks completely
+        let bin = compile(src).expect("Normal compilation failed");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+
+        // 2. Unit test compilation discovers all 3 tests
+        let tests = compile_pulse_tests(src.as_bytes()).expect("Test compilation failed");
+        assert_eq!(tests.len(), 3);
+        assert_eq!(tests[0].name, "add two numbers");
+        assert_eq!(tests[0].budget_ns, Some(50_000));
+        assert_eq!(tests[1].name, "add with zero");
+        assert_eq!(tests[1].budget_ns, None);
+        assert_eq!(tests[2].name, "failing test");
+
+        // 3. Execution of unit tests
+        let res0 = run_test_case(&tests[0]);
+        assert!(res0.passed, "Test 0 should pass: {:?}", res0.error);
+        assert!(res0.steps > 0);
+
+        let res1 = run_test_case(&tests[1]);
+        assert!(res1.passed, "Test 1 should pass: {:?}", res1.error);
+
+        let res2 = run_test_case(&tests[2]);
+        assert!(!res2.passed, "Test 2 should fail assertion");
+        assert!(res2.error.as_ref().unwrap().contains("ERR_PX64_ASSERTION_FAILED"));
+    }
+
+    #[test]
+    fn test_enum_definition_and_exhaustive_match() {
+        let src = r#"
+            enum State {
+                Idle,
+                Running,
+                Failed,
+            }
+
+            let $state = State::Running;
+            let mut $code = 0;
+
+            match $state {
+                State::Idle => {
+                    $code = 10;
+                },
+                State::Running => {
+                    $code = 20;
+                },
+                State::Failed => {
+                    $code = 30;
+                },
+            };
+            @assert($code == 20);
+        "#;
+
+        let mut buf = [0u8; 1024];
+        let size = compile_pulse_to_binary(src.as_bytes(), &mut buf).expect("Enum match compilation failed");
+        assert!(size > PX64_HEADER_SIZE);
+
+        let mut out = alloc::string::String::new();
+        run_source_with_output(src, &[], &mut out).expect("Execution failed");
+    }
+
+    #[test]
+    fn test_enum_with_type_annotation() {
+        let src = r#"
+            enum Mode {
+                Low,
+                High,
+            }
+            let $m: Mode = Mode::High;
+            let mut $res = 0;
+            match $m {
+                Mode::Low => { $res = 1; },
+                Mode::High => { $res = 2; },
+            };
+            @assert($res == 2);
+        "#;
+        let mut out = alloc::string::String::new();
+        run_source_with_output(src, &[], &mut out).expect("Execution failed");
+    }
+
+    #[test]
+    fn test_enum_match_with_wildcard() {
+        let src = r#"
+            enum Color {
+                Red,
+                Green,
+                Blue,
+            }
+            let $c = Color::Red;
+            let mut $val = 0;
+            match $c {
+                Color::Red => { $val = 100; },
+                _ => { $val = 0; },
+            };
+            @assert($val == 100);
+        "#;
+        let mut out = alloc::string::String::new();
+        run_source_with_output(src, &[], &mut out).expect("Execution failed");
+    }
+
+    #[test]
+    fn test_enum_missing_variant_rejected() {
+        let src = r#"
+            enum State {
+                Idle,
+                Running,
+                Failed,
+            }
+            let $s = State::Idle;
+            match $s {
+                State::Idle => {},
+                State::Running => {},
+            };
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_NON_EXHAUSTIVE_MATCH");
+        assert_eq!(err.stage, "Pattern Matching -> Exhaustiveness Check");
+    }
+
+    #[test]
+    fn test_enum_unreachable_pattern_rejected() {
+        let src = r#"
+            enum State {
+                Idle,
+                Running,
+            }
+            let $s = State::Idle;
+            match $s {
+                State::Idle => {},
+                State::Idle => {},
+                State::Running => {},
+            };
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_UNREACHABLE_PATTERN");
+        assert!(err.suggestion.contains("Remove duplicate or unreachable pattern arm"));
+    }
+
+    #[test]
+    fn test_enum_unknown_variant_rejected() {
+        let src = r#"
+            enum State {
+                Idle,
+                Running,
+            }
+            let $s = State::Unknown;
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_UNKNOWN_ENUM_VARIANT");
+        assert!(err.suggestion.contains("Valid variants"));
+    }
+
+    #[test]
+    fn test_duplicate_enum_name_rejected() {
+        let src = r#"
+            enum State { A, B }
+            enum State { C, D }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_DUPLICATE_ENUM_NAME");
+    }
+
+    #[test]
+    fn test_duplicate_enum_variant_rejected() {
+        let src = r#"
+            enum State {
+                Idle,
+                Idle,
+            }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_DUPLICATE_ENUM_VARIANT");
+    }
+
+    #[test]
+    fn test_enum_type_mismatch_rejected() {
+        let src = r#"
+            enum State { Idle, Running }
+            enum Action { Start, Stop }
+            let $s = State::Idle;
+            match $s {
+                Action::Start => {},
+                _ => {},
+            };
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_ENUM_TYPE_MISMATCH");
     }
 }

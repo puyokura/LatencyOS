@@ -27,10 +27,11 @@
    - 3.8 [Tagged Results & Robust Error Handling](#38-tagged-results--robust-error-handling)
    - 3.9 [Control Flow: Conditionals, Bounded Loops & Deadlines](#39-control-flow-conditionals-bounded-loops--deadlines)
    - 3.10 [Pattern Matching (`match`)](#310-pattern-matching-match)
-   - 3.11 [Static Functions & Call Semantics (`fn`)](#311-static-functions--call-semantics-fn)
-   - 3.12 [Design-by-Contract & Formal Directives](#312-design-by-contract--formal-directives)
-   - 3.13 [Linear Type Ownership & DMA Safety Proofs](#313-linear-type-ownership--dma-safety-proofs)
-   - 3.14 [AI-Native Declarative Combinators & Stride Views](#314-ai-native-declarative-combinators--stride-views)
+   - 3.10.1 [Enumerations (`enum`)](#3101-enumerations-enum)
+   - 3.12 [Static Functions & Call Semantics (`fn`)](#312-static-functions--call-semantics-fn)
+   - 3.13 [Design-by-Contract & Formal Directives](#313-design-by-contract--formal-directives)
+   - 3.14 [Linear Type Ownership & DMA Safety Proofs](#314-linear-type-ownership--dma-safety-proofs)
+   - 3.15 [AI-Native Declarative Combinators & Stride Views](#315-ai-native-combinators--stride-views)
    - 4.1 [Telemetry & Real-Time System Intrinsics](#41-telemetry--real-time-system-intrinsics)
    - 4.2 [Mathematical & Bitwise Intrinsics](#42-mathematical--bitwise-intrinsics)
    - 4.3 [Zero-Copy VRAM & Framebuffer Intrinsics](#43-zero-copy-vram--framebuffer-intrinsics)
@@ -62,7 +63,8 @@
    - 8.8 [`fn_test.pul`: Static Function Calling & Contract Validation](#88-fn_testpul-static-function-calling--contract-validation)
    - 8.9 [`struct_test.pul`: Static Struct Manipulation](#89-struct_testpul-static-struct-manipulation)
    - 8.10 [`match_test.pul`: Tagged Result Pattern Matching](#810-match_testpul-tagged-result-pattern-matching)
-   - 8.11 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#811-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
+   - 8.11 [`contracts_and_enums.pul`: Contracts and Enum Exhaustiveness](#811-contractsandenumspul-contracts-and-enum-exhaustiveness)
+   - 8.12 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#812-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
 
 ---
 
@@ -377,8 +379,58 @@ if ($arg == "bench") {
 
 ### 3.7 Arithmetic, Bitwise, Shift & Relational Operators
 
-All operations execute in constant time ($\le 3$ ns, division/modulo $\le 12$ ns):
+### 3.12 Design-by-Contract & Formal Directives
 
+PulseLang enforces design-by-contract natively via formal directives, enabling static verification and runtime assertion checking for WCET and safety constraints.
+
+#### `@requires(condition)`
+Defines a precondition that must hold true upon entry to a function. Precondition clauses are evaluated immediately upon function invocation; if the condition evaluates to `0` (false), execution halts immediately with `ERR_PX64_ASSERTION_FAILED`.
+
+```pulse
+fn safe_div($n, $d) -> i64
+@requires($d != 0)
+{
+    return $n / $d;
+}
+```
+
+#### `@ensures(condition)`
+Defines a postcondition contract clause that must hold true upon function exit.
+- **Syntax**:
+  ```pulse
+  fn clamp_val($val, $min_val, $max_val) -> i64
+  @requires($min_val <= $max_val)
+  @ensures($result >= $min_val)
+  @ensures($result <= $max_val)
+  {
+      if ($val < $min_val) {
+          return $min_val;
+      }
+      if ($val > $max_val) {
+          return $max_val;
+      }
+      return $val;
+  }
+  ```
+- **Semantics**:
+  In `@ensures(condition)`, the implicit return variable `$result` (or `$ret`) refers to the return value in register `$rax` (reg 0). When returning (via explicit `return expr;` or implicit return at the end of the function body), the return expression is evaluated into `$rax`, and all declared `@ensures` conditions are executed and verified with `PX64_OP_ASSERT`.
+- **Error Behavior**:
+  If any postcondition evaluates to `0` (false), the virtual machine immediately halts with an assertion contract failure (`ERR_PX64_ASSERTION_FAILED`).
+
+#### `@test "name" @budget(time) { ... }` (Embedded Native Test Blocks)
+Annotated test blocks define unit test suites directly alongside source code.
+- **Syntax**:
+  ```pulse
+  @test "safe_div division with remainder" @budget(50us) {
+      let $q = safe_div(17, 5);
+      @assert($q == 3);
+  }
+  ```
+  The `@budget(...)` clause (e.g. `@budget(50us)`, `@budget(10000ns)`) is optional and specifies the maximum permissible real-time execution budget.
+- **Zero Production Overhead**:
+  In standard compilation mode (`compile_pulse_to_binary`, `pulc compile`, `pulc check`), all `@test` blocks are completely skipped by the single-pass compiler (`0` bytecode bytes emitted), guaranteeing zero runtime overhead and zero binary bloat for production OS and runtime payloads.
+- **Execution via `pulc test`**:
+  Unit test blocks are parsed, isolated into runnable test binaries, and executed via the `pulc test` command.
 ```pulse
 let $a = 0xF0;
 let $b = 0x0F;
@@ -500,9 +552,39 @@ while ($k < 50) {
 } !drop;
 ```
 
-### 3.10 Pattern Matching (`match`)
+### 3.10 Enumerations (`enum`)
 
-Pattern matching supports Tagged Results (`Ok($v)` / `@ok($v)`, `Err($e)` / `@err($e)`), numeric literals, and wildcard fallback (`_`):
+Enums define a set of named variants. They are statically mapped to discriminants (0-indexed).
+
+```pulse
+enum State {
+    Idle,     // 0
+    Running,  // 1
+    Completed,// 2
+    Failed,   // 3
+}
+```
+
+Variants are accessed via `EnumName::Variant`.
+
+### 3.11 Pattern Matching (`match`)
+
+Pattern matching supports Tagged Results (`Ok($v)` / `@ok($v)`, `Err($e)` / `@err($e)`), Enums, numeric literals, and wildcard fallback (`_`):
+
+**Compile-Time Exhaustiveness Checking:**
+- Missing variants: `ERR_NON_EXHAUSTIVE_MATCH` (AI: Add missing variants or `_` arm).
+- Unreachable/duplicate arms: `ERR_UNREACHABLE_PATTERN`.
+- Variant type mismatch: `ERR_ENUM_TYPE_MISMATCH`.
+
+```pulse
+match $current {
+    State::Idle => ...,
+    State::Running => ...,
+    _ => ..., // Exhaustive fallback
+}
+```
+
+### 3.12 Static Functions & Call Semantics (`fn`)
 
 ```pulse
 let $res = @ok(42);
@@ -747,7 +829,25 @@ let $now = @tsc();
 | `12` | `@is_ok($res)` | `(Tagged) -> i64` | **~2 ns** | Returns `1` if result is Ok, `0` if Err. |
 | `13` | `@is_err($res)`| `(Tagged) -> i64` | **~2 ns** | Returns `1` if result is Err, `0` if Ok. |
 | `14` | `@unwrap($res)`| `(Tagged) -> i64` | **~3 ns** | Extracts payload from Ok result; triggers `ERR_PX64_UNWRAP_FAILED` if Err. |
-| `15` | `@streq($s1, $s2)` | `(str, str) -> i64` | **~5 ns** | Constant-time string / CLI argument equality comparison. |
+### 7.1 `pulc` Host Compiler CLI Reference
+
+```bash
+pulc <file.pul> [-o <out.bin>]
+pulc run <file.bin|file.pul> [args...]
+pulc compile <file.pul> [-o <out.bin>]
+pulc check <file.pul>
+pulc test <file.pul> [--filter <pattern>] [--json] [-v|--verbose]
+pulc disasm <file.bin>
+```
+
+#### `pulc test <file.pul>`
+Executes all `@test` blocks within the source file.
+- `--filter <pattern>`: Case-insensitive substring match on test names.
+- `--json`: Emits machine-readable JSON output for AI-driven self-test automation:
+  ```json
+  {"file":"...","total":N,"passed":P,"failed":F,"tests":[{"name":"...","status":"pass"|"fail"}]}
+  ```
+- `-v`: Enables verbose trace output for test execution steps.
 
 ```pulse
 let $res = @err(503);
@@ -1017,6 +1117,11 @@ pulc check script.pul
 pulc disasm script.bin
 pulc -d script.bin
 
+# Run native unit tests declared with @test
+pulc test script.pul
+pulc test script.pul --filter "safe_div"
+pulc test script.pul --json
+
 # Emit machine-readable JSON output for AI coding agents
 pulc compile script.pul --json
 pulc check script.pul --json
@@ -1028,9 +1133,44 @@ pulc check script.pul --json
 | `compile` | Compile PulseLang source into `px64` bytecode binary. |
 | `run` | Execute bytecode binary or source script directly in the host virtual machine. |
 | `check` | Validate syntax, types, linear ownership, and WCET bounds. |
+| `test` | Run annotated `@test` blocks with assertions and execution budgets. |
 | `disasm` | Disassemble `px64` bytecode into readable assembly instructions. |
 
-#### Exit Codes:
+#### Running Tests (`pulc test`):
+The `test` subcommand runs all `@test` blocks defined in the script:
+```bash
+$ pulc test docs/examples/contracts_and_tests.pul
+[pulc test] Running 5 tests from 'docs/examples/contracts_and_tests.pul'...
+  test "safe_div regular division" ... PASS (elapsed: 4100 ns, steps: 47, budget: 50000 ns)
+  test "safe_div division with remainder" ... PASS (elapsed: 400 ns, steps: 47, budget: 50000 ns)
+  test "safe_clamp within range" ... PASS (elapsed: 400 ns, steps: 56, budget: 50000 ns)
+  test "safe_clamp below minimum" ... PASS (elapsed: 300 ns, steps: 52, budget: 50000 ns)
+  test "safe_clamp above maximum" ... PASS (elapsed: 400 ns, steps: 56, budget: 50000 ns)
+--------------------------------------------------------------------------------
+Test result: 5 passed, 0 failed, 0 budget violations in 5600 ns
+```
+
+With `--json`, `pulc test` emits structured JSON for automated AI test/repair loops:
+```json
+{
+  "file": "docs/examples/contracts_and_tests.pul",
+  "total": 5,
+  "passed": 5,
+  "failed": 0,
+  "budget_violations": 0,
+  "elapsed_ns": 6100,
+  "tests": [
+    {
+      "name": "safe_div regular division",
+      "status": "pass",
+      "line": 24,
+      "elapsed_ns": 4500,
+      "steps": 47,
+      "budget_ns": 50000
+    }
+  ]
+}
+```
 - `0`: Success.
 - `1`: Compilation, syntax, linear ownership, or WCET constraint error.
 - `2`: IO, file access, or command-line argument error.
@@ -1097,7 +1237,10 @@ Human-readable and serial console error reports emit structured, actionable diag
 [AI_REPAIR_HINT]: Declare variable with 'let mut $count = ...;' before mutating
 =============================================================================================
 ```
+### 8. Standard Production Script Templates (`.pul`)
 
+#### 8.12 `contracts_and_tests.pul`: Contract & Test Template
+Demonstrates formal function contracts and `@test` block validation.
 ### 7.4 Exhaustive Compiler & Runtime Error Catalog
 
 | Error Code | Category | Root Cause | AI Repair Hint |
@@ -1398,5 +1541,60 @@ for $i in 1..16 {
         }
     }
 }
+```
+
+### 8.12 `contracts_and_tests.pul`: Design-by-Contract & Embedded Unit Testing
+
+```pulse
+@contract: @wcet(50us) @budget(200us);
+
+fn safe_div($n, $d) -> i64
+@requires($d != 0)
+@ensures($result * $d <= $n)
+{
+    return $n / $d;
+}
+
+fn safe_clamp($val, $min_val, $max_val) -> i64
+@requires($min_val <= $max_val)
+@ensures($result >= $min_val)
+@ensures($result <= $max_val)
+{
+    if ($val < $min_val) {
+        return $min_val;
+    }
+    if ($val > $max_val) {
+        return $max_val;
+    }
+    return $val;
+}
+
+@test "safe_div regular division" @budget(50us) {
+    let $q = safe_div(100, 4);
+    @assert($q == 25);
+}
+
+@test "safe_div division with remainder" @budget(50us) {
+    let $q = safe_div(17, 5);
+    @assert($q == 3);
+}
+
+@test "safe_clamp within range" @budget(50us) {
+    let $clamped = safe_clamp(50, 10, 100);
+    @assert($clamped == 50);
+}
+
+@test "safe_clamp below minimum" @budget(50us) {
+    let $clamped = safe_clamp(5, 10, 100);
+    @assert($clamped == 10);
+}
+
+@test "safe_clamp above maximum" @budget(50us) {
+    let $clamped = safe_clamp(150, 10, 100);
+    @assert($clamped == 100);
+}
+
+let $res = safe_div(50, 2);
+@assert($res == 25);
 ```
 

@@ -22,6 +22,7 @@ pub enum TokenKind {
     Fn,
     Struct,
     Const,
+    Enum,
 
     // AI-Native Directives & Contracts
     AtContract,
@@ -38,6 +39,7 @@ pub enum TokenKind {
     AtEnsures,
     AtInvariant,
     AtPoolSize,
+    AtTest,
     // Literals & Identifiers ($var, #handle, @intrinsic)
     Ident,
     VarIdent,       // $rtt, $sum, $i, $t0
@@ -74,6 +76,7 @@ pub enum TokenKind {
     OrOp,       // ||
     Semi,       // ;
     Colon,      // :
+    ColonColon, // ::
     Comma,      // ,
     Dot,        // .
     DotDot,     // ..

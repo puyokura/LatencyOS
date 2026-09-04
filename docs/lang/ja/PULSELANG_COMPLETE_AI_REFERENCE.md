@@ -21,11 +21,12 @@
    - [4.3 制御構文 (if, for, while, match)](#43-制御構文-if-for-while-match)
    - [4.4 静的関数 (fn, return)](#44-静的関数-fn-return)
    - [4.5 静的構造体 (struct)](#45-静的構造体-struct)
-   - [4.6 定数ルックアップテーブル (const LUT)](#46-定数ルックアップテーブル-const-lut)
-   - [4.7 演算子体系と優先順位](#47-演算子体系と優先順位)
-   - [4.8 文字列等値比較 (STREQ)](#48-文字列等値比較-streq)
-   - [4.9 契約プログラミングと時限制御](#49-契約プログラミングと時限制御)
-   - [4.10 AI-Native 宣言的コンビネータ & ストライドビュー](#410-ai-native-宣言的コンビネータ--ストライドビュー)
+   - [4.6 状態列挙型 (enum)](#46-状態列挙型-enum)
+   - [4.7 定数ルックアップテーブル (const LUT)](#47-定数ルックアップテーブル-const-lut)
+   - [4.8 演算子体系と優先順位](#48-演算子体系と優先順位)
+   - [4.9 文字列等値比較 (STREQ)](#49-文字列等値比較-streq)
+   - [4.10 契約プログラミングと静的 WCET ステップ上限検証](#410-契約プログラミングと静的-wcet-ステップ上限検証)
+   - [4.11 AI-Native 宣言的コンビネータ & ストライドビュー](#411-ai-native-宣言的コンビネータ--ストライドビュー)
 5. [全 Intrinsics (組み込み命令) 完全カタログ](#5-全-intrinsics-組み込み命令-完全カタログ)
    - [5.1 テレメトリ / システム管理](#51-テレメトリ--システム管理)
    - [5.2 数学 / ビット演算 / ハッシュ](#52-数学--ビット演算--ハッシュ)
@@ -59,6 +60,9 @@
    - [9.8 `fn_test.pul` (静的関数定義 & コールスタック検証)](#98-fn_testpul-静的関数定義--コールスタック検証)
    - [9.9 `struct_test.pul` (静的構造体定義 & フィールドアクセス)](#99-struct_testpul-静的構造体定義--フィールドアクセス)
    - [9.10 `match_test.pul` (Tagged Result パターンマッチング)](#910-match_testpul-tagged-result-パターンマッチング)
+   - [9.11 `contracts_and_tests.pul` (契約プログラミング & 組み込み単体テスト)](#911-contractsandtestspul-契約プログラミング--組み込み単体テスト)
+   - [9.12 `fizzbuzz.pul` (多分岐条件 & 算術演算)](#912-fizzbuzzpul-多分岐条件--算術演算)
+   - [9.13 `contracts_and_enums.pul`: 状態列挙型・網羅的マッチング・契約検証](#913-contracts_and_enumspul-状態列挙型網羅的マッチング契約検証)
 
 ---
 
@@ -129,13 +133,13 @@ AI コーディングエージェントが PulseLang v3.1 のコードを生成�
 
 ```ebnf
 Script          ::= TopLevelDecl* <EOF>
-
-TopLevelDecl    ::= ContractDecl
+TopLevelDecl    ::= StructDefStmt
+                  | EnumDefStmt
+                  | FnDeclStmt
+                  | ConstTableStmt
+                  | ContractDecl
                   | PipelineDecl
                   | OnVblankDecl
-                  | StructDefStmt
-                  | ConstTableStmt
-                  | FnDeclStmt
                   | Statement
 
 ContractDecl    ::= "@contract:" ("@wcet(" TimeLiteral ")")? ("@budget(" TimeLiteral ")")? (";" | (ExprRelOp TimeLiteral ";"))
@@ -181,6 +185,9 @@ StructDefStmt   ::= "struct" Identifier "{" StructFieldList? "}" ";"?
 StructFieldList ::= Identifier ( ":" Identifier )? ( "," Identifier ( ":" Identifier )? )*
 StructDeclStmt  ::= "let" "mut"? VarIdent ":" Identifier ";"
 StructAssignStmt::= VarIdent "." Identifier ( ":=" | "=" ) Expression ";"
+
+EnumDefStmt     ::= "enum" Identifier "{" EnumVariantList? "}" ";"?
+EnumVariantList ::= Identifier ( ( "," | ";" ) Identifier )* ( "," | ";" )?
 
 FnDeclStmt      ::= "fn" Identifier "(" ParamList? ")" ( "->" VarIdent )? ( "@requires(" Expression ")" )* Block
 ParamList       ::= VarIdent ( "," VarIdent )*
@@ -401,7 +408,14 @@ while ($i < 8) {
 ```
 
 #### 4. パターンマッチング (`match`)
-Result 型（`@ok`, `@err`）や整数リテラルに対する分岐を行います。
+Tagged Result 型（`Ok($v)` / `@ok($v)`, `Err($e)` / `@err($e)`）、状態列挙型（`EnumName::Variant`）、数値リテラル、およびワイルドカード（`_`）に対する分岐を行います。
+
+##### コンパイル時網羅性検証 (Compile-Time Exhaustiveness Checking):
+PulseLang のコンパイラは、`match` 式に対して静的な網羅性チェックを強制します：
+- **未処理バリアントの検出 (`ERR_NON_EXHAUSTIVE_MATCH` / E401)**: 列挙型をマッチングする際、すべてのバリアントが網羅されていない、かつワイルドカード `_` が存在しない場合はコンパイルエラーとなります。
+- **到達不能・重複パターンの検出 (`ERR_UNREACHABLE_PATTERN`)**: 同一の列挙型バリアントが 2 回以上マッチングされた場合、到達不能コードとしてコンパイルエラーとなります。
+- **列挙型型の不一致 (`ERR_ENUM_TYPE_MISMATCH`)**: 式の列挙型と異なる列挙型のバリアントを arm で指定した場合は型不一致エラーとなります。
+
 ```pulse
 let $res = @ok(42);
 
@@ -470,10 +484,46 @@ let $current_seq = $frame.seq_id;
 @println($current_seq);
 ```
 
+### 4.6 状態列挙型 (`enum`)
+
+PulseLang v3.2 は、ゼロオーバーヘッドの静的列挙型（`enum`）をネイティブサポートします。最大 16 個の列挙型（`MAX_ENUMS = 16`）、各列挙型につき最大 16 個のバリアント（`MAX_ENUM_VARIANTS = 16`）を宣言可能です。
+
+#### 構文とスコープ解決
+```pulse
+enum State {
+    Idle,       // 0
+    Running,    // 1
+    Completed,  // 2
+    Failed,     // 3
+}
+
+let $current = State::Idle;
+let $next: State = State::Running;
+```
+バリアント値は `EnumName::Variant` 構文でスコープ解決され、コンパイル時に 0 から始まる連続した整数ディスカバリミナント値（`0, 1, 2, ...`）へ即座に解決・ロードされます。列挙型の宣言自体はバイナリ実行時に 0 バイト（純粋な静的メタデータ）のフットプリントを維持します。
+
+#### 型追跡と網羅的マッチング
+変数が列挙型の値を持つ場合、コンパイラはその変数型を追跡し、`match` 式で全バリアントが網羅されているかを静的に検証します。
+```pulse
+match $current {
+    State::Idle => {
+        @println("System is Idle");
+    },
+    State::Running => {
+        @println("System is Processing");
+    },
+    State::Completed => {
+        @println("System Finished");
+    },
+    State::Failed => {
+        @println("System Encountered Failure");
+    },
+};
+```
+
 ---
 
-### 4.6 定数ルックアップテーブル (`const LUT`)
-
+### 4.7 定数ルックアップテーブル (`const LUT`)
 定数テーブルはバイナリの定数プール領域に配置され、$O(1)$ かつキャッシュフレンドリにアクセスされます。
 
 ```pulse
@@ -487,7 +537,7 @@ let $throttle = SPEED_LUT[$gear];
 
 ---
 
-### 4.7 演算子体系と優先順位
+### 4.8 演算子体系と優先順位
 
 演算子は標準的な C/Rust 優先順位に準拠し、64ビットの 2 の補数演算でオーバーフローラップします。
 
@@ -511,7 +561,7 @@ let $throttle = SPEED_LUT[$gear];
 
 ---
 
-### 4.8 文字列等値比較 (STREQ)
+### 4.9 文字列等値比較 (STREQ)
 
 PulseLang は文字列ポインタ間の $O(1)$ 有界な等値比較演算を直接サポートします。
 
@@ -526,8 +576,7 @@ if ($s1 == $s2) {
 
 ---
 
-### 4.9 契約プログラミングと静的 WCET ステップ上限検証
-
+### 4.10 契約プログラミングと静的 WCET ステップ上限検証
 PulseLang は、決定論的実行タイミングを担保するため、コンパイル時静的ステップ計算と実行時二重 Watchdog の 2 段階で時間境界を検証・制限します。
 
 #### 1. コンパイル時静的 WCET ステップ上限検証
@@ -549,6 +598,32 @@ PulseLang は、決定論的実行タイミングを担保するため、コン�
 - **ステップ上限**: 実行ステップ数が $10,000$ ステップに達した時点で `ERR_PX64_WCET_EXCEEDED` により強制終了。
 - **ウォールクロック上限**: 8 命令ごとにハードウェア TSC (`read_tsc_serialized()`) を確認し、5.0ms ($5,000,000\ \text{ns}$) を超過した時点で `ERR_PX64_TIMEOUT_EXCEEDED` により強制終了。
 
+#### 4. 関数契約節 (`@requires`, `@ensures`)
+- **事前条件 (`@requires`)**: 関数エントリ時に満たすべき条件。偽（0）なら `ERR_PX64_ASSERTION_FAILED` で即時停止。
+- **事後条件 (`@ensures`)**: 関数脱出時（`return` 時）に満たすべき条件。暗黙の変数 `$result`（または `$ret`）は戻り値レジスタ `$rax` を参照します。条件が偽（0）なら `ERR_PX64_ASSERTION_FAILED` で即時停止。
+
+```pulse
+fn safe_div($n, $d) -> i64
+@requires($d != 0)
+@ensures($result * $d <= $n)
+{
+    return $n / $d;
+}
+```
+
+#### 5. ネイティブ単体テストブロック (`@test`)
+ソースファイル内に直接記述できる組み込み単体テストスイートです。
+- **構文**: `@test "テスト名" @budget(50us) { ... }`（`@budget` は任意指定）
+- **本番バイナリゼロオーバーヘッド**: 通常コンパイル（`pulc compile`, `pulc check`）時にはコンパイラが `@test` ブロックを完全に読み飛ばすため、本番バイナリサイズおよび実行時オーバーヘッドは **0 バイト・0 ステップ** に保たれます。
+- **テスト実行**: `pulc test` サブコマンドによって抽出・単体実行されます。
+
+```pulse
+@test "safe_div regular division" @budget(50us) {
+    let $q = safe_div(100, 4);
+    @assert($q == 25);
+}
+```
+
 ```pulse
 // 1. スクリプト全体の WCET / 予算契約
 @contract: @wcet(5us) @budget(50us);
@@ -556,16 +631,18 @@ PulseLang は、決定論的実行タイミングを担保するため、コン�
 // 2. パイプライン全体の遅延予算
 @pipeline: StreamNetwork @budget(8000us);
 
-// 3. 関数不変条件契約
-fn process_sample($sample) @requires($sample >= 0) {
+// 3. 関数契約
+fn process_sample($sample)
+@requires($sample >= 0)
+@ensures($result >= $sample)
+{
     @assert($sample < 65536); // 実行時不変条件アサーション
     return $sample * 2;
 }
 ```
+
 ---
-
-### 4.10 AI-Native 宣言的コンビネータ & ストライドビュー
-
+### 4.11 AI-Native 宣言的コンビネータ & ストライドビュー
 PulseLang v3.2 では、AI コーディングエージェントが 3 重ループや複雑なインデックス計算を手動で書くことなく、**数学的インテント（内積、テンソル変換、畳み込み集計）を高レベルな関数型パイプラインで直感的に宣言**できる「ゼロアロケーション・ストリームコンビネータ」が導入されました。
 
 > **アーキテクチャ上の主要保証**:
@@ -997,6 +1074,7 @@ USAGE:
     pulc compile <file.pul> [-o <out.bin>]
     pulc run <file.bin|file.pul> [args...]
     pulc check <file.pul>
+    pulc test <file.pul> [--filter <pattern>] [--json] [-v|--verbose]
     pulc disasm <file.bin>
     pulc -d <file.bin>
 
@@ -1005,8 +1083,8 @@ SUBCOMMANDS:
     run <file...>         px64 バイトコードバイナリまたはソーススクリプトを直接実行
                           (trailing 引数は @argc() / @arg(i) へ渡されます)
     check <file.pul>      構文・型・不変性・線形所有権・静的 WCET を完全検証 (コード生成なし)
+    test <file.pul>       注釈付き @test ブロックを抽出・実行しアサーションおよび時間予算を検証
     disasm <file.bin>     px64 バイナリファイルを可読なアセンブリ命令一覧へ逆アセンブル
-
 FLAGS:
     +o, ++output <file>   出力バイナリファイルパスを指定 (デフォルト: <input>.bin)
     +d, ++disasm          バイナリファイルの逆アセンブルを実行
@@ -1018,7 +1096,9 @@ FLAGS:
 EXAMPLES:
     pulc run fizzbuzz.bin
     pulc run stream.pul "arg1" "arg2"
-
+    pulc run stream.pul "arg1" "arg2"
+    pulc test docs/examples/contracts_and_tests.pul
+    pulc test docs/examples/contracts_and_tests.pul --json
 EXIT CODES:
     0   Success (正常終了)
     1   Compilation, syntax, linear ownership, mutability, or WCET violation error
@@ -1068,6 +1148,29 @@ AI エージェントおよび自動化パイプラインは、`--json` フラ�
 ```
 
 ---
+
+#### 3. 単体テスト実行時 (`pulc test --json`)
+```json
+{
+  "file": "docs/examples/contracts_and_tests.pul",
+  "total": 5,
+  "passed": 5,
+  "failed": 0,
+  "budget_violations": 0,
+  "elapsed_ns": 6100,
+  "tests": [
+    {
+      "name": "safe_div regular division",
+      "status": "pass",
+      "line": 24,
+      "elapsed_ns": 4500,
+      "steps": 47,
+      "budget_ns": 50000
+    }
+  ]
+}
+```
+テスト失敗時は `"status": "fail"` および `"error": "..."` が含まれ、時間予算超過時は `"status": "budget_exceeded"` が記録されます。
 
 ### 7.3 `pulselang-core` クレート API
 
@@ -1463,6 +1566,138 @@ match $status {
 };
 ```
 
+
+### 9.11 `contracts_and_tests.pul` (契約プログラミング & 組み込み単体テスト)
+```pulse
+@contract: @wcet(50us) @budget(200us);
+
+fn safe_div($n, $d) -> i64
+@requires($d != 0)
+@ensures($result * $d <= $n)
+{
+    return $n / $d;
+}
+
+fn safe_clamp($val, $min_val, $max_val) -> i64
+@requires($min_val <= $max_val)
+@ensures($result >= $min_val)
+@ensures($result <= $max_val)
+{
+    if ($val < $min_val) {
+        return $min_val;
+    }
+    if ($val > $max_val) {
+        return $max_val;
+    }
+    return $val;
+}
+
+@test "safe_div regular division" @budget(50us) {
+    let $q = safe_div(100, 4);
+    @assert($q == 25);
+}
+
+@test "safe_div division with remainder" @budget(50us) {
+    let $q = safe_div(17, 5);
+    @assert($q == 3);
+}
+
+@test "safe_clamp within range" @budget(50us) {
+    let $clamped = safe_clamp(50, 10, 100);
+    @assert($clamped == 50);
+}
+
+@test "safe_clamp below minimum" @budget(50us) {
+    let $clamped = safe_clamp(5, 10, 100);
+    @assert($clamped == 10);
+}
+
+@test "safe_clamp above maximum" @budget(50us) {
+    let $clamped = safe_clamp(150, 10, 100);
+    @assert($clamped == 100);
+}
+
+let $res = safe_div(50, 2);
+@assert($res == 25);
+```
+
+### 9.12 `fizzbuzz.pul` (多分岐条件 & 算術演算)
+```pulse
+// fizzbuzz.pul - 1段ネストの多分岐 FizzBuzz
+@contract: @wcet(10us) @budget(100us);
+
+for $i in 1..16 {
+    if (($i % 15) == 0) {
+        @println("FizzBuzz");
+    } else {
+        if (($i % 3) == 0) {
+            @println("Fizz");
+        } else {
+            if (($i % 5) == 0) {
+                @println("Buzz");
+            } else {
+                @println($i);
+            }
+        }
+    }
+}
+```
+
+---
+
+### 9.13 `contracts_and_enums.pul`: 状態列挙型・網羅的マッチング・契約検証
+```pulse
+@contract: @wcet(50us) @budget(200us);
+
+enum State {
+    Idle,
+    Running,
+    Completed,
+    Failed,
+}
+
+fn step_state($current, $event) 
+    @requires($current == State::Idle || $current == State::Running || $current == State::Completed || $current == State::Failed)
+    @ensures($result == State::Running || $result == State::Completed || $result == State::Failed || $result == State::Idle)
+{
+    match $current {
+        State::Idle => {
+            if $event == 1 { State::Running; } else { State::Idle; }
+        }
+        State::Running => {
+            if $event == 2 { State::Completed; } else if $event == 3 { State::Failed; } else { State::Running; }
+        }
+        State::Completed => { State::Completed; }
+        State::Failed => { State::Failed; }
+    }
+}
+
+@test "Transition: Idle -> Running" @budget(20us) {
+    @assert(step_state(State::Idle, 1) == State::Running);
+}
+
+@test "Transition: Running -> Completed" @budget(20us) {
+    @assert(step_state(State::Running, 2) == State::Completed);
+}
+
+@test "Transition: Running -> Failed" @budget(20us) {
+    @assert(step_state(State::Running, 3) == State::Failed);
+}
+
+@test "Transition: Coverage" @budget(50us) {
+    @assert(step_state(State::Idle, 0) == State::Idle);
+    @assert(step_state(State::Idle, 1) == State::Running);
+    @assert(step_state(State::Running, 2) == State::Completed);
+    @assert(step_state(State::Running, 3) == State::Failed);
+    @assert(step_state(State::Completed, 0) == State::Completed);
+    @assert(step_state(State::Failed, 0) == State::Failed);
+}
+
+fn main() {
+    let $s = step_state(State::Idle, 1);
+    @assert($s == State::Running);
+}
+```
 ---
 
 > **ドキュメント保守情報**:  

@@ -53,21 +53,16 @@ Traditional operating systems (Linux, Windows) optimize for **average throughput
 
 ### 3.2 PulseLang (Language Spec: v3.2 / Architecture: px64 v3)
 - **`px64` 64-bit Virtual Register Architecture**: 20-register model (16 GPRs `$rax`..`$r15` + 4 HW DMA slots `#f0`..`#f3`) with 32-bit fixed-length instructions.
+- **Enums & Exhaustive Pattern Matching**: Support for sum types (`enum`), scoped variant resolution (`EnumName::Variant`), and compile-time exhaustiveness checking in `match` statements (with error reporting for missing/duplicate/invalid patterns).
 - **64-bit Constant Pool & Immediate ALU**: 16-bit index constant pool loading (`0x17 LDC Rd, const[idx]`) and 8-bit immediate operations (`0x18 ADDI`, `0x19 SUBI`).
 - **Safety Guards & Bounds Checking**: Out-of-bounds constant pool protection (`ERR_PX64_CONST_OUT_OF_BOUNDS`) and invalid opcode trapping (`ERR_PX64_INVALID_OPCODE`).
 - **Dual Runtime Safety Watchdog**: 10,000 instruction steps limit + 50.0ms TSC wall-clock timeout guard (worst-case execution bound: 5.48ms).
-- **Disassembler (`disasm <file.bin>`)**: Decodes bytecode with explicit virtual register clarification:
-  `NOTE: Registers ($rax..$r15, #f0..#f3) are px64 VM virtual registers, not host CPU GPRs.`
+- **Disassembler (`disasm <file.bin>`)**: Decodes bytecode with explicit virtual register clarification.
 - **In-Kernel Instruction Microbenchmarking (`pulse-bench` / `benchmark`)**: TSC-serialized nanosecond benchmarking for each VM opcode.
 - **AI-Actionable Error Diagnostics**: Machine-readable structured diagnostic logs with error codes, byte offsets, ASCII/Hex dumps, and automatic repair hints (syntax vs runtime separation).
-- **Extensive Real-Time Intrinsics**:
-  - *Hardware & System Telemetry*: `@core_id()` (executing CPU LAPIC ID), `@tsc_freq()` (calibrated TSC MHz), `@uptime_ns()` (system uptime), `@busy_wait(<ns>)` (deterministic spin-wait), `@ring_depth(<id>)` (lock-free queue depth).
-  - *Branchless Math, Bits & Hash*: `@min($a, $b)`, `@max($a, $b)`, `@abs($a)`, `@clamp($v, $min, $max)`, `@popcnt($v)`, `@lzcnt($v)`, `@crc32($seed, $val)`.
-  - *Zero-Copy VRAM DMA Direct Access*: `@vram_read($slot, $offset)`, `@vram_write($slot, $offset, $val)` (direct memory access to `/vram/slotN` frame buffers).
-  - *Network & Pipeline*: `@tsc()`, `@rtt()`, `@rate()`, `@capture()`, `@send()`, `@argc()`, `@arg()`, `@streq()`.
-- **Standard Scripts**: `stream.pul`, `bench.pul`, `filter.pul`, `jitter.pul`, `telemetry.pul`, `echo.pul`, `math_demo.pul`, `telemetry_ext.pul`, `vram_test.pul`, `for_test.pul`, etc.
-- **Documentation**: [**Language Docs Hub (`docs/lang/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/lang/README.md) | [**Japanese Portal (`docs/ja/`)**](file:///C:/Users/User/Desktop/LatencyOS/docs/ja/README.md)
-
+- **Extensive Real-Time Intrinsics**: Core ID, TSC frequency, uptime, busy-wait, ring depth, branchless math, bits, hash, zero-copy VRAM DMA, etc.
+- **Standard Scripts**: `stream.pul`, `contracts_and_enums.pul`, `fizzbuzz.pul`, etc.
+- **Formal Contracts & Testing**: PulseLang v3.2 natively supports Design-by-Contract preconditions (`@requires`) and postconditions (`@ensures($result > 0)`) verified against the return register `$rax`, along with embedded native unit testing (`@test "name" @budget(...) { ... }`).
 ### 3.3 PulseEditor (In-Kernel ANSI Text Editor)
 - Full-screen terminal text editor running inside the kernel on Core 0.
 - **Nano-Style Shortcut Bar**: Persistent bottom bar (`[^S / F2 Save]  [^R / F5 Run]  [^Q / F10 Quit]  [^X Save&Quit]  [Esc C Clear]`).

@@ -80,6 +80,9 @@ impl<'a> Lexer<'a> {
                     if self.peek_next() == Some(b'=') {
                         self.pos += 2;
                         TokenKind::ColonEq
+                    } else if self.peek_next() == Some(b':') {
+                        self.pos += 2;
+                        TokenKind::ColonColon
                     } else {
                         self.pos += 1;
                         TokenKind::Colon
@@ -312,6 +315,7 @@ impl<'a> Lexer<'a> {
                         b"on_vblank" => TokenKind::AtOnVblank,
                         b"drop" => TokenKind::Drop,
                         b"pool_size" => TokenKind::AtPoolSize,
+                        b"test" => TokenKind::AtTest,
                         _ => TokenKind::IntrinsicIdent,
                     }
                 }
@@ -345,6 +349,7 @@ impl<'a> Lexer<'a> {
                         b"fn" => TokenKind::Fn,
                         b"struct" => TokenKind::Struct,
                         b"const" => TokenKind::Const,
+                        b"enum" => TokenKind::Enum,
                         b"_" => TokenKind::Underscore,
                         _ => TokenKind::Ident,
                     }

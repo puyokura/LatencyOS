@@ -1,0 +1,50 @@
+@contract: @wcet(50us) @budget(200us);
+
+fn safe_div($n, $d) -> i64
+@requires($d != 0)
+@ensures($result * $d <= $n)
+{
+    return $n / $d;
+}
+
+fn safe_clamp($val, $min_val, $max_val) -> i64
+@requires($min_val <= $max_val)
+@ensures($result >= $min_val)
+@ensures($result <= $max_val)
+{
+    if ($val < $min_val) {
+        return $min_val;
+    }
+    if ($val > $max_val) {
+        return $max_val;
+    }
+    return $val;
+}
+
+@test "safe_div regular division" @budget(50us) {
+    let $q = safe_div(100, 4);
+    @assert($q == 25);
+}
+
+@test "safe_div division with remainder" @budget(50us) {
+    let $q = safe_div(17, 5);
+    @assert($q == 3);
+}
+
+@test "safe_clamp within range" @budget(50us) {
+    let $clamped = safe_clamp(50, 10, 100);
+    @assert($clamped == 50);
+}
+
+@test "safe_clamp below minimum" @budget(50us) {
+    let $clamped = safe_clamp(5, 10, 100);
+    @assert($clamped == 10);
+}
+
+@test "safe_clamp above maximum" @budget(50us) {
+    let $clamped = safe_clamp(150, 10, 100);
+    @assert($clamped == 100);
+}
+
+let $res = safe_div(50, 2);
+@assert($res == 25);

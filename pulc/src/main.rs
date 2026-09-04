@@ -24,6 +24,10 @@ enum Subcommand {
     Check {
         input: PathBuf,
     },
+    Test {
+        input: PathBuf,
+        filter: Option<String>,
+    },
     Disasm {
         input: PathBuf,
     },
@@ -47,6 +51,7 @@ fn print_help() {
     pulc run <file.bin|file.pul> [args...]
     pulc compile <file.pul> [-o <out.bin>]
     pulc check <file.pul>
+    pulc test <file.pul> [--filter <pattern>]
     pulc disasm <file.bin>
     pulc -d <file.bin>
 
@@ -54,6 +59,7 @@ fn print_help() {
     run <file> [args...]  Execute px64 binary (.bin) or source script (.pul) directly
     compile <file.pul>    Compile PulseLang source into px64 binary bytecode
     check <file.pul>      Validate syntax, types, linear ownership & WCET constraints
+    test <file.pul>       Run annotated @test blocks from source script
     disasm <file.bin>     Disassemble px64 binary bytecode into assembly instructions
 
 \x1b[1mFLAGS:\x1b[0m
@@ -141,6 +147,40 @@ where
                         input,
                         args: run_args,
                     },
+                    json,
+                    verbose,
+                });
+            }
+            "test" => {
+                let mut input = None;
+                let mut filter = None;
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if args_vec[j] == "--filter" {
+                        if j + 1 >= args_vec.len() {
+                            return Err("Option '--filter' requires an argument".to_string());
+                        }
+                        filter = Some(args_vec[j + 1].clone());
+                        j += 2;
+                    } else if let Some(stripped) = args_vec[j].strip_prefix("--filter=") {
+                        filter = Some(stripped.to_string());
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') && input.is_none() {
+                        input = Some(PathBuf::from(&args_vec[j]));
+                        j += 1;
+                    } else {
+                        return Err(format!("Unrecognized argument for 'test' subcommand: '{}'", args_vec[j]));
+                    }
+                }
+                let input_path = input.ok_or_else(|| "Missing input source file for 'test' subcommand".to_string())?;
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Test { input: input_path, filter },
                     json,
                     verbose,
                 });
@@ -502,6 +542,130 @@ fn format_compile_error(
     }
     out
 }
+fn run_test(input_path: &Path, filter: Option<&str>, json: bool, _verbose: bool) -> Result<(), (i32, String)> {
+    let preprocessed = read_and_preprocess(input_path, json)?;
+    let tests = pulselang_core::compile_pulse_tests(preprocessed.as_bytes())
+        .map_err(|e| (1, format_compile_error(&e, preprocessed.as_bytes(), &input_path.to_string_lossy(), json)))?;
+
+    let filtered_tests: Vec<_> = if let Some(f) = filter {
+        tests.into_iter().filter(|t| t.name.to_lowercase().contains(&f.to_lowercase())).collect()
+    } else {
+        tests
+    };
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut budget_violations = 0;
+    let mut total_elapsed_ns: u64 = 0;
+
+    if json {
+        let mut results = Vec::new();
+        for t in &filtered_tests {
+            let res = pulselang_core::run_test_case(t);
+            total_elapsed_ns = total_elapsed_ns.saturating_add(res.elapsed_ns);
+
+            let status = if res.passed {
+                if let Some(b) = res.budget_ns {
+                    if res.elapsed_ns > b {
+                        budget_violations += 1;
+                        "budget_exceeded"
+                    } else {
+                        passed += 1;
+                        "pass"
+                    }
+                } else {
+                    passed += 1;
+                    "pass"
+                }
+            } else {
+                failed += 1;
+                "fail"
+            };
+
+            let err_field = match &res.error {
+                Some(e) => format!(r#","error":"{}""#, escape_json(e)),
+                None => String::new(),
+            };
+            let budget_field = match res.budget_ns {
+                Some(b) => format!(r#","budget_ns":{}"#, b),
+                None => r#","budget_ns":null"#.to_string(),
+            };
+
+            results.push(format!(
+                r#"{{"name":"{}","status":"{}","line":{},"elapsed_ns":{},"steps":{}{}{}}}"#,
+                escape_json(&t.name),
+                status,
+                t.line,
+                res.elapsed_ns,
+                res.steps,
+                budget_field,
+                err_field
+            ));
+        }
+        println!(
+            r#"{{"file":"{}","total":{},"passed":{},"failed":{},"budget_violations":{},"elapsed_ns":{},"tests":[{}]}}"#,
+            escape_json(&input_path.to_string_lossy()),
+            filtered_tests.len(),
+            passed,
+            failed,
+            budget_violations,
+            total_elapsed_ns,
+            results.join(",")
+        );
+    } else {
+        println!("[pulc test] Running {} tests from '{}'...", filtered_tests.len(), input_path.display());
+        for t in &filtered_tests {
+            let res = pulselang_core::run_test_case(t);
+            total_elapsed_ns = total_elapsed_ns.saturating_add(res.elapsed_ns);
+
+            let budget_str = match res.budget_ns {
+                Some(b) => format!(", budget: {} ns", b),
+                None => String::new(),
+            };
+
+            if res.passed {
+                if let Some(b) = res.budget_ns {
+                    if res.elapsed_ns > b {
+                        budget_violations += 1;
+                        println!(
+                            "  test \"{}\" ... BUDGET_EXCEEDED: elapsed {} ns > budget {} ns (steps: {})",
+                            t.name, res.elapsed_ns, b, res.steps
+                        );
+                    } else {
+                        passed += 1;
+                        println!(
+                            "  test \"{}\" ... PASS (elapsed: {} ns, steps: {}{})",
+                            t.name, res.elapsed_ns, res.steps, budget_str
+                        );
+                    }
+                } else {
+                    passed += 1;
+                    println!(
+                        "  test \"{}\" ... PASS (elapsed: {} ns, steps: {})",
+                        t.name, res.elapsed_ns, res.steps
+                    );
+                }
+            } else {
+                failed += 1;
+                let err_msg = res.error.as_deref().unwrap_or("Assertion failed");
+                println!(
+                    "  test \"{}\" ... FAIL: {} (elapsed: {} ns, steps: {}{})",
+                    t.name, err_msg, res.elapsed_ns, res.steps, budget_str
+                );
+            }
+        }
+        println!("--------------------------------------------------------------------------------");
+        println!(
+            "Test result: {} passed, {} failed, {} budget violations in {} ns",
+            passed, failed, budget_violations, total_elapsed_ns
+        );
+    }
+
+    if failed > 0 || budget_violations > 0 {
+        Err((1, format!("{} tests failed", failed + budget_violations)))
+    } else {
+        Ok(())
+    }
+}
 
 fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -529,7 +693,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let result = match options.subcommand {
+    let result = match &options.subcommand {
         Subcommand::Help => {
             print_help();
             Ok(())
@@ -539,13 +703,16 @@ fn main() -> ExitCode {
             Ok(())
         }
         Subcommand::Run { input, args } => {
-            run_exec(&input, &args, options.json, options.verbose)
+            run_exec(input, args, options.json, options.verbose)
         }
         Subcommand::Compile { input, output } => {
-            run_compile(&input, output, options.json, options.verbose)
+            run_compile(input, output.clone(), options.json, options.verbose)
         }
-        Subcommand::Check { input } => run_check(&input, options.json, options.verbose),
-        Subcommand::Disasm { input } => run_disasm(&input, options.json),
+        Subcommand::Test { input, filter } => {
+            run_test(input, filter.as_deref(), options.json, options.verbose)
+        }
+        Subcommand::Check { input } => run_check(input, options.json, options.verbose),
+        Subcommand::Disasm { input } => run_disasm(input, options.json),
     };
 
     match result {
