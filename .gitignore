@@ -1,7 +1,7 @@
 /target
-/dist
+/dist/
+dist/
 **/*.rs.bk
 *.pcap
 *.img
 playground/
-dist/pulc.exe

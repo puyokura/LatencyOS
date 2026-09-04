@@ -26,12 +26,12 @@
    - 3.7 [Arithmetic, Bitwise, Shift & Relational Operators](#37-arithmetic-bitwise-shift--relational-operators)
    - 3.8 [Tagged Results & Robust Error Handling](#38-tagged-results--robust-error-handling)
    - 3.9 [Control Flow: Conditionals, Bounded Loops & Deadlines](#39-control-flow-conditionals-bounded-loops--deadlines)
-   - 3.10 [Pattern Matching (`match`)](#310-pattern-matching-match)
-   - 3.10.1 [Enumerations (`enum`)](#3101-enumerations-enum)
+   - 3.10 [Enumerations (`enum`)](#310-enumerations-enum)
+   - 3.11 [Pattern Matching (`match`)](#311-pattern-matching-match)
    - 3.12 [Static Functions & Call Semantics (`fn`)](#312-static-functions--call-semantics-fn)
    - 3.13 [Design-by-Contract & Formal Directives](#313-design-by-contract--formal-directives)
    - 3.14 [Linear Type Ownership & DMA Safety Proofs](#314-linear-type-ownership--dma-safety-proofs)
-   - 3.15 [AI-Native Declarative Combinators & Stride Views](#315-ai-native-combinators--stride-views)
+   - 3.15 [AI-Native Declarative Combinators & Stride Views](#315-ai-native-declarative-combinators--stride-views)
    - 4.1 [Telemetry & Real-Time System Intrinsics](#41-telemetry--real-time-system-intrinsics)
    - 4.2 [Mathematical & Bitwise Intrinsics](#42-mathematical--bitwise-intrinsics)
    - 4.3 [Zero-Copy VRAM & Framebuffer Intrinsics](#43-zero-copy-vram--framebuffer-intrinsics)
@@ -42,7 +42,7 @@
    - 5.1 [Architectural Invariants & Execution Limits](#51-architectural-invariants--execution-limits)
    - 5.2 [20-Register File Map](#52-20-register-file-map)
    - 5.3 [32-Bit Fixed Instruction Format & Encoding](#53-32-bit-fixed-instruction-format--encoding)
-   - 5.4 [Complete Opcode Instruction Table (`0x00`..`0x2A`)](#54-complete-opcode-instruction-table-0x000x2a)
+   - 5.4 [Complete Opcode Instruction Table (`0x00`..`0x2C`)](#54-complete-opcode-instruction-table-0x000x2c)
    - 5.5 [16-Byte Fixed Header & Binary Container Layout](#55-16-byte-fixed-header--binary-container-layout)
    - 5.6 [Disassembly & Assembly Representation](#56-disassembly--assembly-representation)
 6. [The 43 Master Architectural & Semantic Contracts](#6-the-43-master-architectural--semantic-contracts)
@@ -63,18 +63,19 @@
    - 8.8 [`fn_test.pul`: Static Function Calling & Contract Validation](#88-fn_testpul-static-function-calling--contract-validation)
    - 8.9 [`struct_test.pul`: Static Struct Manipulation](#89-struct_testpul-static-struct-manipulation)
    - 8.10 [`match_test.pul`: Tagged Result Pattern Matching](#810-match_testpul-tagged-result-pattern-matching)
-   - 8.11 [`contracts_and_enums.pul`: Contracts and Enum Exhaustiveness](#811-contractsandenumspul-contracts-and-enum-exhaustiveness)
-   - 8.12 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#812-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
+   - 8.11 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#811-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
+   - 8.12 [`contracts_and_tests.pul`: Design-by-Contract & Embedded Unit Testing](#812-contracts_and_testspul-design-by-contract--embedded-unit-testing)
+   - 8.13 [`contracts_and_enums.pul`: State Enums, Pattern Matching & Contracts](#813-contracts_and_enumspul-state-enums-pattern-matching--contracts)
 
 ---
 
 ## 1. AI System Prompt, Core Tenets & Five Invariants
 
-When generating, compiling, verifying, or refactoring PulseLang v3.1 code, an AI agent **MUST ALWAYS** follow these fundamental principles and five immutable invariants:
+When generating, compiling, verifying, or refactoring PulseLang v3.2 code, an AI agent **MUST ALWAYS** follow these fundamental principles and five immutable invariants:
 
 ```
 ================================================================================
-                    PULSELANG v3.1 AI GENERATION RULES
+                    PULSELANG v3.2 AI GENERATION RULES
 ================================================================================
 1. Zero Dynamic Allocation: Everything is statically preallocated. No malloc/Box.
 2. Guaranteed Bounded WCET: All loops must be provably bounded; execution steps <= 10,000.
@@ -147,7 +148,7 @@ Statement       ::= LetDeclStmt
                   | ExprStmt
                   | Block
 
-LetDeclStmt     ::= "let" "mut"? VarIdent ( ":" TypeSpec )? ( "=" ( StructInitExpr | ArrayInitExpr | Expression ) )? ";"
+LetDeclStmt     ::= "let" "mut"? VarIdent ( ":" TypeSpec )? ( "=" ( ArrayInitExpr | Expression ) )? ";"
 TypeSpec        ::= Identifier | "[" "i64" ";" IntegerLiteral "]"
 
 AssignStmt      ::= ( VarIdent | HardwareIdent ) ( ":=" | "=" ) Expression ";"
@@ -160,9 +161,7 @@ ArrayInitExpr   ::= "[" ( Expression ( "," Expression )* )? "]"
 StructDefStmt   ::= "struct" Identifier "{" StructFieldList? "}" ";"?
 StructFieldList ::= StructField ( "," StructField )* ","?
 StructField     ::= Identifier ( ":" Identifier )?
-StructDeclStmt  ::= "let" VarIdent ":" Identifier ";"
-StructInitExpr  ::= Identifier "{" ( StructFieldInit ( "," StructFieldInit )* ","? )? "}"
-StructFieldInit ::= Identifier ":" Expression
+StructDeclStmt  ::= "let" "mut"? VarIdent ":" Identifier ";"
 StructAssignStmt::= VarIdent "." Identifier ( ":=" | "=" ) Expression ";"
 
 ConstTableStmt  ::= "const" Identifier ( ":" "[" "i64" ";" IntegerLiteral "]" )? "=" "[" ConstElemList? "]" ";"
@@ -334,9 +333,18 @@ struct TelemetryPacket {
     status
 }
 
-// 2. Struct Instantiation
-let mut $pt = Point { x: 100, y: 200 };
-let $packet: TelemetryPacket;
+// 2. Struct Instantiation (Static Slot Declaration)
+// PulseLang uses zero-allocation static memory slots. Struct instances are declared
+// with type annotation 'let mut $var: StructType;', and initialized field-by-field.
+// Struct literal syntax ('Type { field: val }') is intentionally unsupported.
+let mut $pt: Point;
+$pt.x := 100;
+$pt.y := 200;
+
+let mut $packet: TelemetryPacket;
+$packet.timestamp := @tsc();
+$packet.rtt := 450;
+$packet.status := 1;
 
 // 3. Field Access & Mutation
 $pt.x := 150;
@@ -344,8 +352,6 @@ $pt.y += 50;
 
 let $dist = $pt.x + $pt.y;
 @println($dist);
-```
-
 ### 3.5 Constant Lookup Tables (`const LUT = [...]`)
 
 Constant lookup tables embed immutable arrays directly into the `px64` 64-bit constant pool (`PX64_OP_TBL_DEF` & `PX64_OP_TBL_LOAD`):
@@ -582,13 +588,8 @@ match $current {
     State::Running => ...,
     _ => ..., // Exhaustive fallback
 }
-```
 
-### 3.12 Static Functions & Call Semantics (`fn`)
-
-```pulse
 let $res = @ok(42);
-
 match $res {
     Ok($val) => {
         @print("[RESULT OK]: ");
@@ -607,8 +608,7 @@ match $res {
 };
 ```
 
-### 3.11 Static Functions & Call Semantics (`fn`)
-
+### 3.12 Static Functions & Call Semantics (`fn`)
 Functions execute on the static 8-frame call stack (`PX64_OP_CALL` / `PX64_OP_RET`). Parameters are passed via dedicated register bindings, and the return value is returned in `$rax`:
 
 ```pulse
@@ -628,7 +628,7 @@ let $safe_rate = clamp_rate(120, 10, 100); // Returns 100
 @println($safe_rate);
 ```
 
-### 3.12 Design-by-Contract & Static WCET Bound Verification
+### 3.13 Design-by-Contract & Formal Directives
 
 PulseLang enforces deterministic execution timing using a dual-layer strategy: compile-time static step estimation and runtime watchdog caps.
 
@@ -659,12 +659,24 @@ For statically bounded `for $var in start..end` loops, the compiler mathematical
 @pipeline: CameraToNetworkStream @budget(8000us);
 
 // Function Invariant Contract
-fn process_sample($sample) @requires($sample >= 0) {
+fn process_sample($sample) 
+@requires($sample >= 0)
+@ensures($result >= $sample)
+{
     @assert($sample < 65536); // Runtime invariant assertion
     return $sample * 2;
 }
 ```
-### 3.13 Linear Type Ownership & DMA Safety Proofs
+
+#### 4. Function Preconditions (`@requires`) & Postconditions (`@ensures`)
+- **`@requires(condition)`**: Evaluated at function entry. Guarantees valid input ranges. If false, halts immediately with `ERR_PX64_ASSERTION_FAILED`.
+- **`@ensures(condition)`**: Evaluated at function exit (upon `return` statements and implicit returns). The implicit variable `$result` (or `$ret`) refers to the return value in register `$rax`. The compiler injects runtime assertion guards (`PX64_OP_ASSERT`) directly before the return opcode. If false, halts immediately with `ERR_PX64_ASSERTION_FAILED`.
+
+#### 5. Embedded Native Unit Test Blocks (`@test`)
+- Syntax: `@test "description" @budget(time) { ... }`
+- In normal compilation (`pulc compile`, kernel build), all `@test` blocks are completely stripped (zero bytecode overhead, 0 bytes in production binaries).
+- In testing mode (`pulc test`), `@test` blocks are extracted and executed in isolated `px64` VM sandboxes, verifying assertions and `@budget` constraints.
+### 3.14 Linear Type Ownership & DMA Safety Proofs
 
 Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear ownership. The compiler performs static flow analysis to guarantee single consumption:
 
@@ -693,7 +705,7 @@ Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear 
 
 Every intrinsic compiles directly to a specialized `PX64_OP_CALL_NAT` instruction (`0x12`), executing deterministically within the LatencyOS kernel with verified worst-case execution time bounds:
 
-### 3.14 AI-Native Declarative Combinators & Stride Views
+### 3.15 AI-Native Declarative Combinators & Stride Views
 
 PulseLang v3.2 introduces first-class zero-allocation stream combinators and stride view intrinsics. Instead of writing imperative, error-prone 3-level nested loops with manual 1D indexing, AI agents can directly express mathematical intent (dot products, vector transformations, reductions) using declarative functional pipelines.
 
@@ -897,13 +909,19 @@ if ($rtt > 300us) {
 
 1. **Fixed 32-bit (4-Byte) Instruction Alignment**: Instructions are decoded in $O(1)$ constant time without variable-length instruction decoding overhead.
 2. **20-Register Flat Register File**: 16 General Purpose Registers (`$rax`..`$r15`) + 4 Dedicated Hardware DMA Handle Registers (`#f0`..`#f3`).
-3. **Execution Limits**:
+3. **Execution Limits (from `isa.rs`)**:
    - `MAX_VM_STEPS`: **10,000 instruction steps** (prevents infinite loops).
-   - `MAX_SCRIPT_TIMEOUT_NS`: **5,000,000 ns (5.0 ms)** wall-clock watchdog limit.
+   - `MAX_SCRIPT_TIMEOUT_NS`: **5,000,000 ns (5.0 ms)** computational wall-clock watchdog limit (hardware UART I/O latency is decoupled).
    - `MAX_CALL_DEPTH`: **8 call stack frames**.
-   - `MAX_BYTECODE_SIZE`: **1,024 bytes**.
+   - `MAX_BYTECODE_SIZE`: **4,096 bytes**.
+   - `MAX_VARS`: **48 variables** (16 GPR registers `$rax`..`$r15` + 32 static stack spill slots).
+   - `MAX_ENUMS`: **16 distinct enums**.
+   - `MAX_ENUM_VARIANTS`: **16 variants per enum**.
+   - `MAX_TOKENS`: **2,048 tokens**.
    - `MAX_STRING_POOL`: **512 bytes**.
    - `MAX_CONST_POOL`: **64 entries (512 bytes)**.
+   - Total Instruction Opcodes: **45 opcodes** (`0x00`..`0x2C`).
+   - Total Hardware Intrinsics: **29 intrinsics** (IDs `1`..`29`).
 
 ### 5.2 20-Register File Map
 
@@ -941,12 +959,12 @@ Every `px64` instruction occupies exactly 4 contiguous bytes:
 +----------------+----------------+----------------+----------------+
 ```
 
-- **Byte 0 (`Opcode`)**: `PX64_OP_*` opcode identifier (`0x00`..`0x2A`).
+- **Byte 0 (`Opcode`)**: `PX64_OP_*` opcode identifier (`0x00`..`0x2C`).
 - **Byte 1 (`Rd`)**: Destination register index (`0`..`19`).
 - **Byte 2 (`Rs1`)**: First source register index (`0`..`19`) OR high byte of 16-bit immediate (`Imm[15:8]`).
 - **Byte 3 (`Rs2`)**: Second source register index (`0`..`19`) OR low byte of 16-bit immediate (`Imm[7:0]`).
 
-### 5.4 Complete Opcode Instruction Table (`0x00`..`0x2A`)
+### 5.4 Complete Opcode Instruction Table (`0x00`..`0x2C`)
 
 | Opcode | Mnemonic | Operands | Encoding Format | Formal Semantics & Operation | WCET |
 |---|---|---|---|---|---|
@@ -993,7 +1011,8 @@ Every `px64` instruction occupies exactly 4 contiguous bytes:
 | `0x28` | `TBL_DEF` | `TblId, Base8, Len8` | `28 Tb Ba Le` | `table_bases[Tb] = Ba, table_lens[Tb] = Le` | ~2 ns |
 | `0x29` | `TBL_LOAD` | `Rd, TblId, Rs_idx` | `29 Rd Tb Rs` | `Rd = const_pool[table_base + Rs_idx]` (bounds checked) | ~3 ns |
 | `0x2A` | `STREQ` | `Rd, Rs1, Rs2` | `2a Rd S1 S2` | `Rd = streq(Rs1, Rs2) ? 1 : 0` (bounded comparison) | ~5 ns |
-
+| `0x2B` | `SPILL_STORE` | `SlotId, Rs_val` | `2b Sl Rs 00` | `spill_slots[SlotId] = Rs_val` (static spill slot write) | ~2 ns |
+| `0x2C` | `SPILL_LOAD` | `Rd, SlotId` | `2c Rd Sl 00` | `Rd = spill_slots[SlotId]` (static spill slot read) | ~2 ns |
 ### 5.5 16-Byte Fixed Header & Binary Container Layout
 
 ```text
@@ -1466,11 +1485,10 @@ struct FrameMetadata {
     crc: i64,
 }
 
-let mut $meta = FrameMetadata {
-    slot_id: 1,
-    timestamp: 1000000,
-    crc: 0x12345678,
-};
+let mut $meta: FrameMetadata;
+$meta.slot_id := 1;
+$meta.timestamp := 1000000;
+$meta.crc := 0x12345678;
 
 $meta.slot_id := 2;
 $meta.timestamp += 50000;
@@ -1596,5 +1614,57 @@ fn safe_clamp($val, $min_val, $max_val) -> i64
 
 let $res = safe_div(50, 2);
 @assert($res == 25);
+```
+
+### 8.13 `contracts_and_enums.pul`: State Enums, Pattern Matching & Contracts
+
+```pulse
+@contract: @wcet(50us) @budget(200us);
+
+enum State {
+    Idle,
+    Running,
+    Completed,
+    Failed,
+}
+
+fn step_state($current, $event) 
+    @requires($current == State::Idle || $current == State::Running || $current == State::Completed || $current == State::Failed)
+    @ensures($result == State::Running || $result == State::Completed || $result == State::Failed || $result == State::Idle)
+{
+    match $current {
+        State::Idle => {
+            if ($event == 1) { return State::Running; } else { return State::Idle; }
+        },
+        State::Running => {
+            if ($event == 2) { return State::Completed; } 
+            else if ($event == 3) { return State::Failed; } 
+            else { return State::Running; }
+        },
+        State::Completed => { return State::Completed; },
+        State::Failed => { return State::Failed; },
+    }
+}
+
+@test "Transition: Idle -> Running" @budget(20us) {
+    @assert(step_state(State::Idle, 1) == State::Running);
+}
+
+@test "Transition: Running -> Completed" @budget(20us) {
+    @assert(step_state(State::Running, 2) == State::Completed);
+}
+
+@test "Transition: Running -> Failed" @budget(20us) {
+    @assert(step_state(State::Running, 3) == State::Failed);
+}
+
+@test "Transition: Coverage" @budget(50us) {
+    @assert(step_state(State::Idle, 0) == State::Idle);
+    @assert(step_state(State::Idle, 1) == State::Running);
+    @assert(step_state(State::Running, 2) == State::Completed);
+    @assert(step_state(State::Running, 3) == State::Failed);
+    @assert(step_state(State::Completed, 0) == State::Completed);
+    @assert(step_state(State::Failed, 0) == State::Failed);
+}
 ```
 

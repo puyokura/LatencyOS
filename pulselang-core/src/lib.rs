@@ -1275,4 +1275,15 @@ mod tests {
         let mut out = alloc::string::String::new();
         run_source_with_output(src, &[], &mut out).expect("Execution of Issue #2 snippet failed");
     }
+
+    #[test]
+    fn test_struct_literal_rejected_with_actionable_hint() {
+        let src = r#"
+            struct Point { x: i64, y: i64 }
+            let $p = Point { x: 10, y: 20 };
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_STRUCT_LITERAL_UNSUPPORTED");
+        assert!(err.suggestion.contains("Declare with 'let mut $var: Type;'"));
+    }
 }

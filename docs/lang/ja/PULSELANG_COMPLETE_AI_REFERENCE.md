@@ -40,7 +40,7 @@
    - [6.2 20レジスタ構成マップ](#62-20レジスタ構成マップ)
    - [6.3 64ビットタグ付きポインタ仕様](#63-64ビットタグ付きポインタ仕様)
    - [6.4 32-bit 固定長命令エンコーディング](#64-32-bit-固定長命令エンコーディング)
-   - [6.5 全 43 命令 Opcode 完全仕様表 (0x00 〜 0x2A)](#65-全-43-命令-opcode-完全仕様表-0x00--0x2a)
+   - [6.5 全 45 命令 Opcode 完全仕様表 (0x00 〜 0x2C)](#65-全-45-命令-opcode-完全仕様表-0x00--0x2c)
 7. [開発者ツールチェーン & 開発体験](#7-開発者ツールチェーン--開発体験)
    - [7.1 `pulc` CLI コマンド・サブコマンド・フラグ](#71-pulc-cli-コマンドサブコマンドフラグ)
    - [7.2 `pulc --json` 構造化診断 JSON スキーマ](#72-pulc---json-構造化診断-json-スキーマ)
@@ -68,11 +68,11 @@
 
 ## 1. 言語概要と設計思想
 
-**PulseLang (パルスラング) v3.1** は、LatencyOS 上で極小遅延（サブミリ秒〜マイクロ秒）のハードウェアストリーミング処理を自律制御するために設計された、**時間優先型リアクティブドメイン特化言語 (Temporal Reactive DSL)** です。
+**PulseLang (パルスラング) v3.2** は、LatencyOS 上で極小遅延（サブミリ秒〜マイクロ秒）のハードウェアストリーミング処理を自律制御するために設計された、**時間優先型リアクティブドメイン特化言語 (Temporal Reactive DSL)** です。
 
 ```
 +-------------------------------------------------------------------------------+
-|                             PulseLang v3.1 DSL                                |
+|                             PulseLang v3.2 DSL                                |
 |  - 時間単位の第一級サポート (ns, us, ms, s)   - 静的 WCET 解析 & 契約プログラミング    |
 |  - 不変性強制 (let / let mut)               - 線形型理論 (Linear DMA Handles)       |
 |  - パターンマッチング (match Ok/Err)          - 静的関数 / 構造体 / LUT               |
@@ -226,14 +226,12 @@ PrimaryExpr     ::= IntegerLiteral
                   | VarIdent "[" Expression "]"
                   | Identifier "[" Expression "]"
                   | VarIdent "." Identifier
-                  | StructInitExpr
                   | VarIdent
                   | HardwareIdent
                   | Identifier "(" ArgList? ")"
                   | IntrinsicCall
                   | "(" Expression ")"
 
-StructInitExpr  ::= Identifier "{" ( Identifier ":" Expression ( "," Identifier ":" Expression )* )? "}"
 IntrinsicCall   ::= "@" Identifier "(" ArgList? ")"
 ArgList         ::= Expression ( "," Expression )*
 
@@ -251,7 +249,7 @@ Identifier      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 
 ### 4.1 変数宣言と不変性 (`let` / `let mut`)
 
-PulseLang v3.1 は、Rust の安全哲学に準拠した**不変性デフォルト (Immutable by Default)** を採用しています。
+PulseLang v3.2 は、Rust の安全哲学に準拠した**不変性デフォルト (Immutable by Default)** を採用しています。
 
 ```pulse
 // 1. 不変変数の宣言 (再代入不可)
@@ -1004,7 +1002,7 @@ PulseLang v3.1 には、ハードウェアおよびカーネルに直結した *
 すべての `px64` 命令は厳密に 4 バイト境界に配置されます。
 
 ```text
-Byte 0: Opcode (0x00 .. 0x2A)
+Byte 0: Opcode (0x00 .. 0x2C)
 Byte 1: Rd (宛先レジスタ / 識別子)
 Byte 2: Rs1 (第1ソースレジスタ / 即値上位 / FuncId)
 Byte 3: Rs2 (第2ソースレジスタ / 即値下位 / ArgReg)
@@ -1012,7 +1010,7 @@ Byte 3: Rs2 (第2ソースレジスタ / 即値下位 / ArgReg)
 
 ---
 
-### 6.5 全 43 命令 Opcode 完全仕様表 (0x00 〜 0x2A)
+### 6.5 全 45 命令 Opcode 完全仕様表 (0x00 〜 0x2C)
 
 | Hex | Opcode 定数名 | ニーモニック | オペランド | 詳細動作・セマンティクス | WCET |
 |---|---|---|---|---|---|
@@ -1059,7 +1057,8 @@ Byte 3: Rs2 (第2ソースレジスタ / 即値下位 / ArgReg)
 | `0x28` | `PX64_OP_TBL_DEF` | `TBL_DEF` | `TblId, Ba, Le` | 定数テーブル定義 (`table_bases[TblId] = Ba, lens = Le`) | ~2 ns |
 | `0x29` | `PX64_OP_TBL_LOAD` | `TBL_LOAD`| `Rd, TblId, Rs` | 境界チェック付きテーブル読出 (`Rd = const_pool[base + Rs]`) | ~3 ns |
 | `0x2A` | `PX64_OP_STREQ` | `STREQ` | `Rd, Rs1, Rs2` | 有界 $O(1)$ 文字列等値比較 (`Rd = (streq(Rs1, Rs2)) ? 1 : 0`) | ~5 ns |
-
+| `0x2B` | `PX64_OP_SPILL_STORE`| `SPILL_STORE`|`SlotId, Rs, 0` | 静的スタックスピル枠への書込 (`spill_slots[SlotId] = Rs`) | ~2 ns |
+| `0x2C` | `PX64_OP_SPILL_LOAD` | `SPILL_LOAD` |`Rd, SlotId, 0` | 静的スタックスピル枠からの読出 (`Rd = spill_slots[SlotId]`) | ~2 ns |
 ---
 
 ## 7. 開発者ツールチェーン & 開発体験

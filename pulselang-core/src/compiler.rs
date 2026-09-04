@@ -3979,6 +3979,17 @@ impl<'a> Compiler<'a> {
                     self.free_temp(idx_reg);
                     return Ok(None);
                 }
+                if self.peek().kind == TokenKind::LBrace {
+                    if self.is_struct_type(tok) {
+                        return Err(self.error(
+                            "ERR_STRUCT_LITERAL_UNSUPPORTED",
+                            "Struct literal initialization 'Type { field: val }' is not supported in PulseLang",
+                            "Struct instance declaration with 'let mut $var: Type;'",
+                            "Expression -> Struct Literal",
+                            "PulseLang uses zero-allocation static slots. Declare with 'let mut $var: Type;', then assign fields: '$var.field = value;'",
+                        ));
+                    }
+                }
                 if self.peek().kind == TokenKind::LParen {
                     // Check if calling a user-defined static function
                     let mut fn_match = None;
