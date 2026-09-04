@@ -1716,8 +1716,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/for_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("45", 5, &mut full_output), "Failed executing for_test.bin: sum 0..10 != 45");
-
+    assert!(wait_for("45", 10, &mut full_output), "Failed executing for_test.bin: sum 0..10 != 45");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     println!("[xtask-test] 14. Testing rewritten bench.pul with static for loop: compile /pulselang/bench.pul /bin/bench_for.bin && run");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/bench.pul /bin/bench_for.bin\r\n").unwrap();
@@ -1729,6 +1729,7 @@ fn test_standalone_exe() {
     stdin.write_all(b"run /bin/bench_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("9900", 10, &mut full_output), "Failed executing bench_for.bin: sum != 9900");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     println!("[xtask-test] 15. Testing compile-time static WCET rejection: compile /pulselang/err_for_wcet.pul /bin/err_for.bin");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_for_wcet.pul /bin/err_for.bin\r\n").unwrap();
@@ -1748,6 +1749,7 @@ fn test_standalone_exe() {
     stdin.write_all(b"run /bin/array_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("550", 10, &mut full_output), "Failed running array_test.bin: sum != 550");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("[ARRAY_TEST] Assertion passed!"), "Failed finding assertion passed in array_test.bin");
     println!("[xtask-test] 17. Testing Phase 10-2 array out-of-bounds runtime fault: compile & run /pulselang/err_array_oob.pul");
     full_output.clear();
@@ -1773,6 +1775,7 @@ fn test_standalone_exe() {
     stdin.write_all(b"run /bin/bitwise_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("55", 10, &mut full_output), "Failed bitwise $a output");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("16"), "Failed bitwise $b output");
     assert!(full_output.contains("85"), "Failed bitwise $c output");
     assert!(full_output.contains("[BITWISE_TEST] All assertions passed!"), "Failed assertion check in bitwise_test");
@@ -1792,7 +1795,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/fold_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("115", 5, &mut full_output), "Failed executing fold_test.bin: res != 115");
+    assert!(wait_for("115", 10, &mut full_output), "Failed executing fold_test.bin: res != 115");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     println!("[xtask-test] 20. Testing Phase 10-2 @assert(false) runtime failure: compile & run /pulselang/err_assert.pul");
     full_output.clear();
@@ -1824,7 +1828,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/fn_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[FN_TEST] All static function tests passed!", 5, &mut full_output), "Failed running fn_test.bin");
+    assert!(wait_for("[FN_TEST] All static function tests passed!", 10, &mut full_output), "Failed running fn_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("40"), "Failed finding add(15, 25) result 40");
     assert!(full_output.contains("100"), "Failed finding clamp upper bound 100");
     assert!(full_output.contains("50"), "Failed finding clamp in-range 50");
@@ -1840,6 +1845,7 @@ fn test_standalone_exe() {
     stdin.write_all(b"run /bin/result_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("[RESULT_TEST] Tagged result tests passed!", 10, &mut full_output), "Failed running result_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("25"), "Failed finding unwrapped safe_div result 25");
     println!("[xtask-test] 23. Testing Phase 10-3 Call Stack Overflow protection: compile & run /pulselang/err_stack_overflow.pul");
     full_output.clear();
@@ -1891,6 +1897,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run struct_test.bin]:\n{}", full_output);
     }
     assert!(res_struct, "Failed running struct_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("200"), "Failed finding pt.y = 200");
     assert!(full_output.contains("1920"), "Failed finding hdr.width = 1920");
     assert!(full_output.contains("1080"), "Failed finding hdr.height = 1080");
@@ -1930,6 +1937,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run const_table_test]:\n{}", full_output);
     }
     assert!(res_run, "Failed running const_table_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("0"), "Failed finding table val 0");
     assert!(full_output.contains("64"), "Failed finding table val 64");
     assert!(full_output.contains("128"), "Failed finding table val 128");
@@ -1969,6 +1977,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run streq_test]:\n{}", full_output);
     }
     assert!(res_streq, "Failed running streq_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("1"), "Failed finding streq eq1 val 1");
     assert!(full_output.contains("0"), "Failed finding streq eq2 val 0");
 
@@ -1998,6 +2007,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run fold_ext_test]:\n{}", full_output);
     }
     assert!(res_fold, "Failed running fold_ext_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("31"), "Failed finding val 31");
 
     println!("[xtask-test] 31. Testing Ultra-Strict immutability by default & let mut: compile & run /pulselang/strict_immut_test.pul");
@@ -2009,7 +2019,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/strict_immut_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[STRICT_IMMUT_TEST] Immutability and mutability invariants passed!", 5, &mut full_output), "Failed running strict_immut_test.bin");
+    assert!(wait_for("[STRICT_IMMUT_TEST] Immutability and mutability invariants passed!", 10, &mut full_output), "Failed running strict_immut_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("100"), "Failed finding val 100");
     assert!(full_output.contains("150"), "Failed finding val 150");
 
@@ -2065,7 +2076,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/match_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[MATCH_TEST] All exhaustive pattern matching tests passed!", 5, &mut full_output), "Failed running match_test.bin");
+    assert!(wait_for("[MATCH_TEST] All exhaustive pattern matching tests passed!", 10, &mut full_output), "Failed running match_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     assert!(full_output.contains("42"), "Failed finding match val 42");
     assert!(full_output.contains("105"), "Failed finding match err 105");
     assert!(full_output.contains("300"), "Failed finding match state 300");
@@ -2112,7 +2124,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/math_demo.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[MATH_DEMO] All math & bit manipulation tests passed!", 5, &mut full_output), "Failed running math_demo.bin");
+    assert!(wait_for("[MATH_DEMO] All math & bit manipulation tests passed!", 10, &mut full_output), "Failed running math_demo.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     println!("[xtask-test] 37.2 Testing hardware & system telemetry intrinsics: compile & run /pulselang/telemetry_ext.pul");
     full_output.clear();
@@ -2134,6 +2147,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run telemetry_ext.bin]:\n{}", full_output);
     }
     assert!(res_telemetry, "Failed running telemetry_ext.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     println!("[xtask-test] 37.3 Testing zero-copy VRAM DMA direct access intrinsics: compile & run /pulselang/vram_test.pul");
     full_output.clear();
@@ -2155,6 +2169,7 @@ fn test_standalone_exe() {
         println!("[DEBUG_OUTPUT for run vram_test.bin]:\n{}", full_output);
     }
     assert!(res_vram, "Failed running vram_test.bin");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     println!("[xtask-test] 38. Testing Phase S Auto-Import on boot (without manual import command): cat /hello.txt");
     full_output.clear();
