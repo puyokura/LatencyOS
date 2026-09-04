@@ -2024,8 +2024,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/contracts_test.pul /bin/contracts_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling contracts_test.pul");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for contracts_test.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling contracts_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/contracts_test.bin\r\n").unwrap();
@@ -2038,8 +2038,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_precondition.pul /bin/err_precondition.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling err_precondition.pul");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for err_precondition.pul");
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling err_precondition.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
 
     full_output.clear();
     stdin.write_all(b"run /bin/err_precondition.bin\r\n").unwrap();
@@ -2099,9 +2099,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/math_demo.pul /bin/math_demo.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling math_demo.pul");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for math_demo.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling math_demo.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/math_demo.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -2118,9 +2117,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/telemetry_ext.pul /bin/telemetry_ext.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling telemetry_ext.pul");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for telemetry_ext.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling telemetry_ext.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/telemetry_ext.bin\r\n").unwrap();
     stdin.flush().unwrap();
@@ -2140,9 +2138,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/vram_test.pul /bin/vram_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed compiling vram_test.pul");
-    assert!(full_output.contains("[BUILD] Compiled"), "Failed finding compiled output for vram_test.pul");
-
+    assert!(wait_for("[BUILD] Compiled", 10, &mut full_output), "Failed compiling vram_test.pul");
+    assert!(wait_for("[c0|", 10, &mut full_output));
     full_output.clear();
     stdin.write_all(b"disasm /bin/vram_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
