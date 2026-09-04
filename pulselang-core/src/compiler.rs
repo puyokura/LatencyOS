@@ -2,6 +2,7 @@
 
 use crate::error::CompileError;
 use crate::isa::*;
+pub use crate::isa::*;
 use crate::token::{Token, TokenKind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
