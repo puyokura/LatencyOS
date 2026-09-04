@@ -94,7 +94,7 @@ pub const MAX_ENUMS: usize = 16;
 pub const MAX_ENUM_VARIANTS: usize = 16;
 pub const MAX_STRING_POOL: usize = 512;
 pub const MAX_VM_STEPS: usize = 10_000;
-pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 50_000_000; // 50.0 ms wall-clock hard watchdog limit (README specification)
+pub const MAX_SCRIPT_TIMEOUT_NS: u64 = 5_000_000; // 5.0 ms wall-clock hard watchdog limit
 
 // Tag masks
 pub const STR_TAG: i64 = 0x4000_0000_0000_0000;

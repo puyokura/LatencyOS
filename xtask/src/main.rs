@@ -1881,6 +1881,7 @@ fn test_standalone_exe() {
     assert!(full_output.contains("STRUCT_LOAD"), "Failed disasm struct_test.bin (missing STRUCT_LOAD)");
     println!("[xtask-test] Disassembly for /bin/struct_test.bin showing STRUCT opcodes:\n{}", full_output.trim());
     std::thread::sleep(Duration::from_millis(100));
+    while let Ok(_) = rx.try_recv() {}
     full_output.clear();
     stdin.write_all(b"run /bin/struct_test.bin\r\n").unwrap();
     stdin.flush().unwrap();
