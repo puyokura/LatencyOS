@@ -1255,4 +1255,24 @@ mod tests {
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_ENUM_TYPE_MISMATCH");
     }
+
+    #[test]
+    fn test_issue_2_multiple_requires_and_ensures() {
+        let src = r#"
+            fn make_character($code, $index) -> i64
+            @requires($code >= 0)
+            @requires($index >= 0)
+            @ensures($result >= 0)
+            {
+                return $code;
+            }
+            let $c = make_character(65, 0);
+            @assert($c == 65);
+        "#;
+        let bin = compile(src).expect("Compilation of Issue #2 snippet failed");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+
+        let mut out = alloc::string::String::new();
+        run_source_with_output(src, &[], &mut out).expect("Execution of Issue #2 snippet failed");
+    }
 }
