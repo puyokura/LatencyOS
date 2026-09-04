@@ -1,7 +1,7 @@
 //! PulseLang single-pass compiler for px64 register virtual architecture
 
 use crate::error::CompileError;
-use crate::isa::{MAX_ENUM_VARIANTS, MAX_ENUMS, MAX_VARS};
+use crate::isa::*;
 use crate::token::{Token, TokenKind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
