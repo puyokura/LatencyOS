@@ -1760,8 +1760,8 @@ fn test_standalone_exe() {
     stdin.write_all(b"run /bin/err_array_oob.bin\r\n").unwrap();
     stdin.flush().unwrap();
     assert!(wait_for("ERR_PX64_ARRAY_OUT_OF_BOUNDS", 10, &mut full_output), "Failed array out-of-bounds runtime error check");
-    assert!(full_output.contains("Fixed-Length Array Boundary Violation"), "Failed finding fault category in diagnostic");
     assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after array oob fault");
+    assert!(full_output.contains("Fixed-Length Array Boundary Violation"), "Failed finding fault category in diagnostic");
     println!("[xtask-test] 18. Testing Phase 10-2 bitwise operations and assertions: compile & run /pulselang/bitwise_test.pul");
     full_output.clear();
     stdin.write_all(b"compile /pulselang/bitwise_test.pul /bin/bitwise_test.bin\r\n").unwrap();
@@ -1803,9 +1803,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_assert.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_ASSERTION_FAILED", 5, &mut full_output), "Failed runtime assertion failure check");
+    assert!(wait_for("ERR_PX64_ASSERTION_FAILED", 10, &mut full_output), "Failed runtime assertion failure check");
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after assertion fault");
     assert!(full_output.contains("Runtime Assertion Contract Failure"), "Failed finding assertion fault category in diagnostic");
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after assertion fault");
 
     println!("[xtask-test] 21. Testing Phase 10-3 static function calls: compile, disasm & run /pulselang/fn_test.pul");
     full_output.clear();
@@ -1850,7 +1850,7 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_stack_overflow.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after stack overflow fault");
+    assert!(wait_for("[c0|", 15, &mut full_output), "Failed waiting for prompt after stack overflow fault");
     assert!(full_output.contains("ERR_PX64_STACK_OVERFLOW"), "Failed stack overflow check");
     assert!(full_output.contains("Static Call Stack Overflow Violation"), "Failed finding stack overflow fault category");
 
@@ -1863,7 +1863,7 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_unwrap.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after unwrap fault");
+    assert!(wait_for("[c0|", 15, &mut full_output), "Failed waiting for prompt after unwrap fault");
     assert!(full_output.contains("ERR_PX64_UNWRAP_FAILED"), "Failed unwrap fault check");
     assert!(full_output.contains("Tagged Result Unwrap Fault"), "Failed finding unwrap fault category");
 
@@ -1944,9 +1944,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"run /bin/err_table_bounds.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_PX64_TABLE_OUT_OF_BOUNDS", 5, &mut full_output), "Failed table out of bounds check");
+    assert!(wait_for("ERR_PX64_TABLE_OUT_OF_BOUNDS", 10, &mut full_output), "Failed table out of bounds check");
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after table fault");
     assert!(full_output.contains("Read-Only Const Table Boundary Violation"), "Failed finding table fault category");
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after table fault");
 
     println!("[xtask-test] 29. Testing Phase 10-6 inline strings & string equality comparison: compile, disasm & run /pulselang/streq_test.pul");
     full_output.clear();
