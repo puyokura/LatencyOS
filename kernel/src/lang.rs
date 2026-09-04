@@ -1161,7 +1161,7 @@ impl<'a> PX64VM<'a> {
                     // from the script execution deadline so I/O throughput limits do not violate
                     // the VM computational watchdog deadline.
                     let t_nat_spent = read_tsc_serialized().saturating_sub(t_nat_start);
-                    timeout_tsc = timeout_tsc.saturating_add(t_nat_spent.saturating_mul(2));
+                    timeout_tsc = timeout_tsc.saturating_add(t_nat_spent);
 
                     if rd < PX64_NUM_REGISTERS {
                         self.regs[rd] = ret;
