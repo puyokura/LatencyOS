@@ -22,7 +22,6 @@ fn test_all_documented_sample_scripts() {
             println!("Testing documented sample script: {}", filename);
 
             let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
-
             let stats = pulselang_core::check(&src).unwrap_or_else(|e| panic!("Check failed for {}: {:?}", filename, e));
             assert!(stats.total_binary_size > 16, "Binary size for {} must be > 16 bytes", filename);
 
