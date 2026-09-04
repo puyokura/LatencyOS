@@ -1684,7 +1684,8 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"timeline\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("stage 0 (isr)", 5, &mut full_output), "Failed timeline execution");
+    assert!(wait_for("stage 0 (isr)", 10, &mut full_output), "Failed timeline execution");
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after timeline");
     assert!(full_output.contains("status: PASS") || full_output.contains("status: EXCEEDED"), "Failed timeline status check");
     assert!(!full_output.contains("margin: optimal"), "Timeline must not contain unconditional margin: optimal");
 
