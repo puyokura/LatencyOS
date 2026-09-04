@@ -2,6 +2,9 @@
 
 use crate::error::CompileError;
 use crate::isa::*;
+use crate::isa::MAX_ENUM_VARIANTS;
+use crate::isa::MAX_ENUMS;
+use crate::isa::MAX_VARS;
 use crate::token::{Token, TokenKind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
