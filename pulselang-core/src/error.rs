@@ -31,7 +31,6 @@ impl CompileError {
             suggestion: "Check file format and integrity",
         }
     }
-
     pub fn is_runtime(&self) -> bool {
         self.code.starts_with("ERR_PX64_")
             || self.code.starts_with("ERR_BINARY_")

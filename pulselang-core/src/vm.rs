@@ -1365,7 +1365,6 @@ mod tests {
         let mut out = String::new();
         run_source_with_output(src, &[], &mut out).expect("Struct execution failed");
     }
-
     #[test]
     fn test_vm_const_tables() {
         let src = r#"
