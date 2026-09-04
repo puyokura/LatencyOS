@@ -1157,12 +1157,18 @@ impl<'a> PX64VM<'a> {
                         _ => 0,
                     };
 
-                    // Deduct hardware I/O execution time (such as serial UART transmission latency)
-                    // from the script execution deadline so I/O throughput limits do not violate
-                    // the VM computational watchdog deadline.
-                    let t_nat_spent = read_tsc_serialized().saturating_sub(t_nat_start);
-                    timeout_tsc = timeout_tsc.saturating_add(t_nat_spent.saturating_mul(10));
-
+                    // Deduct blocking external/native hardware I/O latency (such as UART serial transmission
+                    // or hardware VBLANK polling) from the computational watchdog deadline.
+                    // Pure compute intrinsics, memory operations, and intentional wait loops (@busy_wait)
+                    // are NOT I/O and MUST remain strictly subject to the computational watchdog deadline.
+                    let is_blocking_io = matches!(
+                        func_id,
+                        NATIVE_PRINT | NATIVE_PRINTLN | NATIVE_GPU_CAPTURE
+                    );
+                    if is_blocking_io {
+                        let t_nat_spent = read_tsc_serialized().saturating_sub(t_nat_start);
+                        timeout_tsc = timeout_tsc.saturating_add(t_nat_spent);
+                    }
                     if rd < PX64_NUM_REGISTERS {
                         self.regs[rd] = ret;
                     }
@@ -1481,7 +1487,7 @@ impl<'a> VM<'a> {
 
     pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
         let start_tsc = read_tsc_serialized();
-        let timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
+        let mut timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
         let mut steps = 0;
         while self.ip < self.code.len() {
             if steps >= MAX_VM_STEPS {
@@ -1594,6 +1600,7 @@ impl<'a> VM<'a> {
                     let func_id = self.code[self.ip];
                     let argc = self.code[self.ip + 1] as usize;
                     self.ip += 2;
+                    let t_nat_start = read_tsc_serialized();
                     match func_id {
                         NATIVE_PRINT => {
                             if argc > 0 {
@@ -1708,6 +1715,14 @@ impl<'a> VM<'a> {
                             }
                         }
                         _ => {}
+                    }
+                    let is_blocking_io = matches!(
+                        func_id,
+                        NATIVE_PRINT | NATIVE_PRINTLN | NATIVE_GPU_CAPTURE
+                    );
+                    if is_blocking_io {
+                        let t_nat_spent = read_tsc_serialized().saturating_sub(t_nat_start);
+                        timeout_tsc = timeout_tsc.saturating_add(t_nat_spent);
                     }
                 }
                 OP_WITHIN_START => {
