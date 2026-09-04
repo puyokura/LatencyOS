@@ -312,7 +312,7 @@ impl<'a> PX64VM<'a> {
     // Worst-case execution time: ~60_000 ns
     pub fn run(&mut self, tsc_freq_hz: u64) -> Result<(), CompileError> {
         let start_tsc = read_tsc_serialized();
-        let timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
+        let mut timeout_tsc = start_tsc + crate::tsc::ns_to_tsc(MAX_SCRIPT_TIMEOUT_NS, tsc_freq_hz);
         let mut steps = 0;
 
         while self.ip + 4 <= self.code.len() {
@@ -826,6 +826,7 @@ impl<'a> PX64VM<'a> {
                         0
                     };
 
+                    let t_nat_start = read_tsc_serialized();
                     let ret = match func_id {
                         NATIVE_PRINT => {
                             if (arg_val & ARG_TAG) != 0 {
@@ -888,7 +889,6 @@ impl<'a> PX64VM<'a> {
                             }
                             0
                         }
-
                         NATIVE_SYS_TSC => read_tsc_serialized() as i64,
 
                         NATIVE_NET_RTT => LAST_RTT_NS.load(Ordering::Relaxed) as i64,
@@ -1156,6 +1156,12 @@ impl<'a> PX64VM<'a> {
 
                         _ => 0,
                     };
+
+                    // Deduct hardware I/O execution time (such as serial UART transmission latency)
+                    // from the script execution deadline so I/O throughput limits do not violate
+                    // the VM computational watchdog deadline.
+                    let t_nat_spent = read_tsc_serialized().saturating_sub(t_nat_start);
+                    timeout_tsc += t_nat_spent;
 
                     if rd < PX64_NUM_REGISTERS {
                         self.regs[rd] = ret;
