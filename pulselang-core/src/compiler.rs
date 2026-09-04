@@ -1058,7 +1058,8 @@ impl<'a> Compiler<'a> {
             }
 
             let len = core::cmp::min(v_name.len(), 32);
-            def.variants[v_idx][..len].copy_from_slice(&v_name[..len]);
+            let slice = &v_name[..len];
+            def.variants[v_idx][..len].copy_from_slice(slice);
             def.variant_lens[v_idx] = len;
             def.variant_count += 1;
 
