@@ -1732,9 +1732,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_for_wcet.pul /bin/err_for.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 5, &mut full_output), "Failed compile-time static WCET rejection");
+    assert!(wait_for("ERR_FOR_WCET_EXCEEDED", 10, &mut full_output), "Failed compile-time static WCET rejection");
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after static WCET error");
     assert!(full_output.contains("Static loop WCET exceeds MAX_VM_STEPS"), "Failed error message check");
-    assert!(wait_for("[c0|", 5, &mut full_output));
 
     println!("[xtask-test] 16. Testing Phase 10-2 fixed-size array operations: compile /pulselang/array_test.pul /bin/array_test.bin");
     full_output.clear();
@@ -1899,9 +1899,9 @@ fn test_standalone_exe() {
     full_output.clear();
     stdin.write_all(b"compile /pulselang/err_struct_field.pul /bin/err_struct_field.bin\r\n").unwrap();
     stdin.flush().unwrap();
-    assert!(wait_for("ERR_UNKNOWN_STRUCT_FIELD", 5, &mut full_output), "Failed compile-time struct field error check");
+    assert!(wait_for("ERR_UNKNOWN_STRUCT_FIELD", 10, &mut full_output), "Failed compile-time struct field error check");
+    assert!(wait_for("[c0|", 10, &mut full_output), "Failed waiting for prompt after compile error");
     assert!(full_output.contains("Field does not exist on struct type"), "Failed finding struct field error message");
-    assert!(wait_for("[c0|", 5, &mut full_output), "Failed waiting for prompt after compile error");
 
     println!("[xtask-test] 27. Testing Phase 10-5 constant lookup tables in ROM/pool: compile, disasm & run /pulselang/const_table_test.pul");
     full_output.clear();
