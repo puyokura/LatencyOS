@@ -68,6 +68,8 @@
    - 8.13 [`contracts_and_enums.pul`: State Enums, Pattern Matching & Contracts](#813-contracts_and_enumspul-state-enums-pattern-matching--contracts)
    - 8.14 [`contracts_and_fixed.pul`: Deterministic Fixed-Point Real-Time Filter](#814-contracts_and_fixedpul-deterministic-fixed-point-real-time-filter)
    - 8.15 [`wcet_analysis.pul`: Function WCET Typing & Static Synthesis](#815-wcet_analysispul-function-wcet-typing--static-synthesis)
+   - 8.16 [`loop_invariant.pul`: Loop Invariant Verification (`@invariant`)](#816-loop_invariantpul-loop-invariant-verification-invariant)
+   - 8.17 [`unsigned_types.pul`: First-Class Unsigned Integer Types (`u8`/`u16`/`u32`/`u64`)](#817-unsigned_typespul-first-class-unsigned-integer-types-u8u16u32u64)
 ---
 
 ## 1. AI System Prompt, Core Tenets & Five Invariants
@@ -1777,5 +1779,81 @@ fn process_signal($sample, $gain: fixed<16>) -> i64
 let $gain: fixed<16> = 1.5;
 let $final = process_signal(100, $gain);
 @assert($final == 310);
+```
+### 8.16 `loop_invariant.pul`: Loop Invariant Verification (`@invariant`)
+
+```pulse
+// loop_invariant.pul - Loop Invariant Verification for Real-Time Algorithms
+@contract: @wcet(100us) @budget(200us);
+
+// 1. Array summation maintaining non-negative accumulator invariant
+let $data: [i64; 4] = [10, 20, 30, 40];
+let mut $sum = 0;
+
+for $i in 0..4 @invariant($sum >= 0) {
+    $sum += $data[$i];
+}
+@assert($sum == 100);
+
+// 2. Bounded while loop with rate-limiting invariant
+let mut $counter = 0;
+let mut $rate = 50;
+
+while ($counter < 5) @invariant($rate >= 10 && $rate <= 100) {
+    $counter += 1;
+    $rate += 5;
+}
+@assert($counter == 5);
+@assert($rate == 75);
+
+@test "loop invariant accumulator verification" @budget(10us) {
+    let mut $acc = 0;
+    for $idx in 0..5 @invariant($acc >= 0) {
+        $acc += 10;
+    }
+    @assert($acc == 50);
+}
+```
+
+### 8.17 `unsigned_types.pul`: First-Class Unsigned Integer Types (`u8`/`u16`/`u32`/`u64`)
+
+```pulse
+// unsigned_types.pul - First-Class Unsigned Integer Types (u8/u16/u32/u64)
+@contract: @wcet(50us) @budget(100us);
+
+fn mask_byte($val: u8, $shift: u8) -> u8
+    @requires($val >= 0)
+    @ensures($result >= 0)
+{
+    return ($val << $shift) & 255;
+}
+
+fn packet_header($id: u16, $len: u16) -> u32
+    @requires($id >= 0 && $len >= 0)
+    @ensures($result >= 0)
+{
+    let $high = $id * 65536;
+    return $high + $len;
+}
+
+// 1. Unsigned variable declarations
+let $byte: u8 = 255;
+let $short: u16 = 65535;
+let $word: u32 = 1000000;
+let $wide: u64 = 5000000000;
+
+@assert($byte == 255);
+@assert($short == 65535);
+@assert($word == 1000000);
+
+// 2. Calling function with unsigned parameter types
+let $masked = mask_byte(15, 2);
+@assert($masked == 60);
+
+@test "unsigned integer operations and parameter passing" @budget(10us) {
+    let $b: u8 = 128;
+    let $m = mask_byte($b, 1);
+    @assert($m == 0); // 128 << 1 = 256; 256 & 255 = 0
+}
 ```
 
