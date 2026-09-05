@@ -1537,10 +1537,27 @@ fn bundle_standalone_exe() {
         eprintln!("[xtask] ERROR: Failed to compile runner crate.");
         std::process::exit(1);
     }
-
     let runner_exe = root.join("target").join("release").join("runner.exe");
     let out_exe = dist_dir.join("LatencyOS.exe");
     std::fs::copy(&runner_exe, &out_exe).expect("Failed to copy runner.exe to dist/LatencyOS.exe");
+
+    // 6. Also build release pulc compiler into dist/pulc.exe
+    println!("[xtask] Compiling host compiler into dist/pulc.exe...");
+    let mut pulc_cmd = Command::new(&cargo);
+    pulc_cmd.current_dir(&root)
+        .env("PATH", get_augmented_path())
+        .arg("build")
+        .arg("--package")
+        .arg("pulc")
+        .arg("--release");
+    let pulc_status = pulc_cmd.status().expect("Failed to build pulc package");
+    if pulc_status.success() {
+        let pulc_exe = root.join("target").join("release").join("pulc.exe");
+        let dist_pulc = dist_dir.join("pulc.exe");
+        let _ = std::fs::copy(&pulc_exe, &dist_pulc);
+        let pulc_size_mb = std::fs::metadata(&dist_pulc).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+        println!("[xtask] Host compiler generated: {} ({:.2} MB)", dist_pulc.display(), pulc_size_mb);
+    }
 
     let exe_size_mb = std::fs::metadata(&out_exe).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
     println!("================================================================================");
