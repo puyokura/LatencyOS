@@ -2,7 +2,7 @@
 
 > **Document Type**: Exhaustive All-in-One AI Specification, Formal Semantics, Instruction Set Architecture (ISA) & Low-Level Architectural Reference  
 > **Target Audience**: AI Coding Assistants, LLMs, Static Analyzers, Formal Verification Engines, Kernel Engineers  
-> **Release Version**: `v0.0.40`  
+> **Release Version**: `v0.0.41`
 > **Language Specification**: `PulseLang v3.2 (px64 v3 Architecture)`  
 > **Host Kernel**: `LatencyOS (x86_64 freestanding no_std)`  
 > **Official File Extension**: Source: `.pul` | Compiled Bytecode: `.bin`  

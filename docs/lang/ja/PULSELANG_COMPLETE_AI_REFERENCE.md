@@ -2,7 +2,7 @@
 
 > **ドキュメント種別**: 単一ファイル完結型 AI 形式仕様書・完全構文論・意味論 & 低レイヤアーキテクチャ定義書  
 > **対象読者**: AIコーディングエージェント、LLM、静的解析器、形式検証エンジン、リアルタイムカーネルエンジニア  
-> **リリースバージョン**: `v0.0.40`  
+> **リリースバージョン**: `v0.0.41`
 > **言語仕様バージョン**: `PulseLang v3.2 (hard-realtime DSL)`  
 > **VM / ISA バージョン**: `px64 v3 Architecture (Pulse Extended 64-bit Real-Time Architecture)`  
 > **実行環境**: `LatencyOS (x86_64 freestanding no_std kernel)`  

@@ -1,6 +1,6 @@
 # PulseLang Formal Specification & Architecture Manual
 
-> **Release Version**: `v0.0.40`  
+> **Release Version**: `v0.0.41`
 > **Language Specification**: `PulseLang v3.2 (px64 v3 Architecture)`  
 > **Host Kernel**: `LatencyOS (x86_64 freestanding no_std)`  
 > **Compiler & Toolchain**: `pulc` (`pulc <file.pul>`, `compile`, `disasm`, `check`, `run`)  
