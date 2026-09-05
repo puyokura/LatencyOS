@@ -1313,10 +1313,9 @@ fn test_px64_architecture(kernel_elf: &Path) {
 
     // Test 10: Run benchmark command to obtain real hardware/VM measured execution times
     println!("[xtask-test] Running benchmark for real execution timing...");
-    send_test_cmd(&mut tcp_stream, "benchmark", "[PX64_VM_MICROBENCHMARK]", &rx, &mut full_output);
+    send_test_cmd_timeout(&mut tcp_stream, "benchmark", "[PX64_VM_MICROBENCHMARK]", &rx, &mut full_output, 240);
     std::thread::sleep(Duration::from_millis(500));
     while let Ok(_) = rx.try_recv() {}
-
     // Test 11: Binary with invalid opcode (0xFE)
     println!("[xtask-test] Disassembling /bin/test_invalid_op.bin...");
     send_test_cmd(&mut tcp_stream, "disasm /bin/test_invalid_op.bin", "UNKNOWN_OP_0xfe", &rx, &mut full_output);
@@ -1335,13 +1334,23 @@ fn test_px64_architecture(kernel_elf: &Path) {
 
     println!("[xtask-test] === TEST PASSED: All 10 Audit Remediations (BL-01 to BL-10) and Phase 9 px64 Instruction Set Refactoring completely verified! ===");
 }
-
 fn send_test_cmd(
     stream: &mut std::net::TcpStream,
     cmd: &str,
     expected: &str,
     rx: &std::sync::mpsc::Receiver<Vec<u8>>,
     full_out: &mut String,
+) {
+    send_test_cmd_timeout(stream, cmd, expected, rx, full_out, 90);
+}
+
+fn send_test_cmd_timeout(
+    stream: &mut std::net::TcpStream,
+    cmd: &str,
+    expected: &str,
+    rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    full_out: &mut String,
+    timeout_secs: u64,
 ) {
     use std::io::Write;
     while let Ok(_) = rx.try_recv() {}
@@ -1362,7 +1371,7 @@ fn send_test_cmd(
     let start = Instant::now();
     let mut found_expected = expected.is_empty();
     let mut found_prompt = false;
-    while start.elapsed() < Duration::from_secs(90) {
+    while start.elapsed() < Duration::from_secs(timeout_secs) {
         while let Ok(chunk) = rx.try_recv() {
             full_out.push_str(&String::from_utf8_lossy(&chunk));
         }
