@@ -4,13 +4,15 @@ use crate::error::CompileError;
 use crate::isa::*;
 use crate::token::{Token, TokenKind};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HandleState {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Typestate {
     Unallocated,
-    Allocated { line: usize, col: usize },
-    Consumed,
+    Captured { line: usize, col: usize },
+    Sent,
+    Dropped,
 }
 
+pub type HandleState = Typestate;
 #[derive(Clone, Copy, Debug)]
 pub struct FnMeta {
     pub name: [u8; 16],
@@ -1940,7 +1942,7 @@ impl<'a> Compiler<'a> {
 
         // Verify all allocated hardware handles were sent/consumed (linear type ownership)
         for i in 0..4 {
-            if let HandleState::Allocated { line, col } = self.handle_states[i] {
+            if let Typestate::Captured { line, col } = self.handle_states[i] {
                 return Err(CompileError {
                     code: "ERR_LINEAR_UNCONSUMED_HANDLE",
                     message: "Hardware handle captured but never sent/consumed (linear ownership violation)",
@@ -2175,6 +2177,11 @@ impl<'a> Compiler<'a> {
                 if self.match_token(TokenKind::Exclamation) || self.match_token(TokenKind::Or) {
                     if self.match_token(TokenKind::Drop) {
                         self.emit_inst(PX64_OP_DROP, 0, 0, 0)?;
+                        for slot in 0..4 {
+                            if let Typestate::Captured { .. } = self.handle_states[slot] {
+                                self.handle_states[slot] = Typestate::Dropped;
+                            }
+                        }
                     }
                 }
                 self.match_token(TokenKind::Semi);
@@ -2205,10 +2212,12 @@ impl<'a> Compiler<'a> {
 
                 let jz_pos = self.emit_inst(PX64_OP_JZ, cond_reg, 0, 0)?;
 
+                let pre_loop_states = self.handle_states;
+
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
                         "ERR_EXPECTED_LBRACE",
-                        "Missing opening brace '{' for while block",
+                        "Missing opening brace '{' after while condition",
                         "Left brace '{'",
                         "Statement -> While Loop",
                         "Add opening brace '{' after while condition",
@@ -2218,6 +2227,30 @@ impl<'a> Compiler<'a> {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
+
+                // Loop Confinement: handles allocated in loop must be consumed in loop
+                for slot in 0..4 {
+                    let s_start = pre_loop_states[slot];
+                    let s_end = self.handle_states[slot];
+                    let match_state = match (s_start, s_end) {
+                        (Typestate::Unallocated, Typestate::Unallocated) => true,
+                        (Typestate::Unallocated, Typestate::Sent) => true,
+                        (Typestate::Unallocated, Typestate::Dropped) => true,
+                        (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
+                        (Typestate::Sent, Typestate::Sent) => true,
+                        (Typestate::Dropped, Typestate::Dropped) => true,
+                        _ => false,
+                    };
+                    if !match_state {
+                        return Err(self.error(
+                            "ERR_TYPESTATE_MISMATCH",
+                            "Loop body violates handle confinement (handle captured inside loop must be consumed within the same iteration)",
+                            "Consistent handle state across loop iterations",
+                            "Typestate Flow Verification",
+                            "Ensure handle captured in while loop is consumed with @send before next iteration",
+                        ));
+                    }
+                }
 
                 self.emit_imm16(PX64_OP_JMP, 0, loop_start)?;
                 self.patch_imm16(jz_pos, self.code_len as u16);
@@ -2351,7 +2384,7 @@ impl<'a> Compiler<'a> {
                         "Add opening brace '{' after for loop range",
                     ));
                 }
-
+                let pre_loop_states = self.handle_states;
                 let body_code_start = self.code_len;
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     self.statement()?;
@@ -2359,6 +2392,29 @@ impl<'a> Compiler<'a> {
                 self.match_token(TokenKind::RBrace);
                 let body_code_end = self.code_len;
 
+                // Loop Confinement: handles allocated in loop must be consumed in loop
+                for slot in 0..4 {
+                    let s_start = pre_loop_states[slot];
+                    let s_end = self.handle_states[slot];
+                    let match_state = match (s_start, s_end) {
+                        (Typestate::Unallocated, Typestate::Unallocated) => true,
+                        (Typestate::Unallocated, Typestate::Sent) => true,
+                        (Typestate::Unallocated, Typestate::Dropped) => true,
+                        (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
+                        (Typestate::Sent, Typestate::Sent) => true,
+                        (Typestate::Dropped, Typestate::Dropped) => true,
+                        _ => false,
+                    };
+                    if !match_state {
+                        return Err(self.error(
+                            "ERR_TYPESTATE_MISMATCH",
+                            "Loop body violates handle confinement (handle captured inside loop must be consumed within the same iteration)",
+                            "Consistent handle state across loop iterations",
+                            "Typestate Flow Verification",
+                            "Ensure handle captured in for loop is consumed with @send before next iteration",
+                        ));
+                    }
+                }
                 // Static WCET validation:
                 // Body instructions = (body_code_end - body_code_start) / 4
                 // Loop overhead per iteration: CMPLT (1) + JZ (1) + ADDI (1) + JMP (1) = 4 instructions
@@ -2642,6 +2698,8 @@ impl<'a> Compiler<'a> {
 
                 let jz_pos = self.emit_inst(PX64_OP_JZ, cond_reg, 0, 0)?;
 
+                let pre_if_states = self.handle_states;
+
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
                         "ERR_EXPECTED_LBRACE",
@@ -2655,10 +2713,13 @@ impl<'a> Compiler<'a> {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
+                let states_if = self.handle_states;
 
-                if self.match_token(TokenKind::Else) {
+                let states_else = if self.match_token(TokenKind::Else) {
                     let jmp_pos = self.emit_inst(PX64_OP_JMP, 0, 0, 0)?;
                     self.patch_imm16(jz_pos, self.code_len as u16);
+
+                    self.handle_states = pre_if_states;
 
                     if self.peek().kind == TokenKind::If {
                         // Desugar `else if (...) { ... }` into nested if statement
@@ -2679,9 +2740,34 @@ impl<'a> Compiler<'a> {
                         self.match_token(TokenKind::RBrace);
                     }
                     self.patch_imm16(jmp_pos, self.code_len as u16);
+                    self.handle_states
                 } else {
                     self.patch_imm16(jz_pos, self.code_len as u16);
+                    pre_if_states
+                };
+
+                // Merge Check: branches must have consistent Typestate
+                for slot in 0..4 {
+                    let s_if = states_if[slot];
+                    let s_else = states_else[slot];
+                    let match_state = match (s_if, s_else) {
+                        (Typestate::Unallocated, Typestate::Unallocated) => true,
+                        (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
+                        (Typestate::Sent, Typestate::Sent) => true,
+                        (Typestate::Dropped, Typestate::Dropped) => true,
+                        _ => false,
+                    };
+                    if !match_state {
+                        return Err(self.error(
+                            "ERR_TYPESTATE_MISMATCH",
+                            "Branches diverge in hardware handle typestate (both branches must leave handle in the same state)",
+                            "Consistent handle state across branches",
+                            "Typestate Flow Verification",
+                            "Ensure handle is consumed/sent in both if and else branches",
+                        ));
+                    }
                 }
+                self.handle_states = states_if;
             }
 
             TokenKind::Match => {
@@ -3508,7 +3594,7 @@ impl<'a> Compiler<'a> {
                     // Handle hardware handle allocation tracking
                     if (16..=19).contains(&var_reg) {
                         let slot = (var_reg - 16) as usize;
-                        if let HandleState::Allocated { .. } = self.handle_states[slot] {
+                        if let Typestate::Captured { .. } = self.handle_states[slot] {
                             return Err(self.error(
                                 "ERR_LINEAR_OVERWRITE",
                                 "Hardware handle overwritten before previous buffer was consumed/sent",
@@ -3517,7 +3603,7 @@ impl<'a> Compiler<'a> {
                                 "Ensure '@send(#h)' is invoked before overwriting '#h := @capture()'",
                             ));
                         }
-                        self.handle_states[slot] = HandleState::Allocated {
+                        self.handle_states[slot] = Typestate::Captured {
                             line: ident.line,
                             col: ident.col,
                         };
@@ -3645,7 +3731,7 @@ impl<'a> Compiler<'a> {
                         if (16..=19).contains(&dst) {
                             let slot = (dst - 16) as usize;
                             match self.handle_states[slot] {
-                                HandleState::Unallocated => {
+                                Typestate::Unallocated => {
                                     return Err(self.error(
                                         "ERR_LINEAR_USE_BEFORE_ALLOC",
                                         "Hardware handle sent before being captured/allocated",
@@ -3654,7 +3740,7 @@ impl<'a> Compiler<'a> {
                                         "Initialize hardware handle with '@capture()' before '@send()'",
                                     ));
                                 }
-                                HandleState::Consumed => {
+                                Typestate::Sent | Typestate::Dropped => {
                                     return Err(self.error(
                                         "ERR_LINEAR_DOUBLE_SEND",
                                         "Hardware handle sent multiple times (double-send / double-free violation)",
@@ -3663,8 +3749,8 @@ impl<'a> Compiler<'a> {
                                         "Remove duplicate '@send(#f);' calls on the same handle",
                                     ));
                                 }
-                                HandleState::Allocated { .. } => {
-                                    self.handle_states[slot] = HandleState::Consumed;
+                                Typestate::Captured { .. } => {
+                                    self.handle_states[slot] = Typestate::Sent;
                                 }
                             }
                         }
@@ -4622,7 +4708,7 @@ impl<'a> Compiler<'a> {
                         if (16..=19).contains(&target_reg) {
                             let slot = (target_reg - 16) as usize;
                             match self.handle_states[slot] {
-                                HandleState::Unallocated => {
+                                Typestate::Unallocated => {
                                     return Err(self.error(
                                         "ERR_LINEAR_USE_BEFORE_ALLOC",
                                         "Hardware handle sent before being captured/allocated",
@@ -4631,7 +4717,7 @@ impl<'a> Compiler<'a> {
                                         "Initialize hardware handle with '@capture()' before '@send()'",
                                     ));
                                 }
-                                HandleState::Consumed => {
+                                Typestate::Sent | Typestate::Dropped => {
                                     return Err(self.error(
                                         "ERR_LINEAR_DOUBLE_SEND",
                                         "Hardware handle sent multiple times (double-send / double-free violation)",
@@ -4640,8 +4726,8 @@ impl<'a> Compiler<'a> {
                                         "Remove duplicate '@send(#f);' calls on the same handle",
                                     ));
                                 }
-                                HandleState::Allocated { .. } => {
-                                    self.handle_states[slot] = HandleState::Consumed;
+                                Typestate::Captured { .. } => {
+                                    self.handle_states[slot] = Typestate::Sent;
                                 }
                             }
                         }

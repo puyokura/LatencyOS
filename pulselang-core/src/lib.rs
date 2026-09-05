@@ -1364,4 +1364,67 @@ mod tests {
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_WCET_CONTRACT_MISMATCH");
     }
+    #[test]
+    fn test_typestate_branch_match_valid() {
+        let src = r#"
+            let $cond = 1;
+            #f := @capture();
+            if ($cond == 1) {
+                @send(#f);
+            } else {
+                @send(#f);
+            }
+        "#;
+        let bin = compile(src).expect("Both branches consuming handle must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_typestate_branch_mismatch_rejected() {
+        let src = r#"
+            let $cond = 1;
+            #f := @capture();
+            if ($cond == 1) {
+                @send(#f);
+            } else {
+                let $x = 10;
+            }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_TYPESTATE_MISMATCH");
+    }
+
+    #[test]
+    fn test_typestate_loop_confinement_valid() {
+        let src = r#"
+            for $i in 0..5 {
+                #f := @capture();
+                @send(#f);
+            }
+        "#;
+        let bin = compile(src).expect("Loop with balanced capture and send must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_typestate_loop_confinement_leak_rejected() {
+        let src = r#"
+            for $i in 0..5 {
+                #f := @capture();
+            }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_TYPESTATE_MISMATCH");
+    }
+
+    #[test]
+    fn test_typestate_within_drop_valid() {
+        let src = r#"
+            @within(500us) {
+                #f := @capture();
+            } !drop;
+        "#;
+        let bin = compile(src).expect("Captured handle dropped via !drop must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
 }

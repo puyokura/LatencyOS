@@ -681,14 +681,30 @@ fn process_sample($sample)
 - Syntax: `@test "description" @budget(time) { ... }`
 - In normal compilation (`pulc compile`, kernel build), all `@test` blocks are completely stripped (zero bytecode overhead, 0 bytes in production binaries).
 - In testing mode (`pulc test`), `@test` blocks are extracted and executed in isolated `px64` VM sandboxes, verifying assertions and `@budget` constraints.
-### 3.14 Linear Type Ownership & DMA Safety Proofs
+### 3.14 Linear Type Ownership & Typestate Safety Proofs
 
-Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear ownership. The compiler performs static flow analysis to guarantee single consumption:
+Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear ownership and state transitions via **Typestate** analysis (`Unallocated` -> `Captured` -> `Sent` / `Dropped`). The compiler performs control-flow flow analysis across branches and loop boundaries to statically guarantee valid transitions and single consumption:
 
 ```pulse
 // VALID: Captured and consumed exactly once
 #f := @capture();
 @send(#f);
+
+// VALID: Balanced consumption across both conditional branches
+#f := @capture();
+if ($condition == 1) {
+    @send(#f);
+} else {
+    @send(#f);
+}
+
+// INVALID (ERR_TYPESTATE_MISMATCH): Branch divergence in handle state
+// #f := @capture();
+// if ($condition == 1) {
+//     @send(#f);
+// } else {
+//     // Leaked on else path!
+// }
 
 // INVALID (ERR_LINEAR_UNCONSUMED_HANDLE): Handle leaked without @send
 // #f := @capture();
@@ -703,7 +719,6 @@ Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear 
 // #f := @capture();
 // @send(#f);
 ```
-
 ---
 
 ## 4. Exhaustive Intrinsics Catalog (All 29 Intrinsics)
@@ -1271,6 +1286,7 @@ Demonstrates formal function contracts and `@test` block validation.
 |---|---|---|---|
 | `ERR_MUTABILITY_VIOLATION` | Compile | Reassigned variable declared with `let` | Declare variable with `let mut $var = ...;` |
 | `ERR_UNBOUNDED_LOOP` | Compile | While loop lacks monotonic termination progress | Add monotonic increment/decrement (e.g. `$i += 1;`) |
+| `ERR_TYPESTATE_MISMATCH` | Compile | Branches or loops diverge in handle typestate | Ensure handle is balanced (consumed/sent on all branches/iterations) |
 | `ERR_LINEAR_UNCONSUMED_HANDLE` | Compile | Descriptor `#f` captured but not consumed via `@send()` | Add `@send(#f);` before scope exit |
 | `ERR_LINEAR_DOUBLE_SEND` | Compile | Descriptor `#f` transmitted multiple times | Consume `#handle` strictly once |
 | `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit prior `#handle` before reassigning |
