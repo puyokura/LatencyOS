@@ -394,8 +394,33 @@ fn run_check(input_path: &Path, json: bool, verbose: bool) -> Result<(), (i32, S
     })?;
 
     if json {
+        let mut breakdown_json = Vec::new();
+        for i in 0..stats.wcet_breakdown_count {
+            let item = &stats.wcet_breakdown[i];
+            let name = String::from_utf8_lossy(&item.name[..item.name_len]);
+            let decl_str = match item.declared_ns {
+                Some(d) => format!("{}", d),
+                None => "null".to_string(),
+            };
+            breakdown_json.push(format!(
+                r#"{{"name":"{}","estimated_ns":{},"declared_ns":{}}}"#,
+                escape_json(&name),
+                item.estimated_ns,
+                decl_str
+            ));
+        }
+
+        let declared_wcet_str = match stats.declared_wcet_ns {
+            Some(d) => format!("{}", d),
+            None => "null".to_string(),
+        };
+        let declared_budget_str = match stats.declared_budget_ns {
+            Some(b) => format!("{}", b),
+            None => "null".to_string(),
+        };
+
         println!(
-            r#"{{"success":true,"command":"check","file":"{}","valid":true,"stats":{{"code_size":{},"instruction_count":{},"str_pool_len":{},"const_pool_len":{},"var_count":{},"function_count":{},"array_count":{},"struct_def_count":{},"struct_inst_count":{},"const_table_count":{},"total_binary_size":{}}}}}"#,
+            r#"{{"success":true,"command":"check","file":"{}","valid":true,"stats":{{"code_size":{},"instruction_count":{},"str_pool_len":{},"const_pool_len":{},"var_count":{},"function_count":{},"array_count":{},"struct_def_count":{},"struct_inst_count":{},"const_table_count":{},"total_binary_size":{}}},"wcet":{{"estimated_total_ns":{},"declared_wcet_ns":{},"declared_budget_ns":{},"breakdown":[{}]}}}}"#,
             escape_json(&input_path.display().to_string()),
             stats.code_size,
             stats.instruction_count,
@@ -408,6 +433,10 @@ fn run_check(input_path: &Path, json: bool, verbose: bool) -> Result<(), (i32, S
             stats.struct_inst_count,
             stats.const_table_count,
             stats.total_binary_size,
+            stats.estimated_wcet_ns,
+            declared_wcet_str,
+            declared_budget_str,
+            breakdown_json.join(",")
         );
     } else if verbose {
         println!(
@@ -429,13 +458,36 @@ fn run_check(input_path: &Path, json: bool, verbose: bool) -> Result<(), (i32, S
             stats.struct_def_count,
             stats.const_table_count
         );
+        if stats.wcet_breakdown_count > 0 {
+            println!("  \x1b[1mFunction WCET Breakdown:\x1b[0m");
+            for i in 0..stats.wcet_breakdown_count {
+                let item = &stats.wcet_breakdown[i];
+                let name = String::from_utf8_lossy(&item.name[..item.name_len]);
+                if let Some(d) = item.declared_ns {
+                    println!("    - {}() : {} ns (declared: {} ns)", name, item.estimated_ns, d);
+                } else {
+                    println!("    - {}() : {} ns", name, item.estimated_ns);
+                }
+            }
+        }
+        println!("  \x1b[1mSynthesized Total WCET:\x1b[0m {} ns", stats.estimated_wcet_ns);
     } else {
         println!(
-            "[pulc] Check passed for '{}' ({} instructions, {} bytes total)",
+            "[pulc] Check passed for '{}' ({} instructions, {} bytes total, est. WCET: {} ns)",
             input_path.display(),
             stats.instruction_count,
-            stats.total_binary_size
+            stats.total_binary_size,
+            stats.estimated_wcet_ns
         );
+        for i in 0..stats.wcet_breakdown_count {
+            let item = &stats.wcet_breakdown[i];
+            let name = String::from_utf8_lossy(&item.name[..item.name_len]);
+            if let Some(d) = item.declared_ns {
+                println!("  [WCET] {}() : {} ns (contract: {} ns)", name, item.estimated_ns, d);
+            } else {
+                println!("  [WCET] {}() : {} ns", name, item.estimated_ns);
+            }
+        }
     }
 
     Ok(())

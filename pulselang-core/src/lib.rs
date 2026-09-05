@@ -1309,4 +1309,59 @@ mod tests {
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_FIXED_SCALE_MISMATCH");
     }
+    #[test]
+    fn test_function_wcet_contract_passed_and_stats() {
+        let src = r#"
+            @contract: @wcet(100us) @budget(500us);
+            fn compute($a, $b) -> i64
+                @wcet(50ns)
+            {
+                return $a + $b;
+            }
+            let $res = compute(10, 20);
+        "#;
+        let mut tokens = alloc::vec![Token::empty(); MAX_TOKENS];
+        let mut lexer = Lexer::new(src.as_bytes());
+        let tok_count = lexer.tokenize(&mut tokens).expect("Tokenize failed");
+        let mut compiler = Compiler::new(src.as_bytes(), &tokens[..=tok_count]);
+        compiler.compile().expect("Compilation should succeed");
+        let stats = compiler.stats();
+        assert!(stats.estimated_wcet_ns > 0);
+        assert_eq!(stats.declared_wcet_ns, Some(100_000));
+        assert_eq!(stats.declared_budget_ns, Some(500_000));
+        assert!(stats.wcet_breakdown_count >= 1);
+        let fn_item = &stats.wcet_breakdown[0];
+        let name = core::str::from_utf8(&fn_item.name[..fn_item.name_len]).unwrap();
+        assert_eq!(name, "compute");
+        assert_eq!(fn_item.declared_ns, Some(50));
+        assert!(fn_item.estimated_ns <= 50);
+    }
+
+    #[test]
+    fn test_function_wcet_contract_mismatch_rejected() {
+        let src = r#"
+            fn heavy_calculation($a, $b) -> i64
+                @wcet(1ns)
+            {
+                let $x = $a * 2;
+                let $y = $b * 3;
+                let $z = $x + $y;
+                return $z * 4;
+            }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_WCET_CONTRACT_MISMATCH");
+    }
+
+    #[test]
+    fn test_script_level_wcet_contract_mismatch_rejected() {
+        let src = r#"
+            @contract: @wcet(1ns) @budget(500us);
+            let $x = 10;
+            let $y = 20;
+            let $z = $x + $y;
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_WCET_CONTRACT_MISMATCH");
+    }
 }

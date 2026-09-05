@@ -64,6 +64,7 @@
    - [9.12 `fizzbuzz.pul` (多分岐条件 & 算術演算)](#912-fizzbuzzpul-多分岐条件--算術演算)
    - [9.13 `contracts_and_enums.pul`: 状態列挙型・網羅的マッチング・契約検証](#913-contracts_and_enumspul-状態列挙型網羅的マッチング契約検証)
    - [9.14 `contracts_and_fixed.pul`: 決定論的固定小数点実時間フィルタ](#914-contracts_and_fixedpul-決定論的固定小数点実時間フィルタ)
+   - [9.15 `wcet_analysis.pul`: 関数単位WCET型付け & 静的WCET合成](#915-wcet_analysispul-関数単位wcet型付け--静的wcet合成)
 
 ---
 
@@ -1737,5 +1738,44 @@ fn apply_gain($sample, $gain: fixed<16>) -> i64
 let $gain: fixed<16> = 1.5;
 let $res = apply_gain(100, $gain);
 @assert($res == 150);
+```
+### 9.15 `wcet_analysis.pul`: 関数単位WCET型付け & 静的WCET合成
+
+```pulse
+// wcet_analysis.pul - 関数単位WCET型付け & 静的WCET合成
+@contract: @wcet(200us) @budget(500us);
+
+fn fast_math($x, $y) -> i64
+    @wcet(50ns)
+    @requires($x >= 0)
+    @ensures($result >= 0)
+{
+    let $d = $x * 2;
+    return $d + $y;
+}
+
+fn process_signal($sample, $gain: fixed<16>) -> i64
+    @wcet(150ns)
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    let $amplified = $sample * $gain;
+    return fast_math($amplified, 10);
+}
+
+@test "fast_math WCET bounds and accuracy" @budget(10us) {
+    let $res = fast_math(20, 5);
+    @assert($res == 45);
+}
+
+@test "process_signal with fixed gain" @budget(10us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = process_signal(100, $gain);
+    @assert($out == 310);
+}
+
+let $gain: fixed<16> = 1.5;
+let $final = process_signal(100, $gain);
+@assert($final == 310);
 ```
 > 新たな Intrinsics や Opcode が追加された場合は、本仕様書の対応するカタログ表・EBNF・契約定義を更新してください。

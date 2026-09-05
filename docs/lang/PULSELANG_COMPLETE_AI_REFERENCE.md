@@ -67,6 +67,7 @@
    - 8.12 [`contracts_and_tests.pul`: Design-by-Contract & Embedded Unit Testing](#812-contracts_and_testspul-design-by-contract--embedded-unit-testing)
    - 8.13 [`contracts_and_enums.pul`: State Enums, Pattern Matching & Contracts](#813-contracts_and_enumspul-state-enums-pattern-matching--contracts)
    - 8.14 [`contracts_and_fixed.pul`: Deterministic Fixed-Point Real-Time Filter](#814-contracts_and_fixedpul-deterministic-fixed-point-real-time-filter)
+   - 8.15 [`wcet_analysis.pul`: Function WCET Typing & Static Synthesis](#815-wcet_analysispul-function-wcet-typing--static-synthesis)
 ---
 
 ## 1. AI System Prompt, Core Tenets & Five Invariants
@@ -167,7 +168,10 @@ StructAssignStmt::= VarIdent "." Identifier ( ":=" | "=" ) Expression ";"
 ConstTableStmt  ::= "const" Identifier ( ":" "[" "i64" ";" IntegerLiteral "]" )? "=" "[" ConstElemList? "]" ";"
 ConstElemList   ::= ( IntegerLiteral | TimeLiteral ) ( "," ( IntegerLiteral | TimeLiteral ) )* ","?
 
-FnDeclStmt      ::= "fn" Identifier "(" ParamList? ")" ( "->" VarIdent )? ( "@requires(" Expression ")" )* Block
+FnDeclStmt      ::= "fn" Identifier "(" ParamList? ")" ( "->" Identifier )? ( FnContractClause )* Block
+FnContractClause::= "@wcet(" TimeLiteral ")"
+                  | "@requires(" Expression ")"
+                  | "@ensures(" Expression ")"
 ParamList       ::= VarIdent ( "," VarIdent )*
 ReturnStmt      ::= "return" Expression? ";"
 
@@ -1702,5 +1706,44 @@ fn apply_gain($sample, $gain: fixed<16>) -> i64
 let $gain: fixed<16> = 1.5;
 let $res = apply_gain(100, $gain);
 @assert($res == 150);
+```
+### 8.15 `wcet_analysis.pul`: Function WCET Typing & Static Synthesis
+
+```pulse
+// wcet_analysis.pul - Demonstrating Function WCET Typing & Static Synthesis
+@contract: @wcet(200us) @budget(500us);
+
+fn fast_math($x, $y) -> i64
+    @wcet(50ns)
+    @requires($x >= 0)
+    @ensures($result >= 0)
+{
+    let $d = $x * 2;
+    return $d + $y;
+}
+
+fn process_signal($sample, $gain: fixed<16>) -> i64
+    @wcet(150ns)
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    let $amplified = $sample * $gain;
+    return fast_math($amplified, 10);
+}
+
+@test "fast_math WCET bounds and accuracy" @budget(10us) {
+    let $res = fast_math(20, 5);
+    @assert($res == 45);
+}
+
+@test "process_signal with fixed gain" @budget(10us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = process_signal(100, $gain);
+    @assert($out == 310);
+}
+
+let $gain: fixed<16> = 1.5;
+let $final = process_signal(100, $gain);
+@assert($final == 310);
 ```
 

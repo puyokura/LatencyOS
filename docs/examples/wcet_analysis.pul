@@ -1,0 +1,35 @@
+// wcet_analysis.pul - Demonstrating Function WCET Typing & Static Synthesis
+@contract: @wcet(200us) @budget(500us);
+
+fn fast_math($x, $y) -> i64
+    @wcet(50ns)
+    @requires($x >= 0)
+    @ensures($result >= 0)
+{
+    let $d = $x * 2;
+    return $d + $y;
+}
+
+fn process_signal($sample, $gain: fixed<16>) -> i64
+    @wcet(150ns)
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    let $amplified = $sample * $gain;
+    return fast_math($amplified, 10);
+}
+
+@test "fast_math WCET bounds and accuracy" @budget(10us) {
+    let $res = fast_math(20, 5);
+    @assert($res == 45);
+}
+
+@test "process_signal with fixed gain" @budget(10us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = process_signal(100, $gain);
+    @assert($out == 310);
+}
+
+let $gain: fixed<16> = 1.5;
+let $final = process_signal(100, $gain);
+@assert($final == 310);

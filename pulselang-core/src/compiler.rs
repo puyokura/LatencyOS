@@ -22,6 +22,8 @@ pub struct FnMeta {
     pub ensures_tokens: [(usize, usize); 4], // (start_token_idx, end_token_idx)
     pub ensures_count: u8,
     pub param_fixed_scales: [Option<u8>; 4],
+    pub declared_wcet_ns: Option<u64>,
+    pub estimated_wcet_ns: u64,
 }
 impl FnMeta {
     pub const fn empty() -> Self {
@@ -35,6 +37,26 @@ impl FnMeta {
             ensures_tokens: [(0, 0); 4],
             ensures_count: 0,
             param_fixed_scales: [None; 4],
+            declared_wcet_ns: None,
+            estimated_wcet_ns: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WcetItem {
+    pub name: [u8; 32],
+    pub name_len: usize,
+    pub declared_ns: Option<u64>,
+    pub estimated_ns: u64,
+}
+impl WcetItem {
+    pub const fn empty() -> Self {
+        Self {
+            name: [0; 32],
+            name_len: 0,
+            declared_ns: None,
+            estimated_ns: 0,
         }
     }
 }
@@ -219,6 +241,11 @@ pub struct CompileStats {
     pub struct_inst_count: usize,
     pub const_table_count: usize,
     pub total_binary_size: usize,
+    pub estimated_wcet_ns: u64,
+    pub declared_wcet_ns: Option<u64>,
+    pub declared_budget_ns: Option<u64>,
+    pub wcet_breakdown: [WcetItem; 16],
+    pub wcet_breakdown_count: usize,
 }
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
@@ -263,6 +290,11 @@ pub struct Compiler<'a> {
     pub var_fixed_scales: [Option<u8>; MAX_VARS],
     pub current_expr_fixed_scale: Option<u8>,
     pub target_fixed_scale: Option<u8>,
+    pub declared_script_wcet_ns: Option<u64>,
+    pub declared_script_budget_ns: Option<u64>,
+    pub wcet_items: [WcetItem; 16],
+    pub wcet_item_count: usize,
+    pub total_synthesized_wcet_ns: u64,
     pub max_elements: usize,
     pub max_arrays: usize,
     pub max_struct_defs: usize,
@@ -293,6 +325,11 @@ impl<'a> Compiler<'a> {
             var_fixed_scales: [None; MAX_VARS],
             current_expr_fixed_scale: None,
             target_fixed_scale: None,
+            declared_script_wcet_ns: None,
+            declared_script_budget_ns: None,
+            wcet_items: [WcetItem::empty(); 16],
+            wcet_item_count: 0,
+            total_synthesized_wcet_ns: 0,
             spill_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
@@ -340,6 +377,11 @@ impl<'a> Compiler<'a> {
             struct_inst_count: self.struct_inst_count,
             const_table_count: self.const_table_count,
             total_binary_size,
+            estimated_wcet_ns: self.total_synthesized_wcet_ns,
+            declared_wcet_ns: self.declared_script_wcet_ns,
+            declared_budget_ns: self.declared_script_budget_ns,
+            wcet_breakdown: self.wcet_items,
+            wcet_breakdown_count: self.wcet_item_count,
         }
     }
 
@@ -1915,6 +1957,23 @@ impl<'a> Compiler<'a> {
         }
 
         self.emit_inst(PX64_OP_HALT, 0, 0, 0)?;
+
+        let total_inst_count = self.code_len / 4;
+        let total_calc_wcet = (total_inst_count as u64).saturating_mul(3);
+        self.total_synthesized_wcet_ns = total_calc_wcet;
+
+        if let Some(script_decl) = self.declared_script_wcet_ns {
+            if total_calc_wcet > script_decl {
+                return Err(self.error(
+                    "ERR_WCET_CONTRACT_MISMATCH",
+                    "Synthesized script total WCET exceeds top-level @contract @wcet limit",
+                    "Fewer instructions or higher @contract @wcet bound",
+                    "Script Contract -> WCET Synthesis",
+                    "Optimize script logic or increase @contract @wcet limit",
+                ));
+            }
+        }
+
         Ok(self.code_len)
     }
 
@@ -1981,7 +2040,32 @@ impl<'a> Compiler<'a> {
                 self.advance();
                 self.match_token(TokenKind::Colon);
                 while self.peek().kind != TokenKind::Semi && self.peek().kind != TokenKind::Eof {
-                    self.advance();
+                    let k = self.peek().kind;
+                    if k == TokenKind::AtWcet {
+                        self.advance();
+                        if self.match_token(TokenKind::LParen) {
+                            let t = self.advance();
+                            if let TokenKind::TimeLiteral(ns) = t.kind {
+                                self.declared_script_wcet_ns = Some(ns);
+                            } else if let TokenKind::Number(n) = t.kind {
+                                self.declared_script_wcet_ns = Some(n as u64);
+                            }
+                            self.match_token(TokenKind::RParen);
+                        }
+                    } else if k == TokenKind::AtBudget || k == TokenKind::Budget {
+                        self.advance();
+                        if self.match_token(TokenKind::LParen) {
+                            let t = self.advance();
+                            if let TokenKind::TimeLiteral(ns) = t.kind {
+                                self.declared_script_budget_ns = Some(ns);
+                            } else if let TokenKind::Number(n) = t.kind {
+                                self.declared_script_budget_ns = Some(n as u64);
+                            }
+                            self.match_token(TokenKind::RParen);
+                        }
+                    } else {
+                        self.advance();
+                    }
                 }
                 if !self.match_token(TokenKind::Semi) {
                     return Err(self.error(
@@ -3114,8 +3198,40 @@ impl<'a> Compiler<'a> {
                 let saved_var_count = self.var_count;
 
                 // Parse 0 or more contract clauses: @requires(condition) or @ensures(condition)
-                while self.peek().kind == TokenKind::AtRequires || self.peek().kind == TokenKind::AtEnsures {
-                    if self.match_token(TokenKind::AtRequires) {
+                while self.peek().kind == TokenKind::AtRequires || self.peek().kind == TokenKind::AtEnsures || self.peek().kind == TokenKind::AtWcet {
+                    if self.match_token(TokenKind::AtWcet) {
+                        if !self.match_token(TokenKind::LParen) {
+                            return Err(self.error(
+                                "ERR_CONTRACT_SYNTAX",
+                                "Expected '(' after @wcet",
+                                "Left parenthesis '('",
+                                "Function Contract -> WCET",
+                                "Specify WCET as '@wcet(time)' (e.g. @wcet(50ns))",
+                            ));
+                        }
+                        let t = self.advance();
+                        let wcet_ns = match t.kind {
+                            TokenKind::TimeLiteral(ns) => ns,
+                            TokenKind::Number(n) if n >= 0 => n as u64,
+                            _ => return Err(self.error(
+                                "ERR_EXPECTED_TIME_LITERAL",
+                                "Expected time literal in @wcet",
+                                "Time literal (e.g. 50ns, 100us)",
+                                "Function Contract -> WCET",
+                                "Specify valid time literal in @wcet",
+                            )),
+                        };
+                        if !self.match_token(TokenKind::RParen) {
+                            return Err(self.error(
+                                "ERR_UNCLOSED_PAREN",
+                                "Missing closing parenthesis ')' in @wcet",
+                                "Closing parenthesis ')'",
+                                "Function Contract -> WCET",
+                                "Close @wcet with ')'",
+                            ));
+                        }
+                        self.functions[fn_idx].declared_wcet_ns = Some(wcet_ns);
+                    } else if self.match_token(TokenKind::AtRequires) {
                         if !self.match_token(TokenKind::LParen) {
                             return Err(self.error(
                                 "ERR_CONTRACT_SYNTAX",
@@ -3185,11 +3301,39 @@ impl<'a> Compiler<'a> {
                         "Add '{' to start function body",
                     ));
                 }
-
+                let fn_body_start = self.code_len;
                 while self.peek().kind != TokenKind::RBrace && self.peek().kind != TokenKind::Eof {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
+                let fn_body_end = self.code_len;
+
+                let fn_inst_count = (fn_body_end.saturating_sub(fn_body_start)) / 4;
+                let estimated_fn_wcet = (fn_inst_count as u64).saturating_mul(3).max(10);
+                self.functions[fn_idx].estimated_wcet_ns = estimated_fn_wcet;
+
+                if self.wcet_item_count < 16 {
+                    let mut item = WcetItem::empty();
+                    item.name_len = self.functions[fn_idx].name_len;
+                    item.name[..item.name_len].copy_from_slice(&self.functions[fn_idx].name[..item.name_len]);
+                    item.declared_ns = self.functions[fn_idx].declared_wcet_ns;
+                    item.estimated_ns = estimated_fn_wcet;
+                    self.wcet_items[self.wcet_item_count] = item;
+                    self.wcet_item_count += 1;
+                }
+
+                if let Some(decl_wcet) = self.functions[fn_idx].declared_wcet_ns {
+                    if estimated_fn_wcet > decl_wcet {
+                        return Err(self.error(
+                            "ERR_WCET_CONTRACT_MISMATCH",
+                            "Function estimated WCET exceeds declared @wcet contract",
+                            "Lower instruction count or higher @wcet limit",
+                            "Function Contract -> WCET Verification",
+                            "Optimize function body instructions or increase declared @wcet bound",
+                        ));
+                    }
+                }
+
                 // Default return at end of function
                 self.emit_ensures_checks(fn_idx)?;
                 self.emit_inst(PX64_OP_RET, 0, 0, 0)?;
