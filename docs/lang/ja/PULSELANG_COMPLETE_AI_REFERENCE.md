@@ -63,6 +63,7 @@
    - [9.11 `contracts_and_tests.pul` (契約プログラミング & 組み込み単体テスト)](#911-contractsandtestspul-契約プログラミング--組み込み単体テスト)
    - [9.12 `fizzbuzz.pul` (多分岐条件 & 算術演算)](#912-fizzbuzzpul-多分岐条件--算術演算)
    - [9.13 `contracts_and_enums.pul`: 状態列挙型・網羅的マッチング・契約検証](#913-contracts_and_enumspul-状態列挙型網羅的マッチング契約検証)
+   - [9.14 `contracts_and_fixed.pul`: 決定論的固定小数点実時間フィルタ](#914-contracts_and_fixedpul-決定論的固定小数点実時間フィルタ)
 
 ---
 
@@ -285,6 +286,7 @@ PulseLang は、動的ヒープ確保を行わない厳格な静的型システ�
 | インライン文字列 | `let $s = "READY";`   | 512B 静的プール内のタグ付きポインタ (STR_TAG) |
 | 線形ハンドル     | `#f := @capture();`   | DMA バッファ記述子スロット (#f0..#f3)         |
 | Tagged Result    | `@ok($v)`, `@err($e)` | 成功/失敗ステータスを保持するタグ付き値       |
+| 固定小数点型      | `let $g: fixed<16>;`  | 決定論的 Q フォーマット小数 ($val \times 2^N$) |
 +------------------+-----------------------+-----------------------------------------------+
 ```
 
@@ -1701,4 +1703,39 @@ fn main() {
 
 > **ドキュメント保守情報**:  
 > 本リファレンスは `pulselang-core` および `LatencyOS` カーネルの最新実装と完全に同期しています。  
+
+### 9.14 `contracts_and_fixed.pul`: 決定論的固定小数点実時間フィルタ
+
+```pulse
+@contract: @wcet(25us) @budget(100us);
+
+fn apply_gain($sample, $gain: fixed<16>) -> i64
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    return $sample * $gain;
+}
+
+@test "fixed-point unit gain" @budget(20us) {
+    let $gain: fixed<16> = 1.0;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 100);
+}
+
+@test "fixed-point fractional gain" @budget(20us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 150);
+}
+
+@test "fixed-point attenuation" @budget(20us) {
+    let $gain: fixed<16> = 0.5;
+    let $out = apply_gain(200, $gain);
+    @assert($out == 100);
+}
+
+let $gain: fixed<16> = 1.5;
+let $res = apply_gain(100, $gain);
+@assert($res == 150);
+```
 > 新たな Intrinsics や Opcode が追加された場合は、本仕様書の対応するカタログ表・EBNF・契約定義を更新してください。

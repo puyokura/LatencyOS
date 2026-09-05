@@ -23,6 +23,7 @@ pub enum TokenKind {
     Struct,
     Const,
     Enum,
+    Fixed,
 
     // AI-Native Directives & Contracts
     AtContract,
@@ -46,6 +47,7 @@ pub enum TokenKind {
     HardwareIdent,  // #frame, #f, #slot0
     IntrinsicIdent, // @tsc, @rtt, @rate, @capture, @send, @print, @println
     Number(i64),
+    FloatLit(i64, u8),
     TimeLiteral(u64), // In nanoseconds (50ns, 200us, 5ms, 1s)
     StringLit,
 

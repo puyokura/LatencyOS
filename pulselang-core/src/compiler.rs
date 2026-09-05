@@ -21,6 +21,7 @@ pub struct FnMeta {
     pub param_count: u8,
     pub ensures_tokens: [(usize, usize); 4], // (start_token_idx, end_token_idx)
     pub ensures_count: u8,
+    pub param_fixed_scales: [Option<u8>; 4],
 }
 impl FnMeta {
     pub const fn empty() -> Self {
@@ -33,6 +34,7 @@ impl FnMeta {
             param_count: 0,
             ensures_tokens: [(0, 0); 4],
             ensures_count: 0,
+            param_fixed_scales: [None; 4],
         }
     }
 }
@@ -258,6 +260,9 @@ pub struct Compiler<'a> {
     pub const_table_count: usize,
     pub views: [ViewMeta; 8],
     pub view_count: usize,
+    pub var_fixed_scales: [Option<u8>; MAX_VARS],
+    pub current_expr_fixed_scale: Option<u8>,
+    pub target_fixed_scale: Option<u8>,
     pub max_elements: usize,
     pub max_arrays: usize,
     pub max_struct_defs: usize,
@@ -285,6 +290,9 @@ impl<'a> Compiler<'a> {
             enums: [EnumDefMeta::empty(); MAX_ENUMS],
             enum_count: 0,
             current_expr_enum_type: None,
+            var_fixed_scales: [None; MAX_VARS],
+            current_expr_fixed_scale: None,
+            target_fixed_scale: None,
             spill_count: 0,
             str_pool: [0; MAX_STRING_POOL],
             str_pool_len: 0,
@@ -1130,6 +1138,24 @@ impl<'a> Compiler<'a> {
         }
         None
     }
+    pub fn get_var_fixed_scale(&self, tok: Token) -> Option<u8> {
+        let name = &self.src[tok.start..tok.start + tok.len];
+        if let Some(fn_idx) = self.current_fn {
+            let meta = &self.functions[fn_idx];
+            for p in 0..meta.param_count as usize {
+                if meta.param_lens[p] == name.len() && &meta.param_names[p][..meta.param_lens[p]] == name {
+                    return meta.param_fixed_scales[p];
+                }
+            }
+        }
+        if let Some(var_idx) = self.get_var_index(tok) {
+            if var_idx < MAX_VARS {
+                return self.var_fixed_scales[var_idx];
+            }
+        }
+        None
+    }
+
 
     pub fn is_struct_type(&self, type_tok: Token) -> bool {
         let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
@@ -2268,7 +2294,6 @@ impl<'a> Compiler<'a> {
 
                 // Increment: $i += 1
                 self.emit_inst(PX64_OP_ADDI, var_reg, var_reg, 1)?;
-
                 // Jump back to loop start
                 self.emit_imm16(PX64_OP_JMP, 0, loop_start)?;
 
@@ -2284,6 +2309,7 @@ impl<'a> Compiler<'a> {
                 let is_mut = self.match_token(TokenKind::Mut);
                 let ident = self.advance();
                 let mut annotated_enum_type = None;
+                let mut annotated_fixed_scale = None;
                 if self.match_token(TokenKind::Colon) {
                     // Array declaration: let $buf: [i64; N]; or let $buf: [i64; N] = [1, 2, 3];
                     if self.match_token(TokenKind::LBracket) {
@@ -2371,18 +2397,49 @@ impl<'a> Compiler<'a> {
                         self.match_token(TokenKind::Semi);
                         return Ok(());
                     } else {
-                        // Struct instance declaration: let $pt: Point; or type annotation let $x: i64 = 10; or let $s: State = State::Idle;
+                        // Struct instance declaration: let $pt: Point; or fixed<N> or Enum or primitive
                         let type_tok = self.advance();
-                        if self.is_struct_type(type_tok) {
+                        if type_tok.kind == TokenKind::Fixed {
+                            if !self.match_token(TokenKind::Lt) {
+                                return Err(self.error(
+                                    "ERR_FIXED_SYNTAX",
+                                    "Expected '<' after 'fixed' type keyword",
+                                    "Left angle bracket '<'",
+                                    "Type Specification -> Fixed-Point",
+                                    "Specify fixed-point type as 'fixed<N>' (e.g. fixed<16>)",
+                                ));
+                            }
+                            let n_tok = self.advance();
+                            let scale = match n_tok.kind {
+                                TokenKind::Number(n) if (1..=31).contains(&n) => n as u8,
+                                _ => return Err(self.error(
+                                    "ERR_INVALID_FIXED_SCALE",
+                                    "Fixed-point fractional scale must be an integer between 1 and 31",
+                                    "Integer 1..=31",
+                                    "Type Specification -> Fixed-Point",
+                                    "Specify scale between 1 and 31 (e.g. fixed<16>)",
+                                )),
+                            };
+                            if !self.match_token(TokenKind::Gt) {
+                                return Err(self.error(
+                                    "ERR_FIXED_SYNTAX",
+                                    "Expected '>' after fixed-point scale",
+                                    "Right angle bracket '>'",
+                                    "Type Specification -> Fixed-Point",
+                                    "Close fixed-point scale with '>'",
+                                ));
+                            }
+                            annotated_fixed_scale = Some(scale);
+                        } else if self.is_struct_type(type_tok) {
                             self.declare_struct_inst(ident, type_tok)?;
                             self.match_token(TokenKind::Semi);
                             return Ok(());
+                        } else {
+                            let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
+                            if let Some(e_idx) = self.lookup_enum_by_name(type_name) {
+                                annotated_enum_type = Some(e_idx);
+                            }
                         }
-                        let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
-                        if let Some(e_idx) = self.lookup_enum_by_name(type_name) {
-                            annotated_enum_type = Some(e_idx);
-                        }
-                        // Primitive type annotation, e.g. let $x: i64 = 10;
                     }
                 }
                 // Check for array literal initialization without type annotation:
@@ -2452,6 +2509,8 @@ impl<'a> Compiler<'a> {
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.current_expr_enum_type = None;
+                    self.current_expr_fixed_scale = None;
+                    self.target_fixed_scale = annotated_fixed_scale;
                     if let Some(slot) = self.is_spilled_var(ident) {
                         let temp_val = self.alloc_temp()?;
                         self.expression(temp_val)?;
@@ -2461,15 +2520,19 @@ impl<'a> Compiler<'a> {
                         self.expression(var_reg)?;
                     }
                     let final_enum_type = annotated_enum_type.or(self.current_expr_enum_type);
+                    let final_fixed_scale = annotated_fixed_scale.or(self.current_expr_fixed_scale);
                     if let Some(var_idx) = self.get_var_index(ident) {
                         if var_idx < MAX_VARS {
                             self.var_enum_types[var_idx] = final_enum_type;
+                            self.var_fixed_scales[var_idx] = final_fixed_scale;
                         }
                     }
-                } else if annotated_enum_type.is_some() {
+                    self.target_fixed_scale = None;
+                } else if annotated_enum_type.is_some() || annotated_fixed_scale.is_some() {
                     if let Some(var_idx) = self.get_var_index(ident) {
                         if var_idx < MAX_VARS {
                             self.var_enum_types[var_idx] = annotated_enum_type;
+                            self.var_fixed_scales[var_idx] = annotated_fixed_scale;
                         }
                     }
                 }
@@ -3008,6 +3071,20 @@ impl<'a> Compiler<'a> {
                     fn_meta.param_lens[p_idx] = core::cmp::min(p_name.len(), 16);
                     fn_meta.param_names[p_idx][..fn_meta.param_lens[p_idx]].copy_from_slice(&p_name[..fn_meta.param_lens[p_idx]]);
                     fn_meta.param_count += 1;
+                    if self.match_token(TokenKind::Colon) {
+                        let t_tok = self.advance();
+                        if t_tok.kind == TokenKind::Fixed {
+                            if self.match_token(TokenKind::Lt) {
+                                let n_tok = self.advance();
+                                if let TokenKind::Number(n) = n_tok.kind {
+                                    if (1..=31).contains(&n) {
+                                        fn_meta.param_fixed_scales[p_idx] = Some(n as u8);
+                                    }
+                                }
+                                self.match_token(TokenKind::Gt);
+                            }
+                        }
+                    }
                     if !self.match_token(TokenKind::Comma) {
                         break;
                     }
@@ -3755,8 +3832,24 @@ impl<'a> Compiler<'a> {
         let mut val = self.factor(dst)?;
         while self.peek().kind == TokenKind::Plus || self.peek().kind == TokenKind::Minus {
             let op = self.advance().kind;
+            let lhs_scale = self.current_expr_fixed_scale;
             let rhs_reg = self.alloc_temp()?;
             let rhs_val = self.factor(rhs_reg)?;
+            let rhs_scale = self.current_expr_fixed_scale;
+
+            if let (Some(s1), Some(s2)) = (lhs_scale, rhs_scale) {
+                if s1 != s2 {
+                    return Err(self.error(
+                        "ERR_FIXED_SCALE_MISMATCH",
+                        "Mismatched fixed-point scales in addition or subtraction",
+                        "Matching fixed-point scales",
+                        "Expression -> Fixed-Point Arithmetic",
+                        "Explicitly align fixed-point scales before performing arithmetic",
+                    ));
+                }
+                self.current_expr_fixed_scale = Some(s1);
+            }
+
             if let (Some(a), Some(b)) = (val, rhs_val) {
                 val = Some(match op {
                     TokenKind::Plus => a.wrapping_add(b),
@@ -3789,8 +3882,11 @@ impl<'a> Compiler<'a> {
             || self.peek().kind == TokenKind::Percent
         {
             let op = self.advance().kind;
+            let lhs_scale = self.current_expr_fixed_scale;
             let rhs_reg = self.alloc_temp()?;
             let rhs_val = self.primary(rhs_reg)?;
+            let rhs_scale = self.current_expr_fixed_scale;
+
             if let (Some(a), Some(b)) = (val, rhs_val) {
                 val = Some(match op {
                     TokenKind::Star => a.wrapping_mul(b),
@@ -3830,13 +3926,66 @@ impl<'a> Compiler<'a> {
                 }
                 match op {
                     TokenKind::Star => {
-                        self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?;
+                        match (lhs_scale, rhs_scale) {
+                            (Some(s1), Some(s2)) => {
+                                if s1 != s2 {
+                                    return Err(self.error(
+                                        "ERR_FIXED_SCALE_MISMATCH",
+                                        "Mismatched fixed-point scales in multiplication",
+                                        "Matching fixed-point scales",
+                                        "Expression -> Fixed-Point Arithmetic",
+                                        "Explicitly align fixed-point scales before arithmetic",
+                                    ));
+                                }
+                                self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?;
+                                let shift_reg = self.alloc_temp()?;
+                                self.emit_imm16(PX64_OP_MOV_IMM, shift_reg, s1 as u16)?;
+                                self.emit_inst(PX64_OP_SHR, dst, dst, shift_reg)?;
+                                self.free_temp(shift_reg);
+                                self.current_expr_fixed_scale = Some(s1);
+                            }
+                            (Some(s), None) | (None, Some(s)) => {
+                                self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?;
+                                let shift_reg = self.alloc_temp()?;
+                                self.emit_imm16(PX64_OP_MOV_IMM, shift_reg, s as u16)?;
+                                self.emit_inst(PX64_OP_SHR, dst, dst, shift_reg)?;
+                                self.free_temp(shift_reg);
+                                self.current_expr_fixed_scale = None;
+                            }
+                            _ => {
+                                self.emit_inst(PX64_OP_MUL, dst, dst, rhs_reg)?;
+                                self.current_expr_fixed_scale = None;
+                            }
+                        }
                     }
                     TokenKind::Slash => {
-                        self.emit_inst(PX64_OP_DIV, dst, dst, rhs_reg)?;
+                        match (lhs_scale, rhs_scale) {
+                            (Some(s1), Some(s2)) => {
+                                if s1 != s2 {
+                                    return Err(self.error(
+                                        "ERR_FIXED_SCALE_MISMATCH",
+                                        "Mismatched fixed-point scales in division",
+                                        "Matching fixed-point scales",
+                                        "Expression -> Fixed-Point Arithmetic",
+                                        "Explicitly align fixed-point scales before arithmetic",
+                                    ));
+                                }
+                                let shift_reg = self.alloc_temp()?;
+                                self.emit_imm16(PX64_OP_MOV_IMM, shift_reg, s1 as u16)?;
+                                self.emit_inst(PX64_OP_SHL, dst, dst, shift_reg)?;
+                                self.free_temp(shift_reg);
+                                self.emit_inst(PX64_OP_DIV, dst, dst, rhs_reg)?;
+                                self.current_expr_fixed_scale = Some(s1);
+                            }
+                            _ => {
+                                self.emit_inst(PX64_OP_DIV, dst, dst, rhs_reg)?;
+                                self.current_expr_fixed_scale = None;
+                            }
+                        }
                     }
                     TokenKind::Percent => {
                         self.emit_inst(PX64_OP_MOD, dst, dst, rhs_reg)?;
+                        self.current_expr_fixed_scale = None;
                     }
                     _ => {}
                 }
@@ -3853,6 +4002,19 @@ impl<'a> Compiler<'a> {
             TokenKind::Number(n) => Ok(Some(n)),
 
             TokenKind::TimeLiteral(ns) => Ok(Some(ns as i64)),
+
+            TokenKind::FloatLit(scaled_val, frac_digits) => {
+                let scale = self.target_fixed_scale.unwrap_or(16);
+                let mut divisor: i64 = 1;
+                for _ in 0..frac_digits {
+                    divisor = divisor.saturating_mul(10);
+                }
+                let int_repr = (scaled_val as i128 * (1i128 << scale) / divisor as i128) as i64;
+                let c_idx = self.add_constant(int_repr)?;
+                self.emit_imm16(PX64_OP_LDC, dst, c_idx)?;
+                self.current_expr_fixed_scale = Some(scale);
+                Ok(Some(int_repr))
+            }
 
             TokenKind::StringLit => {
                 let s = if tok.len >= 2 {
@@ -3906,10 +4068,12 @@ impl<'a> Compiler<'a> {
                     Ok(None)
                 } else if let Some(slot) = self.is_spilled_var(tok) {
                     self.current_expr_enum_type = self.get_var_enum_type(tok);
+                    self.current_expr_fixed_scale = self.get_var_fixed_scale(tok);
                     self.emit_inst(PX64_OP_SPILL_LOAD, dst, slot, 0)?;
                     Ok(None)
                 } else {
                     self.current_expr_enum_type = self.get_var_enum_type(tok);
+                    self.current_expr_fixed_scale = self.get_var_fixed_scale(tok);
                     let var_reg = self.resolve_var(tok)?;
                     if var_reg != dst {
                         self.emit_inst(PX64_OP_MOV_REG, dst, var_reg, 0)?;

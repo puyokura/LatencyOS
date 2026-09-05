@@ -1,0 +1,31 @@
+// contracts_and_fixed.pul - Deterministic Fixed-Point Real-Time Filter
+@contract: @wcet(25us) @budget(100us);
+
+fn apply_gain($sample, $gain: fixed<16>) -> i64
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    return $sample * $gain;
+}
+
+@test "fixed-point unit gain" @budget(20us) {
+    let $gain: fixed<16> = 1.0;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 100);
+}
+
+@test "fixed-point fractional gain" @budget(20us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 150);
+}
+
+@test "fixed-point attenuation" @budget(20us) {
+    let $gain: fixed<16> = 0.5;
+    let $out = apply_gain(200, $gain);
+    @assert($out == 100);
+}
+
+let $gain: fixed<16> = 1.5;
+let $res = apply_gain(100, $gain);
+@assert($res == 150);

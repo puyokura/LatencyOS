@@ -42,6 +42,7 @@ jobs:
           files: |
             dist/LatencyOS.exe
             dist/pulc.exe
+            dist/runtime.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

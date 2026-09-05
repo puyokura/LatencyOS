@@ -66,7 +66,7 @@
    - 8.11 [`fizzbuzz.pul`: Multi-Branch Conditionals & Nested If-Else](#811-fizzbuzzpul-multi-branch-conditionals--nested-if-else)
    - 8.12 [`contracts_and_tests.pul`: Design-by-Contract & Embedded Unit Testing](#812-contracts_and_testspul-design-by-contract--embedded-unit-testing)
    - 8.13 [`contracts_and_enums.pul`: State Enums, Pattern Matching & Contracts](#813-contracts_and_enumspul-state-enums-pattern-matching--contracts)
-
+   - 8.14 [`contracts_and_fixed.pul`: Deterministic Fixed-Point Real-Time Filter](#814-contracts_and_fixedpul-deterministic-fixed-point-real-time-filter)
 ---
 
 ## 1. AI System Prompt, Core Tenets & Five Invariants
@@ -270,6 +270,7 @@ All basic runtime values in PulseLang are 64-bit signed/unsigned words (`i64` / 
 | **CLI Argument** | `@arg(0)` | Tagged Pointer: `0x2000_...` | References kernel CLI argument buffer. |
 | **Hardware Handle** | `#f0 := @capture();` | Descriptor Slot (`16`..`19`) | Linear type, strict single consumption. |
 | **Tagged Result** | `@ok(10)`, `@err(404)` | Bit 60 Tagged: `0x1000_...` | Zero-allocation Ok/Err tagged status. |
+| **Fixed-Point** | `let $g: fixed<16> = 1.5;` | `i64` Q-format ($val \times 2^N$) | Deterministic fractional math, zero FPU jitter. |
 
 ### 3.3 Fixed-Size Static Arrays (`[i64; N]`)
 
@@ -1666,5 +1667,40 @@ fn step_state($current, $event)
     @assert(step_state(State::Completed, 0) == State::Completed);
     @assert(step_state(State::Failed, 0) == State::Failed);
 }
+```
+
+### 8.14 `contracts_and_fixed.pul`: Deterministic Fixed-Point Real-Time Filter
+
+```pulse
+@contract: @wcet(25us) @budget(100us);
+
+fn apply_gain($sample, $gain: fixed<16>) -> i64
+    @requires($sample >= 0)
+    @ensures($result >= 0)
+{
+    return $sample * $gain;
+}
+
+@test "fixed-point unit gain" @budget(20us) {
+    let $gain: fixed<16> = 1.0;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 100);
+}
+
+@test "fixed-point fractional gain" @budget(20us) {
+    let $gain: fixed<16> = 1.5;
+    let $out = apply_gain(100, $gain);
+    @assert($out == 150);
+}
+
+@test "fixed-point attenuation" @budget(20us) {
+    let $gain: fixed<16> = 0.5;
+    let $out = apply_gain(200, $gain);
+    @assert($out == 100);
+}
+
+let $gain: fixed<16> = 1.5;
+let $res = apply_gain(100, $gain);
+@assert($res == 150);
 ```
 

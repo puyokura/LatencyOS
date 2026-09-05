@@ -248,8 +248,21 @@ impl<'a> Lexer<'a> {
                             num = num * 10 + (self.src[self.pos] - b'0') as i64;
                             self.pos += 1;
                         }
-
-                        if self.match_suffix(b"ns") {
+                        if self.pos < self.src.len()
+                            && self.src[self.pos] == b'.'
+                            && self.pos + 1 < self.src.len()
+                            && self.src[self.pos + 1].is_ascii_digit()
+                        {
+                            self.pos += 1; // consume '.'
+                            let mut scaled_val = num;
+                            let mut frac_digits: u8 = 0;
+                            while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
+                                scaled_val = scaled_val.saturating_mul(10).saturating_add((self.src[self.pos] - b'0') as i64);
+                                frac_digits = frac_digits.saturating_add(1);
+                                self.pos += 1;
+                            }
+                            TokenKind::FloatLit(scaled_val, frac_digits)
+                        } else if self.match_suffix(b"ns") {
                             TokenKind::TimeLiteral(num as u64)
                         } else if self.match_suffix(b"us") {
                             TokenKind::TimeLiteral((num as u64) * 1_000)
@@ -350,6 +363,7 @@ impl<'a> Lexer<'a> {
                         b"struct" => TokenKind::Struct,
                         b"const" => TokenKind::Const,
                         b"enum" => TokenKind::Enum,
+                        b"fixed" => TokenKind::Fixed,
                         b"_" => TokenKind::Underscore,
                         _ => TokenKind::Ident,
                     }

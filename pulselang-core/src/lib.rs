@@ -1286,4 +1286,27 @@ mod tests {
         assert_eq!(err.code, "ERR_STRUCT_LITERAL_UNSUPPORTED");
         assert!(err.suggestion.contains("Declare with 'let mut $var: Type;'"));
     }
+
+    #[test]
+    fn test_fixed_point_arithmetic_and_scale_matching() {
+        let src = r#"
+            let $gain: fixed<16> = 1.5;
+            let $base: fixed<16> = 2.0;
+            let $product = $gain * $base;
+            let $sum = $gain + $base;
+        "#;
+        let bin = compile(src).expect("Compilation of fixed-point arithmetic failed");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_fixed_point_scale_mismatch_rejected() {
+        let src = r#"
+            let $a: fixed<16> = 1.5;
+            let $b: fixed<8> = 2.0;
+            let $bad = $a + $b;
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_FIXED_SCALE_MISMATCH");
+    }
 }
