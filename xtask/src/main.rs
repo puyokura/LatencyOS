@@ -1314,6 +1314,8 @@ fn test_px64_architecture(kernel_elf: &Path) {
     // Test 10: Run benchmark command to obtain real hardware/VM measured execution times
     println!("[xtask-test] Running benchmark for real execution timing...");
     send_test_cmd(&mut tcp_stream, "benchmark", "[PX64_VM_MICROBENCHMARK]", &rx, &mut full_output);
+    std::thread::sleep(Duration::from_millis(500));
+    while let Ok(_) = rx.try_recv() {}
 
     // Test 11: Binary with invalid opcode (0xFE)
     println!("[xtask-test] Disassembling /bin/test_invalid_op.bin...");
@@ -1321,7 +1323,6 @@ fn test_px64_architecture(kernel_elf: &Path) {
 
     println!("[xtask-test] Running /bin/test_invalid_op.bin (must trigger ERR_PX64_INVALID_OPCODE)...");
     send_test_cmd(&mut tcp_stream, "run /bin/test_invalid_op.bin", "ERR_PX64_INVALID_OPCODE", &rx, &mut full_output);
-
     // Test 12: Binary with LDC out-of-bounds (const[99] when const_count is 0)
     println!("[xtask-test] Disassembling /bin/test_oob_const.bin...");
     send_test_cmd(&mut tcp_stream, "disasm /bin/test_oob_const.bin", "const[99]", &rx, &mut full_output);
@@ -1343,17 +1344,21 @@ fn send_test_cmd(
     full_out: &mut String,
 ) {
     use std::io::Write;
-    std::thread::sleep(Duration::from_millis(50));
+    while let Ok(_) = rx.try_recv() {}
+    std::thread::sleep(Duration::from_millis(100));
     full_out.clear();
     for chunk in cmd.as_bytes().chunks(4) {
-        stream.write_all(chunk).unwrap();
-        stream.flush().unwrap();
-        std::thread::sleep(Duration::from_millis(2));
+        if let Err(e) = stream.write_all(chunk) {
+            panic!("stream.write_all failed for chunk on command '{}': {:?}", cmd, e);
+        }
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(5));
     }
-    std::thread::sleep(Duration::from_millis(5));
-    stream.write_all(b"\r\n").unwrap();
-    stream.flush().unwrap();
-
+    std::thread::sleep(Duration::from_millis(10));
+    if let Err(e) = stream.write_all(b"\r\n") {
+        panic!("stream.write_all newline failed on command '{}': {:?}", cmd, e);
+    }
+    let _ = stream.flush();
     let start = Instant::now();
     let mut found_expected = expected.is_empty();
     let mut found_prompt = false;
