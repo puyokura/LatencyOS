@@ -1,0 +1,37 @@
+// unsigned_types.pul - First-Class Unsigned Integer Types (u8/u16/u32/u64)
+@contract: @wcet(50us) @budget(100us);
+
+fn mask_byte($val: u8, $shift: u8) -> u8
+    @requires($val >= 0)
+    @ensures($result >= 0)
+{
+    return ($val << $shift) & 255;
+}
+
+fn packet_header($id: u16, $len: u16) -> u32
+    @requires($id >= 0 && $len >= 0)
+    @ensures($result >= 0)
+{
+    let $high = $id * 65536;
+    return $high + $len;
+}
+
+// 1. Unsigned variable declarations
+let $byte: u8 = 255;
+let $short: u16 = 65535;
+let $word: u32 = 1000000;
+let $wide: u64 = 5000000000;
+
+@assert($byte == 255);
+@assert($short == 65535);
+@assert($word == 1000000);
+
+// 2. Calling function with unsigned parameter types
+let $masked = mask_byte(15, 2);
+@assert($masked == 60);
+
+@test "unsigned integer operations and parameter passing" @budget(10us) {
+    let $b: u8 = 128;
+    let $m = mask_byte($b, 1);
+    @assert($m == 0); // 128 << 1 = 256; 256 & 255 = 0
+}

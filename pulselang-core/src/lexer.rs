@@ -245,7 +245,7 @@ impl<'a> Lexer<'a> {
                     } else {
                         let mut num = 0i64;
                         while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
-                            num = num * 10 + (self.src[self.pos] - b'0') as i64;
+                            num = num.wrapping_mul(10).wrapping_add((self.src[self.pos] - b'0') as i64);
                             self.pos += 1;
                         }
                         if self.pos < self.src.len()
@@ -364,6 +364,11 @@ impl<'a> Lexer<'a> {
                         b"const" => TokenKind::Const,
                         b"enum" => TokenKind::Enum,
                         b"fixed" => TokenKind::Fixed,
+                        b"i64" => TokenKind::I64,
+                        b"u8" => TokenKind::U8,
+                        b"u16" => TokenKind::U16,
+                        b"u32" => TokenKind::U32,
+                        b"u64" => TokenKind::U64,
                         b"_" => TokenKind::Underscore,
                         _ => TokenKind::Ident,
                     }

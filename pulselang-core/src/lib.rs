@@ -1478,4 +1478,30 @@ mod tests {
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_INVARIANT_SYNTAX");
     }
+    #[test]
+    fn test_unsigned_variable_declarations_valid() {
+        let src = r#"
+            let $a: u8 = 255;
+            let $b: u16 = 65535;
+            let $c: u32 = 4294967295;
+            let $d: u64 = 18446744073709551615;
+            @assert($a == 255);
+            @assert($b == 65535);
+        "#;
+        let bin = compile(src).expect("Unsigned variable declarations should compile successfully");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_unsigned_function_parameters_valid() {
+        let src = r#"
+            fn add_u16($x: u16, $y: u16) -> u16 {
+                return $x + $y;
+            }
+            let $res = add_u16(100, 200);
+            @assert($res == 300);
+        "#;
+        let bin = compile(src).expect("Function with u16 parameters should compile successfully");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
 }

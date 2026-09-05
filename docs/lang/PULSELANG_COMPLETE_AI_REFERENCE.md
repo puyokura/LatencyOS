@@ -268,7 +268,8 @@ All basic runtime values in PulseLang are 64-bit signed/unsigned words (`i64` / 
 
 | Type | Syntax Example | In-Memory Representation | Semantic Notes |
 |---|---|---|---|
-| **Integer** | `100`, `0xFF`, `-50` | `i64` two's complement | Wrapping arithmetic, 0-safe division. |
+| **Integer (Signed)** | `let $x: i64 = -50;` | `i64` two's complement | Wrapping arithmetic, 0-safe division. |
+| **Integer (Unsigned)**| `let $b: u8 = 255; let $w: u32 = 1000;` | `u8`, `u16`, `u32`, `u64` (zero-extended) | Natural byte, word, mask & bit manipulation representation. |
 | **Time Constant** | `500us`, `10ms`, `2s` | `u64` nanoseconds | Auto-folded at compile-time to nanoseconds. |
 | **Inline String** | `"Hello, LatencyOS"` | Tagged Pointer: `0x4000_...` | Points into static 512-byte string pool. |
 | **CLI Argument** | `@arg(0)` | Tagged Pointer: `0x2000_...` | References kernel CLI argument buffer. |

@@ -24,6 +24,11 @@ pub enum TokenKind {
     Const,
     Enum,
     Fixed,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
 
     // AI-Native Directives & Contracts
     AtContract,

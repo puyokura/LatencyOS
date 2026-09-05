@@ -2654,6 +2654,8 @@ impl<'a> Compiler<'a> {
                             self.declare_struct_inst(ident, type_tok)?;
                             self.match_token(TokenKind::Semi);
                             return Ok(());
+                        } else if matches!(type_tok.kind, TokenKind::U8 | TokenKind::U16 | TokenKind::U32 | TokenKind::U64 | TokenKind::I64) {
+                            // Valid integer type annotation, e.g. let $x: u8 = 255;
                         } else {
                             let type_name = &self.src[type_tok.start..type_tok.start + type_tok.len];
                             if let Some(e_idx) = self.lookup_enum_by_name(type_name) {
@@ -3333,6 +3335,8 @@ impl<'a> Compiler<'a> {
                                 }
                                 self.match_token(TokenKind::Gt);
                             }
+                        } else if matches!(t_tok.kind, TokenKind::U8 | TokenKind::U16 | TokenKind::U32 | TokenKind::U64 | TokenKind::I64) {
+                            // Valid integer parameter type
                         }
                     }
                     if !self.match_token(TokenKind::Comma) {
