@@ -186,8 +186,8 @@ Pattern         ::= "Ok(" VarIdent ")"
 
 AssertStmt      ::= "@assert(" Expression ")" ";"
 WithinStmt      ::= "@within(" TimeLiteral ")" Block ("!drop")? ";"
-WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" Block
-ForStmt         ::= ( "for" | "@for" ) VarIdent "in" Expression ".." Expression Block
+WhileStmt       ::= ( "@while" | "while" ) "(" Expression ")" ( "@invariant(" Expression ")" )? Block
+ForStmt         ::= ( "for" | "@for" ) VarIdent "in" Expression ".." Expression ( "@invariant(" Expression ")" )? Block
 IfStmt          ::= "if" "(" Expression ")" Block ( "else" ( IfStmt | Block ) )?
 ExprStmt        ::= Expression ";"
 
@@ -561,6 +561,20 @@ while ($k < 50) {
     #f := @capture();
     @send(#f);
 } !drop;
+```
+#### 6. Loop Invariants (`@invariant`)
+Loop invariants formally enforce state safety checkpoints at loop entry and at the end of each iteration:
+
+```pulse
+let mut $sum = 0;
+for $i in 0..10 @invariant($sum >= 0) {
+    $sum += $data[$i];
+}
+
+let mut $rate = 50;
+while ($rate < 90) @invariant($rate >= 10 && $rate <= 100) {
+    $rate += 5;
+}
 ```
 
 ### 3.10 Enumerations (`enum`)
@@ -1288,6 +1302,7 @@ Demonstrates formal function contracts and `@test` block validation.
 | `ERR_UNBOUNDED_LOOP` | Compile | While loop lacks monotonic termination progress | Add monotonic increment/decrement (e.g. `$i += 1;`) |
 | `ERR_TYPESTATE_MISMATCH` | Compile | Branches or loops diverge in handle typestate | Ensure handle is balanced (consumed/sent on all branches/iterations) |
 | `ERR_LINEAR_UNCONSUMED_HANDLE` | Compile | Descriptor `#f` captured but not consumed via `@send()` | Add `@send(#f);` before scope exit |
+| `ERR_INVARIANT_SYNTAX` | Compile | Malformed loop invariant syntax | Specify invariant as `@invariant(condition)` |
 | `ERR_LINEAR_DOUBLE_SEND` | Compile | Descriptor `#f` transmitted multiple times | Consume `#handle` strictly once |
 | `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit prior `#handle` before reassigning |
 | `ERR_MAX_ARRAYS_EXCEEDED` | Compile | Exceeded maximum 8 distinct arrays | Use fewer array declarations |

@@ -1996,6 +1996,16 @@ impl<'a> Compiler<'a> {
         self.current = saved_current;
         Ok(())
     }
+    fn emit_invariant_check(&mut self, start_tok: usize, _end_tok: usize) -> Result<(), CompileError> {
+        let saved_current = self.current;
+        self.current = start_tok;
+        let cond_reg = self.alloc_temp()?;
+        self.expression(cond_reg)?;
+        self.emit_inst(PX64_OP_ASSERT, cond_reg, 0, 0)?;
+        self.free_temp(cond_reg);
+        self.current = saved_current;
+        Ok(())
+    }
     pub(crate) fn statement(&mut self) -> Result<(), CompileError> {
         let tok = self.peek();
 
@@ -2210,6 +2220,38 @@ impl<'a> Compiler<'a> {
                 self.expression(cond_reg)?;
                 self.match_token(TokenKind::RParen);
 
+                let mut invariant_toks = None;
+                if self.match_token(TokenKind::AtInvariant) {
+                    if !self.match_token(TokenKind::LParen) {
+                        return Err(self.error(
+                            "ERR_INVARIANT_SYNTAX",
+                            "Expected '(' after @invariant",
+                            "Left parenthesis '('",
+                            "Loop Contract -> Invariant",
+                            "Specify loop invariant as '@invariant(condition)'",
+                        ));
+                    }
+                    let inv_start = self.current;
+                    let mut paren_depth = 1usize;
+                    while paren_depth > 0 && self.peek().kind != TokenKind::Eof {
+                        match self.peek().kind {
+                            TokenKind::LParen => paren_depth += 1,
+                            TokenKind::RParen => paren_depth -= 1,
+                            _ => {}
+                        }
+                        if paren_depth > 0 {
+                            self.advance();
+                        }
+                    }
+                    let inv_end = self.current;
+                    self.match_token(TokenKind::RParen);
+                    invariant_toks = Some((inv_start, inv_end));
+                }
+
+                if let Some((start, end)) = invariant_toks {
+                    self.emit_invariant_check(start, end)?;
+                }
+
                 let jz_pos = self.emit_inst(PX64_OP_JZ, cond_reg, 0, 0)?;
 
                 let pre_loop_states = self.handle_states;
@@ -2228,6 +2270,9 @@ impl<'a> Compiler<'a> {
                 }
                 self.match_token(TokenKind::RBrace);
 
+                if let Some((start, end)) = invariant_toks {
+                    self.emit_invariant_check(start, end)?;
+                }
                 // Loop Confinement: handles allocated in loop must be consumed in loop
                 for slot in 0..4 {
                     let s_start = pre_loop_states[slot];
@@ -2374,6 +2419,38 @@ impl<'a> Compiler<'a> {
                 self.emit_inst(PX64_OP_CMP_LT, 0, var_reg, end_reg)?;
                 let jz_pos = self.emit_inst(PX64_OP_JZ, 0, 0, 0)?;
 
+                let mut invariant_toks = None;
+                if self.match_token(TokenKind::AtInvariant) {
+                    if !self.match_token(TokenKind::LParen) {
+                        return Err(self.error(
+                            "ERR_INVARIANT_SYNTAX",
+                            "Expected '(' after @invariant",
+                            "Left parenthesis '('",
+                            "Loop Contract -> Invariant",
+                            "Specify loop invariant as '@invariant(condition)'",
+                        ));
+                    }
+                    let inv_start = self.current;
+                    let mut paren_depth = 1usize;
+                    while paren_depth > 0 && self.peek().kind != TokenKind::Eof {
+                        match self.peek().kind {
+                            TokenKind::LParen => paren_depth += 1,
+                            TokenKind::RParen => paren_depth -= 1,
+                            _ => {}
+                        }
+                        if paren_depth > 0 {
+                            self.advance();
+                        }
+                    }
+                    let inv_end = self.current;
+                    self.match_token(TokenKind::RParen);
+                    invariant_toks = Some((inv_start, inv_end));
+                }
+
+                if let Some((start, end)) = invariant_toks {
+                    self.emit_invariant_check(start, end)?;
+                }
+
                 // Parse loop body
                 if !self.match_token(TokenKind::LBrace) {
                     return Err(self.error(
@@ -2390,8 +2467,11 @@ impl<'a> Compiler<'a> {
                     self.statement()?;
                 }
                 self.match_token(TokenKind::RBrace);
-                let body_code_end = self.code_len;
 
+                if let Some((start, end)) = invariant_toks {
+                    self.emit_invariant_check(start, end)?;
+                }
+                let body_code_end = self.code_len;
                 // Loop Confinement: handles allocated in loop must be consumed in loop
                 for slot in 0..4 {
                     let s_start = pre_loop_states[slot];

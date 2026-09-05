@@ -1427,4 +1427,55 @@ mod tests {
         let bin = compile(src).expect("Captured handle dropped via !drop must pass");
         assert!(bin.len() > PX64_HEADER_SIZE);
     }
+    #[test]
+    fn test_for_loop_invariant_valid() {
+        let src = r#"
+            let mut $sum = 0;
+            for $i in 0..5 @invariant($sum >= 0) {
+                $sum += 10;
+            }
+            @assert($sum == 50);
+        "#;
+        let bin = compile(src).expect("Loop with satisfied invariant must compile and pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_while_loop_invariant_valid() {
+        let src = r#"
+            let mut $i = 0;
+            while ($i < 3) @invariant($i >= 0) {
+                $i += 1;
+            }
+            @assert($i == 3);
+        "#;
+        let bin = compile(src).expect("While loop with valid invariant must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_loop_invariant_violation_fails_runtime_assert() {
+        let src = r#"
+            let mut $val = 10;
+            for $i in 0..3 @invariant($val > 5) {
+                $val -= 3;
+            }
+        "#;
+        let bin = compile(src).expect("Compilation succeeds, fails at runtime");
+        let mut vm = PX64VM::new(&bin[PX64_HEADER_SIZE..], &[], &[], &[]);
+        let err = vm.run().unwrap_err();
+        assert_eq!(err.code, "ERR_PX64_ASSERTION_FAILED");
+    }
+
+    #[test]
+    fn test_loop_invariant_syntax_error() {
+        let src = r#"
+            let mut $x = 0;
+            for $i in 0..3 @invariant {
+                $x += 1;
+            }
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_INVARIANT_SYNTAX");
+    }
 }
