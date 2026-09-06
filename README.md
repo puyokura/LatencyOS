@@ -1,7 +1,7 @@
 # LatencyOS
 
 > **A Hard Real-Time, Deterministic Low-Latency Operating System in Rust (`no_std`).**  
-> **Release Version**: `v0.0.41` | **Language Specification**: `PulseLang v3.2 (px64 v3)`
+> **Release Version**: `v0.0.42` | **Language Specification**: `PulseLang v3.2 (px64 v3)`
 
 ---
 
