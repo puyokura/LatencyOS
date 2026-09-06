@@ -1309,9 +1309,9 @@ Demonstrates formal function contracts and `@test` block validation.
 | `ERR_UNBOUNDED_LOOP` | Compile | While loop lacks monotonic termination progress | Add monotonic increment/decrement (e.g. `$i += 1;`) |
 | `ERR_TYPESTATE_MISMATCH` | Compile | Branches or loops diverge in handle typestate | Ensure handle is balanced (consumed/sent on all branches/iterations) |
 | `ERR_LINEAR_UNCONSUMED_HANDLE` | Compile | Descriptor `#f` captured but not consumed via `@send()` | Add `@send(#f);` before scope exit |
-| `ERR_RUNTIME_NOT_IMPORTED` | Compile | Intrinsic called without required `@import` | Add `@import "<runtime>";` (e.g. core, math, sys, net, vram, gpu) |
-| `ERR_IMPORT_SYNTAX` | Compile | Malformed `@import` statement | Specify import as `@import "core";` |
-| `ERR_UNKNOWN_RUNTIME` | Compile | Unknown runtime module in `@import` | Import one of "core", "math", "fix", "sys", "net", "vram", "gpu" |
+| `ERR_RUNTIME_NOT_IMPORTED` | Compile | Intrinsic called without required `@import` | Add `@import "<runtime>";` (e.g. tiny, core, math, sys, net, vram, gpu) |
+| `ERR_IMPORT_SYNTAX` | Compile | Malformed `@import` statement | Specify import as `@import "tiny";` or `@import "core";` |
+| `ERR_UNKNOWN_RUNTIME` | Compile | Unknown runtime module in `@import` | Import one of "tiny", "core", "math", "fix", "sys", "net", "vram", "gpu" |
 | `ERR_INVARIANT_SYNTAX` | Compile | Malformed loop invariant syntax | Specify invariant as `@invariant(condition)` |
 | `ERR_LINEAR_DOUBLE_SEND` | Compile | Descriptor `#f` transmitted multiple times | Consume `#handle` strictly once |
 | `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit prior `#handle` before reassigning |

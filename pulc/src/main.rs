@@ -3,7 +3,7 @@
 use pulselang_core::{
     check, compile_pulse_to_binary, disassemble_px64_with_filename, preprocess_includes,
     CompileError, Compiler, Lexer, Token, MAX_TOKENS,
-    RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU,
+    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU,
 };
 use std::process::Command;
 use std::env;
@@ -284,7 +284,7 @@ fn generate_standalone_executable(
 ) -> Result<(), (i32, String)> {
     let mut native_dispatch_arms = String::new();
 
-    if (imported_runtimes & RUNTIME_CORE) != 0 {
+    if (imported_runtimes & (RUNTIME_TINY | RUNTIME_CORE)) != 0 {
         native_dispatch_arms.push_str(r#"
             1 /* NATIVE_PRINT */ => {
                 if (arg_val & ARG_TAG) != 0 {
@@ -325,6 +325,11 @@ fn generate_standalone_executable(
                 }
                 0
             }
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_CORE) != 0 {
+        native_dispatch_arms.push_str(r#"
             8 /* NATIVE_SCRIPT_ARGC */ => self.args.len() as i64,
             9 /* NATIVE_SCRIPT_ARG */ => {
                 if arg_val >= 0 && (arg_val as usize) < self.args.len() && (arg_val as usize) < 256 {

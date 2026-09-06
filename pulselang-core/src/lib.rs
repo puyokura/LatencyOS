@@ -24,7 +24,7 @@ pub mod include;
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, EnumDefMeta, FnMeta, HandleState,
     StructDefMeta, StructFieldMeta, StructInstMeta,
-    RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_ALL,
+    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_ALL,
 };
 pub use disasm::{disassemble_px64, disassemble_px64_with_filename};
 #[cfg(any(feature = "alloc", test))]
@@ -1534,5 +1534,26 @@ mod tests {
         "#;
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_UNKNOWN_RUNTIME");
+    }
+    #[test]
+    fn test_import_tiny_runtime_minimal() {
+        let src = r#"
+            @import "tiny";
+            let $x = 10;
+            @print("x=");
+            @println($x);
+        "#;
+        let bin = compile(src).expect("Compile with tiny runtime should succeed");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_import_tiny_runtime_rejects_core_intrinsics() {
+        let src = r#"
+            @import "tiny";
+            let $x = @argc();
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_RUNTIME_NOT_IMPORTED");
     }
 }

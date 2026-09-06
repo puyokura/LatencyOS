@@ -1861,6 +1861,7 @@ let $masked = mask_byte(15, 2);
 
 ```pulse
 // standalone_demo.pul - 選択的ランタイムインポートによる自己完結型単独実行バイナリ
+// ガチ最小要件 (@print / @println のみ) の場合は @import "tiny"; を指定可能
 @import "core";
 @import "math";
 

@@ -251,14 +251,15 @@ pub struct CompileStats {
     pub imported_runtimes: u16,
 }
 
-pub const RUNTIME_CORE: u16 = 1 << 0;
-pub const RUNTIME_MATH: u16 = 1 << 1;
-pub const RUNTIME_FIX:  u16 = 1 << 2;
-pub const RUNTIME_SYS:  u16 = 1 << 3;
-pub const RUNTIME_NET:  u16 = 1 << 4;
-pub const RUNTIME_VRAM: u16 = 1 << 5;
-pub const RUNTIME_GPU:  u16 = 1 << 6;
-pub const RUNTIME_ALL:  u16 = 0x7F;
+pub const RUNTIME_TINY: u16 = 1 << 0;
+pub const RUNTIME_CORE: u16 = 1 << 1;
+pub const RUNTIME_MATH: u16 = 1 << 2;
+pub const RUNTIME_FIX:  u16 = 1 << 3;
+pub const RUNTIME_SYS:  u16 = 1 << 4;
+pub const RUNTIME_NET:  u16 = 1 << 5;
+pub const RUNTIME_VRAM: u16 = 1 << 6;
+pub const RUNTIME_GPU:  u16 = 1 << 7;
+pub const RUNTIME_ALL:  u16 = 0xFF;
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
     pub src: &'a [u8],
@@ -2026,7 +2027,9 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
         let (required_mask, _runtime_name) = match func_id {
-            NATIVE_PRINT | NATIVE_PRINTLN | NATIVE_SCRIPT_ARGC | NATIVE_SCRIPT_ARG
+            NATIVE_PRINT | NATIVE_PRINTLN => (RUNTIME_TINY, "tiny"),
+
+            NATIVE_SCRIPT_ARGC | NATIVE_SCRIPT_ARG
             | NATIVE_TAG_OK | NATIVE_TAG_ERR | NATIVE_IS_OK | NATIVE_IS_ERR
             | NATIVE_UNWRAP | NATIVE_STREQ => (RUNTIME_CORE, "core"),
 
@@ -2096,11 +2099,14 @@ impl<'a> Compiler<'a> {
                 }
 
                 match raw_name {
+                    b"tiny" => {
+                        self.imported_runtimes |= RUNTIME_TINY;
+                    }
                     b"core" => {
-                        self.imported_runtimes |= RUNTIME_CORE;
+                        self.imported_runtimes |= RUNTIME_CORE | RUNTIME_TINY;
                     }
                     b"math" => {
-                        self.imported_runtimes |= RUNTIME_MATH | RUNTIME_CORE;
+                        self.imported_runtimes |= RUNTIME_MATH | RUNTIME_CORE | RUNTIME_TINY;
                     }
                     b"fix" => {
                         self.imported_runtimes |= RUNTIME_FIX | RUNTIME_CORE;
@@ -2121,9 +2127,9 @@ impl<'a> Compiler<'a> {
                         return Err(self.error(
                             "ERR_UNKNOWN_RUNTIME",
                             "Unknown runtime module in @import",
-                            "Supported runtimes: \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                            "Supported runtimes: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
                             "Module Import -> Validation",
-                            "Import one of: \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                            "Import one of: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
                         ));
                     }
                 }
