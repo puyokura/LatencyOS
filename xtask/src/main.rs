@@ -1356,18 +1356,30 @@ fn send_test_cmd_timeout(
     while let Ok(_) = rx.try_recv() {}
     std::thread::sleep(Duration::from_millis(100));
     full_out.clear();
-    for chunk in cmd.as_bytes().chunks(4) {
-        if let Err(e) = stream.write_all(chunk) {
-            panic!("stream.write_all failed for chunk on command '{}': {:?}", cmd, e);
+    let mut write_ok = false;
+    for _retry in 0..5 {
+        let mut attempt_ok = true;
+        for chunk in cmd.as_bytes().chunks(4) {
+            if let Err(_) = stream.write_all(chunk) {
+                attempt_ok = false;
+                break;
+            }
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(5));
         }
-        let _ = stream.flush();
-        std::thread::sleep(Duration::from_millis(5));
+        if attempt_ok {
+            std::thread::sleep(Duration::from_millis(10));
+            if stream.write_all(b"\r\n").is_ok() {
+                let _ = stream.flush();
+                write_ok = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
-    std::thread::sleep(Duration::from_millis(10));
-    if let Err(e) = stream.write_all(b"\r\n") {
-        panic!("stream.write_all newline failed on command '{}': {:?}", cmd, e);
+    if !write_ok {
+        panic!("Failed to write command '{}' to QEMU serial socket after 5 attempts", cmd);
     }
-    let _ = stream.flush();
     let start = Instant::now();
     let mut found_expected = expected.is_empty();
     let mut found_prompt = false;
