@@ -67,6 +67,7 @@
    - [9.15 `wcet_analysis.pul`: 関数単位WCET型付け & 静的WCET合成](#915-wcet_analysispul-関数単位wcet型付け--静的wcet合成)
    - [9.16 `loop_invariant.pul`: ループ不変条件検証 (`@invariant`)](#916-loop_invariantpul-ループ不変条件検証-invariant)
    - [9.17 `unsigned_types.pul`: 第一級符号なし整数型 (`u8`/`u16`/`u32`/`u64`)](#917-unsigned_typespul-第一級符号なし整数型-u8u16u32u64)
+   - [9.18 `standalone_demo.pul`: 選択的インポートによる単独実行バイナリ](#918-standalone_demopul-選択的インポートによる単独実行バイナリ)
 
 ---
 
@@ -1855,5 +1856,25 @@ let $masked = mask_byte(15, 2);
     let $m = mask_byte($b, 1);
     @assert($m == 0); // 128 << 1 = 256; 256 & 255 = 0
 }
+```
+### 9.18 `standalone_demo.pul`: 選択的インポートによる単独実行バイナリ
+
+```pulse
+// standalone_demo.pul - 選択的ランタイムインポートによる自己完結型単独実行バイナリ
+@import "core";
+@import "math";
+
+@contract: @wcet(50us) @budget(100us);
+
+fn compute_stats($val1, $val2, $val3) -> i64 {
+    let $m = @max($val1, $val2);
+    let $c = @clamp($val3, $val1, $val2);
+    return $m + $c;
+}
+
+let $res = compute_stats(10, 50, 75);
+@print("STANDALONE_RESULT=");
+@println($res);
+@assert($res == 100);
 ```
 > 新たな Intrinsics や Opcode が追加された場合は、本仕様書の対応するカタログ表・EBNF・契約定義を更新してください。

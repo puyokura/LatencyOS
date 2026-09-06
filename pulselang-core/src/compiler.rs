@@ -248,7 +248,17 @@ pub struct CompileStats {
     pub declared_budget_ns: Option<u64>,
     pub wcet_breakdown: [WcetItem; 16],
     pub wcet_breakdown_count: usize,
+    pub imported_runtimes: u16,
 }
+
+pub const RUNTIME_CORE: u16 = 1 << 0;
+pub const RUNTIME_MATH: u16 = 1 << 1;
+pub const RUNTIME_FIX:  u16 = 1 << 2;
+pub const RUNTIME_SYS:  u16 = 1 << 3;
+pub const RUNTIME_NET:  u16 = 1 << 4;
+pub const RUNTIME_VRAM: u16 = 1 << 5;
+pub const RUNTIME_GPU:  u16 = 1 << 6;
+pub const RUNTIME_ALL:  u16 = 0x7F;
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
     pub src: &'a [u8],
@@ -303,6 +313,8 @@ pub struct Compiler<'a> {
     pub max_struct_insts: usize,
     pub max_struct_fields: usize,
     pub max_const_tables: usize,
+    pub imported_runtimes: u16,
+    pub has_explicit_imports: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -360,6 +372,8 @@ impl<'a> Compiler<'a> {
             max_struct_insts: 8,
             max_struct_fields: 256,
             max_const_tables: 8,
+            imported_runtimes: RUNTIME_ALL,
+            has_explicit_imports: false,
         }
     }
 
@@ -384,6 +398,7 @@ impl<'a> Compiler<'a> {
             declared_budget_ns: self.declared_script_budget_ns,
             wcet_breakdown: self.wcet_items,
             wcet_breakdown_count: self.wcet_item_count,
+            imported_runtimes: if self.has_explicit_imports { self.imported_runtimes } else { RUNTIME_ALL },
         }
     }
 
@@ -2006,12 +2021,112 @@ impl<'a> Compiler<'a> {
         self.current = saved_current;
         Ok(())
     }
+    fn check_intrinsic_runtime(&self, func_id: u8) -> Result<(), CompileError> {
+        if !self.has_explicit_imports {
+            return Ok(());
+        }
+        let (required_mask, _runtime_name) = match func_id {
+            NATIVE_PRINT | NATIVE_PRINTLN | NATIVE_SCRIPT_ARGC | NATIVE_SCRIPT_ARG
+            | NATIVE_TAG_OK | NATIVE_TAG_ERR | NATIVE_IS_OK | NATIVE_IS_ERR
+            | NATIVE_UNWRAP | NATIVE_STREQ => (RUNTIME_CORE, "core"),
+
+            NATIVE_MATH_MIN | NATIVE_MATH_MAX | NATIVE_MATH_ABS | NATIVE_MATH_CLAMP
+            | NATIVE_BIT_POPCNT | NATIVE_BIT_LZCNT | NATIVE_CRC32 => (RUNTIME_MATH, "math"),
+
+            NATIVE_FIX_TO_FIX | NATIVE_FIX_TO_I64 | NATIVE_FIX_MUL | NATIVE_FIX_DIV => (RUNTIME_FIX, "fix"),
+
+            NATIVE_SYS_TSC | NATIVE_CORE_ID | NATIVE_TSC_FREQ | NATIVE_UPTIME_NS
+            | NATIVE_BUSY_WAIT | NATIVE_RING_DEPTH => (RUNTIME_SYS, "sys"),
+
+            NATIVE_NET_RTT | NATIVE_NET_SET_RATE | NATIVE_NET_SEND => (RUNTIME_NET, "net"),
+
+            NATIVE_VRAM_READ | NATIVE_VRAM_WRITE => (RUNTIME_VRAM, "vram"),
+
+            NATIVE_GPU_CAPTURE => (RUNTIME_GPU, "gpu"),
+
+            _ => (RUNTIME_CORE, "core"),
+        };
+
+        if (self.imported_runtimes & required_mask) == 0 {
+            return Err(self.error(
+                "ERR_RUNTIME_NOT_IMPORTED",
+                "Intrinsic function requires a runtime module that was not imported via @import",
+                "Imported runtime module",
+                "Intrinsic Call -> Runtime Verification",
+                "Add '@import \"<runtime>\";' (e.g. core, math, sys, net, vram, gpu) at top of script",
+            ));
+        }
+        Ok(())
+    }
     pub(crate) fn statement(&mut self) -> Result<(), CompileError> {
         let tok = self.peek();
 
         match tok.kind {
             TokenKind::Semi => {
                 self.advance();
+                return Ok(());
+            }
+            TokenKind::AtImport => {
+                self.advance(); // consume '@import'
+                let name_tok = self.advance();
+                let raw_name = match name_tok.kind {
+                    TokenKind::StringLit => {
+                        if name_tok.len >= 2 {
+                            &self.src[name_tok.start + 1..name_tok.start + name_tok.len - 1]
+                        } else {
+                            b""
+                        }
+                    }
+                    TokenKind::Ident => &self.src[name_tok.start..name_tok.start + name_tok.len],
+                    _ => {
+                        return Err(self.error(
+                            "ERR_IMPORT_SYNTAX",
+                            "Expected runtime module name after @import (e.g. @import \"core\";)",
+                            "Module name string or identifier",
+                            "Module Import -> Syntax",
+                            "Specify import as '@import \"core\";' or '@import \"math\";'",
+                        ));
+                    }
+                };
+                self.match_token(TokenKind::Semi);
+
+                if !self.has_explicit_imports {
+                    self.has_explicit_imports = true;
+                    self.imported_runtimes = 0; // Reset from RUNTIME_ALL once explicit @import is used
+                }
+
+                match raw_name {
+                    b"core" => {
+                        self.imported_runtimes |= RUNTIME_CORE;
+                    }
+                    b"math" => {
+                        self.imported_runtimes |= RUNTIME_MATH | RUNTIME_CORE;
+                    }
+                    b"fix" => {
+                        self.imported_runtimes |= RUNTIME_FIX | RUNTIME_CORE;
+                    }
+                    b"sys" => {
+                        self.imported_runtimes |= RUNTIME_SYS | RUNTIME_CORE;
+                    }
+                    b"net" => {
+                        self.imported_runtimes |= RUNTIME_NET | RUNTIME_SYS | RUNTIME_CORE;
+                    }
+                    b"vram" => {
+                        self.imported_runtimes |= RUNTIME_VRAM | RUNTIME_CORE;
+                    }
+                    b"gpu" => {
+                        self.imported_runtimes |= RUNTIME_GPU | RUNTIME_VRAM | RUNTIME_SYS | RUNTIME_CORE;
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "ERR_UNKNOWN_RUNTIME",
+                            "Unknown runtime module in @import",
+                            "Supported runtimes: \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                            "Module Import -> Validation",
+                            "Import one of: \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                        ));
+                    }
+                }
                 return Ok(());
             }
             TokenKind::AtTest => {
@@ -3853,6 +3968,7 @@ impl<'a> Compiler<'a> {
                         ));
                     }
                 };
+                self.check_intrinsic_runtime(func_id)?;
                 self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, dst)?;
             }
         }
@@ -4817,6 +4933,7 @@ impl<'a> Compiler<'a> {
                         }
                     }
 
+                    self.check_intrinsic_runtime(func_id)?;
                     if arity == 0 {
                         self.emit_inst(PX64_OP_CALL_NAT, dst, func_id, 0)?;
                     } else if arity == 1 {

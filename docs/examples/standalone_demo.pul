@@ -1,0 +1,16 @@
+// standalone_demo.pul - Self-Contained Standalone Executable Demo with Selective Runtime Imports
+@import "core";
+@import "math";
+
+@contract: @wcet(50us) @budget(100us);
+
+fn compute_stats($val1, $val2, $val3) -> i64 {
+    let $m = @max($val1, $val2);
+    let $c = @clamp($val3, $val1, $val2);
+    return $m + $c;
+}
+
+let $res = compute_stats(10, 50, 75);
+@print("STANDALONE_RESULT=");
+@println($res);
+@assert($res == 100);

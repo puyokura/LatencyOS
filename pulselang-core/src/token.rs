@@ -46,6 +46,7 @@ pub enum TokenKind {
     AtInvariant,
     AtPoolSize,
     AtTest,
+    AtImport,
     // Literals & Identifiers ($var, #handle, @intrinsic)
     Ident,
     VarIdent,       // $rtt, $sum, $i, $t0

@@ -329,6 +329,7 @@ impl<'a> Lexer<'a> {
                         b"drop" => TokenKind::Drop,
                         b"pool_size" => TokenKind::AtPoolSize,
                         b"test" => TokenKind::AtTest,
+                        b"import" => TokenKind::AtImport,
                         _ => TokenKind::IntrinsicIdent,
                     }
                 }

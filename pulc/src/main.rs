@@ -3,7 +3,9 @@
 use pulselang_core::{
     check, compile_pulse_to_binary, disassemble_px64_with_filename, preprocess_includes,
     CompileError, Compiler, Lexer, Token, MAX_TOKENS,
+    RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU,
 };
+use std::process::Command;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -262,13 +264,539 @@ where
     })
 }
 
-fn derive_output_path(input: &Path, explicit_out: Option<PathBuf>) -> PathBuf {
+fn derive_output_path(input: &Path, explicit_out: Option<PathBuf>) -> (PathBuf, bool) {
     if let Some(out) = explicit_out {
-        return out;
+        let is_bin = out.extension().and_then(|e| e.to_str()) == Some("bin");
+        return (out, is_bin);
     }
     let mut out = input.to_path_buf();
-    out.set_extension("bin");
-    out
+    #[cfg(windows)]
+    out.set_extension("exe");
+    #[cfg(not(windows))]
+    out.set_extension("");
+    (out, false)
+}
+
+fn generate_standalone_executable(
+    bytecode: &[u8],
+    imported_runtimes: u16,
+    out_path: &Path,
+) -> Result<(), (i32, String)> {
+    let mut native_dispatch_arms = String::new();
+
+    if (imported_runtimes & RUNTIME_CORE) != 0 {
+        native_dispatch_arms.push_str(r#"
+            1 /* NATIVE_PRINT */ => {
+                if (arg_val & ARG_TAG) != 0 {
+                    let idx = (arg_val & 0xFF) as usize;
+                    if idx < self.args.len() { print!("{}", self.args[idx]); }
+                } else if (arg_val & STR_TAG) != 0 {
+                    let raw = arg_val & !STR_TAG;
+                    let offset = ((raw as u64) >> 32) as usize;
+                    let len = (raw & 0xFFFF_FFFF) as usize;
+                    if offset + len <= self.str_pool.len() {
+                        if let Ok(s) = std::str::from_utf8(&self.str_pool[offset..offset + len]) {
+                            print!("{}", s);
+                        }
+                    }
+                } else {
+                    print!("{}", arg_val);
+                }
+                0
+            }
+            2 /* NATIVE_PRINTLN */ => {
+                if (arg_val & ARG_TAG) != 0 {
+                    let idx = (arg_val & 0xFF) as usize;
+                    if idx < self.args.len() { print!("{}", self.args[idx]); }
+                    println!();
+                } else if (arg_val & STR_TAG) != 0 {
+                    let raw = arg_val & !STR_TAG;
+                    let offset = ((raw as u64) >> 32) as usize;
+                    let len = (raw & 0xFFFF_FFFF) as usize;
+                    if offset + len <= self.str_pool.len() {
+                        if let Ok(s) = std::str::from_utf8(&self.str_pool[offset..offset + len]) {
+                            println!("{}", s);
+                        } else { println!(); }
+                    } else { println!(); }
+                } else if arg_reg != 0 || arg_val != 0 {
+                    println!("{}", arg_val);
+                } else {
+                    println!();
+                }
+                0
+            }
+            8 /* NATIVE_SCRIPT_ARGC */ => self.args.len() as i64,
+            9 /* NATIVE_SCRIPT_ARG */ => {
+                if arg_val >= 0 && (arg_val as usize) < self.args.len() && (arg_val as usize) < 256 {
+                    ARG_TAG | (arg_val & 0xFF)
+                } else {
+                    0
+                }
+            }
+            10 /* NATIVE_TAG_OK */ => arg_val & !ERR_TAG,
+            11 /* NATIVE_TAG_ERR */ => ERR_TAG | (arg_val & !ERR_TAG),
+            12 /* NATIVE_IS_OK */ => if (arg_val & ERR_TAG) == 0 { 1 } else { 0 },
+            13 /* NATIVE_IS_ERR */ => if (arg_val & ERR_TAG) != 0 { 1 } else { 0 },
+            14 /* NATIVE_UNWRAP */ => {
+                if (arg_val & ERR_TAG) != 0 {
+                    eprintln!("PulseLang runtime error: unwrap failed on Err value");
+                    std::process::exit(1);
+                }
+                arg_val
+            }
+            15 /* NATIVE_STREQ */ => {
+                let s1 = arg_val;
+                let s2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                if s1 == s2 { 1 } else {
+                    let b1 = self.get_str_bytes(s1);
+                    let b2 = self.get_str_bytes(s2);
+                    match (b1, b2) {
+                        (Some(x), Some(y)) if x == y => 1,
+                        _ => 0,
+                    }
+                }
+            }
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_MATH) != 0 {
+        native_dispatch_arms.push_str(r#"
+            21 /* NATIVE_MATH_MIN */ => {
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                arg_val.min(v2)
+            }
+            22 /* NATIVE_MATH_MAX */ => {
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                arg_val.max(v2)
+            }
+            23 /* NATIVE_MATH_ABS */ => arg_val.abs(),
+            24 /* NATIVE_MATH_CLAMP */ => {
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                let v3 = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 0 };
+                arg_val.clamp(v2, v3)
+            }
+            25 /* NATIVE_BIT_POPCNT */ => arg_val.count_ones() as i64,
+            26 /* NATIVE_BIT_LZCNT */ => arg_val.leading_zeros() as i64,
+            27 /* NATIVE_CRC32 */ => {
+                let seed = (arg_val & 0xFFFF_FFFF) as u32;
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                let bytes = v2.to_le_bytes();
+                let mut crc = !seed;
+                for b in bytes {
+                    crc ^= b as u32;
+                    for _ in 0..8 {
+                        if (crc & 1) != 0 { crc = (crc >> 1) ^ 0xEDB88320; } else { crc >>= 1; }
+                    }
+                }
+                (!crc) as i64
+            }
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_FIX) != 0 {
+        native_dispatch_arms.push_str(r#"
+            30 /* NATIVE_FIX_TO_FIX */ => {
+                let from_scale = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 16 };
+                let to_scale = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 16 };
+                if to_scale >= from_scale {
+                    arg_val << (to_scale - from_scale)
+                } else {
+                    arg_val >> (from_scale - to_scale)
+                }
+            }
+            31 /* NATIVE_FIX_TO_I64 */ => {
+                let scale = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 16 };
+                arg_val >> scale
+            }
+            32 /* NATIVE_FIX_MUL */ => {
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                let scale = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 16 };
+                ((arg_val as i128 * v2 as i128) >> scale) as i64
+            }
+            33 /* NATIVE_FIX_DIV */ => {
+                let v2 = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 1 };
+                let scale = if arg_reg > 1 { self.regs[(arg_reg - 2) as usize] } else { 16 };
+                if v2 == 0 { 0 } else { (((arg_val as i128) << scale) / (v2 as i128)) as i64 }
+            }
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_SYS) != 0 {
+        native_dispatch_arms.push_str(r#"
+            3 /* NATIVE_SYS_TSC */ => {
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
+            }
+            16 /* NATIVE_CORE_ID */ => 0,
+            17 /* NATIVE_TSC_FREQ */ => 3_000_000_000,
+            18 /* NATIVE_UPTIME_NS */ => {
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(0)
+            }
+            19 /* NATIVE_BUSY_WAIT */ => {
+                if arg_val > 0 {
+                    let spins = (arg_val as usize).min(100_000);
+                    for _ in 0..spins { std::hint::spin_loop(); }
+                }
+                0
+            }
+            20 /* NATIVE_RING_DEPTH */ => 0,
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_NET) != 0 {
+        native_dispatch_arms.push_str(r#"
+            4 /* NATIVE_NET_RTT */ => 100,
+            5 /* NATIVE_NET_SET_RATE */ => 0,
+            7 /* NATIVE_NET_SEND */ => 1,
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_VRAM) != 0 {
+        native_dispatch_arms.push_str(r#"
+            28 /* NATIVE_VRAM_READ */ => 0,
+            29 /* NATIVE_VRAM_WRITE */ => 0,
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_GPU) != 0 {
+        native_dispatch_arms.push_str(r#"
+            6 /* NATIVE_GPU_CAPTURE */ => 0,
+        "#);
+    }
+
+    native_dispatch_arms.push_str(r#"
+            _ => {
+                eprintln!("[RUNTIME_ERROR] Intrinsic was called but its runtime module was not imported via @import");
+                std::process::exit(1);
+            }
+    "#);
+
+    let mut bytecode_bytes_str = String::with_capacity(bytecode.len() * 5);
+    for b in bytecode {
+        use std::fmt::Write;
+        let _ = write!(bytecode_bytes_str, "{},", b);
+    }
+
+    let stub_src = format!(
+r#"// Auto-generated standalone binary stub for PulseLang px64
+#![allow(dead_code, unused_variables, unused_assignments)]
+use std::convert::TryInto;
+const STR_TAG: i64 = 0x4000_0000_0000_0000;
+const ARG_TAG: i64 = 0x2000_0000_0000_0000;
+const ERR_TAG: i64 = 0x1000_0000_0000_0000;
+
+static BYTECODE: &[u8] = &[{bytecode}];
+
+struct StandaloneVM<'a> {{
+    code: &'a [u8],
+    str_pool: &'a [u8],
+    const_pool: Vec<i64>,
+    args: &'a [&'a str],
+    regs: [i64; 20],
+    spill_slots: [i64; 32],
+    array_slots: [i64; 256],
+    array_lens: [usize; 8],
+    array_bases: [usize; 8],
+    struct_insts: [[i64; 8]; 8],
+    table_bases: [usize; 8],
+    table_lens: [usize; 8],
+    call_stack: [usize; 8],
+    call_depth: usize,
+    ip: usize,
+}}
+
+impl<'a> StandaloneVM<'a> {{
+    fn new(bin: &'a [u8], args: &'a [&'a str]) -> Self {{
+        let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+        let str_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+        let const_count = u16::from_be_bytes([bin[10], bin[11]]) as usize;
+
+        let code_start = 16;
+        let code_end = code_start + code_len;
+        let str_end = code_end + str_len;
+
+        let code = &bin[code_start..code_end];
+        let str_pool = &bin[code_end..str_end];
+        let mut const_pool = Vec::with_capacity(const_count);
+        for i in 0..const_count {{
+            let offset = str_end + i * 8;
+            let val = i64::from_be_bytes(bin[offset..offset + 8].try_into().unwrap());
+            const_pool.push(val);
+        }}
+
+        Self {{
+            code,
+            str_pool,
+            const_pool,
+            args,
+            regs: [0; 20],
+            spill_slots: [0; 32],
+            array_slots: [0; 256],
+            array_lens: [0; 8],
+            array_bases: [0; 8],
+            struct_insts: [[0; 8]; 8],
+            table_bases: [0; 8],
+            table_lens: [0; 8],
+            call_stack: [0; 8],
+            call_depth: 0,
+            ip: 0,
+        }}
+    }}
+
+    fn get_str_bytes(&self, val: i64) -> Option<&'a [u8]> {{
+        if (val & STR_TAG) != 0 {{
+            let raw = val & !STR_TAG;
+            let offset = ((raw as u64) >> 32) as usize;
+            let len = (raw & 0xFFFF_FFFF) as usize;
+            if offset + len <= self.str_pool.len() {{
+                Some(&self.str_pool[offset..offset + len])
+            }} else {{
+                None
+            }}
+        }} else if (val & ARG_TAG) != 0 {{
+            let idx = (val & 0xFF) as usize;
+            if idx < self.args.len() {{
+                Some(self.args[idx].as_bytes())
+            }} else {{
+                None
+            }}
+        }} else {{
+            None
+        }}
+    }}
+
+    fn run(&mut self) {{
+        while self.ip + 4 <= self.code.len() {{
+            let op = self.code[self.ip];
+            let rd = self.code[self.ip + 1] as usize;
+            let rs1 = self.code[self.ip + 2] as usize;
+            let rs2 = self.code[self.ip + 3] as usize;
+            let imm16 = u16::from_be_bytes([self.code[self.ip + 2], self.code[self.ip + 3]]);
+            self.ip += 4;
+
+            match op {{
+                0x00 /* NOP */ => {{}}
+                0x01 /* MOV_IMM */ => {{ if rd < 20 {{ self.regs[rd] = imm16 as i64; }} }}
+                0x02 /* MOV_REG */ => {{ if rd < 20 && rs1 < 20 {{ self.regs[rd] = self.regs[rs1]; }} }}
+                0x03 /* MOVS */ => {{
+                    let offset = rs1 as u64;
+                    let len = rs2 as u64;
+                    if rd < 20 {{ self.regs[rd] = STR_TAG | ((offset as i64) << 32) | (len as i64); }}
+                }}
+                0x04 /* ADD */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_add(self.regs[rs2]); }} }}
+                0x05 /* SUB */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_sub(self.regs[rs2]); }} }}
+                0x06 /* MUL */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_mul(self.regs[rs2]); }} }}
+                0x07 /* DIV */ => {{
+                    if rd < 20 && rs1 < 20 && rs2 < 20 {{
+                        let d = self.regs[rs2];
+                        self.regs[rd] = if d == 0 {{ 0 }} else {{ self.regs[rs1].wrapping_div(d) }};
+                    }}
+                }}
+                0x08 /* MOD */ => {{
+                    if rd < 20 && rs1 < 20 && rs2 < 20 {{
+                        let d = self.regs[rs2];
+                        self.regs[rd] = if d == 0 {{ 0 }} else {{ self.regs[rs1].wrapping_rem(d) }};
+                    }}
+                }}
+                0x09 /* CMP_EQ */ => {{
+                    if rd < 20 && rs1 < 20 && rs2 < 20 {{
+                        let v1 = self.regs[rs1];
+                        let v2 = self.regs[rs2];
+                        let eq = if v1 == v2 {{ 1 }} else if ((v1 & STR_TAG) != 0 || (v1 & ARG_TAG) != 0) && ((v2 & STR_TAG) != 0 || (v2 & ARG_TAG) != 0) {{
+                            match (self.get_str_bytes(v1), self.get_str_bytes(v2)) {{
+                                (Some(b1), Some(b2)) => if b1 == b2 {{ 1 }} else {{ 0 }},
+                                _ => 0,
+                            }}
+                        }} else {{ 0 }};
+                        self.regs[rd] = eq;
+                    }}
+                }}
+                0x0A /* CMP_NE */ => {{
+                    if rd < 20 && rs1 < 20 && rs2 < 20 {{
+                        let v1 = self.regs[rs1];
+                        let v2 = self.regs[rs2];
+                        let ne = if v1 == v2 {{ 0 }} else if ((v1 & STR_TAG) != 0 || (v1 & ARG_TAG) != 0) && ((v2 & STR_TAG) != 0 || (v2 & ARG_TAG) != 0) {{
+                            match (self.get_str_bytes(v1), self.get_str_bytes(v2)) {{
+                                (Some(b1), Some(b2)) => if b1 == b2 {{ 0 }} else {{ 1 }},
+                                _ => 1,
+                            }}
+                        }} else {{ 1 }};
+                        self.regs[rd] = ne;
+                    }}
+                }}
+                0x0B /* CMP_LT */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = if self.regs[rs1] < self.regs[rs2] {{ 1 }} else {{ 0 }}; }} }}
+                0x0C /* CMP_LE */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = if self.regs[rs1] <= self.regs[rs2] {{ 1 }} else {{ 0 }}; }} }}
+                0x0D /* CMP_GT */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = if self.regs[rs1] > self.regs[rs2] {{ 1 }} else {{ 0 }}; }} }}
+                0x0E /* CMP_GE */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = if self.regs[rs1] >= self.regs[rs2] {{ 1 }} else {{ 0 }}; }} }}
+                0x0F /* JMP */ => {{ self.ip = imm16 as usize; }}
+                0x10 /* JZ */ => {{ if rd < 20 && self.regs[rd] == 0 {{ self.ip = imm16 as usize; }} }}
+                0x11 /* JNZ */ => {{ if rd < 20 && self.regs[rd] != 0 {{ self.ip = imm16 as usize; }} }}
+                0x12 /* CALL_NAT */ => {{
+                    let func_id = rs1 as u8;
+                    let arg_reg = rs2;
+                    let arg_val = if arg_reg < 20 {{ self.regs[arg_reg] }} else {{ 0 }};
+                    let ret = match func_id {{
+{native_dispatch_arms}
+                    }};
+                    if rd < 20 {{ self.regs[rd] = ret; }}
+                }}
+                0x16 /* HALT */ => break,
+                0x17 /* LDC */ => {{
+                    let idx = imm16 as usize;
+                    if rd < 20 && idx < self.const_pool.len() {{
+                        self.regs[rd] = self.const_pool[idx];
+                    }}
+                }}
+                0x18 /* ADDI */ => {{ if rd < 20 && rs1 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_add(rs2 as i64); }} }}
+                0x19 /* SUBI */ => {{ if rd < 20 && rs1 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_sub(rs2 as i64); }} }}
+                0x1A /* AND */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1] & self.regs[rs2]; }} }}
+                0x1B /* OR */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1] | self.regs[rs2]; }} }}
+                0x1C /* XOR */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1] ^ self.regs[rs2]; }} }}
+                0x1D /* SHL */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = self.regs[rs1].wrapping_shl((self.regs[rs2] & 63) as u32); }} }}
+                0x1E /* SHR */ => {{ if rd < 20 && rs1 < 20 && rs2 < 20 {{ self.regs[rd] = ((self.regs[rs1] as u64) >> (self.regs[rs2] & 63)) as i64; }} }}
+                0x1F /* SPILL_STORE */ => {{ if rs1 < 32 && rs2 < 20 {{ self.spill_slots[rs1] = self.regs[rs2]; }} }}
+                0x20 /* SPILL_LOAD */ => {{ if rd < 20 && rs1 < 32 {{ self.regs[rd] = self.spill_slots[rs1]; }} }}
+                0x21 /* ARR_DEF */ => {{
+                    let arr_id = rd;
+                    let len = imm16 as usize;
+                    if arr_id < 8 {{
+                        self.array_lens[arr_id] = len;
+                        self.array_bases[arr_id] = arr_id * 32;
+                    }}
+                }}
+                0x22 /* ASSERT */ => {{
+                    if rd < 20 && self.regs[rd] == 0 {{
+                        eprintln!("PulseLang assertion contract violation failed: condition evaluated to false");
+                        std::process::exit(1);
+                    }}
+                }}
+                0x23 /* CALL */ => {{
+                    let target_pc = imm16 as usize;
+                    if self.call_depth < 8 {{
+                        self.call_stack[self.call_depth] = self.ip;
+                        self.call_depth += 1;
+                        self.ip = target_pc;
+                    }} else {{
+                        eprintln!("PulseLang call stack overflow: depth exceeded 8");
+                        std::process::exit(1);
+                    }}
+                }}
+                0x24 /* RET */ => {{
+                    if self.call_depth > 0 {{
+                        self.call_depth -= 1;
+                        self.ip = self.call_stack[self.call_depth];
+                    }} else {{
+                        break;
+                    }}
+                }}
+                0x25 /* STRUCT_DEF */ => {{}}
+                0x26 /* STRUCT_LOAD */ => {{
+                    let inst_id = rs1;
+                    let field_idx = rs2;
+                    if rd < 20 && inst_id < 8 && field_idx < 8 {{
+                        self.regs[rd] = self.struct_insts[inst_id][field_idx];
+                    }}
+                }}
+                0x27 /* STRUCT_STORE */ => {{
+                    let inst_id = rd;
+                    let field_idx = rs1;
+                    if inst_id < 8 && field_idx < 8 && rs2 < 20 {{
+                        self.struct_insts[inst_id][field_idx] = self.regs[rs2];
+                    }}
+                }}
+                0x28 /* TBL_DEF */ => {{
+                    let tbl_id = rd;
+                    let base = rs1;
+                    let len = rs2;
+                    if tbl_id < 8 {{
+                        self.table_bases[tbl_id] = base;
+                        self.table_lens[tbl_id] = len;
+                    }}
+                }}
+                0x29 /* TBL_LOAD */ => {{
+                    let tbl_id = rs1;
+                    let idx = if rs2 < 20 {{ self.regs[rs2] as usize }} else {{ 0 }};
+                    if rd < 20 && tbl_id < 8 && idx < self.table_lens[tbl_id] {{
+                        let c_idx = self.table_bases[tbl_id] + idx;
+                        if c_idx < self.const_pool.len() {{
+                            self.regs[rd] = self.const_pool[c_idx];
+                        }}
+                    }}
+                }}
+                0x2A /* STREQ */ => {{
+                    if rd < 20 && rs1 < 20 && rs2 < 20 {{
+                        let v1 = self.regs[rs1];
+                        let v2 = self.regs[rs2];
+                        let eq = if v1 == v2 {{ 1 }} else {{
+                            match (self.get_str_bytes(v1), self.get_str_bytes(v2)) {{
+                                (Some(b1), Some(b2)) if b1 == b2 => 1,
+                                _ => 0,
+                            }}
+                        }};
+                        self.regs[rd] = eq;
+                    }}
+                }}
+                0x2B /* ARR_LOAD */ => {{
+                    let arr_id = rs1;
+                    let idx = if rs2 < 20 {{ self.regs[rs2] as usize }} else {{ 0 }};
+                    if arr_id < 8 && idx < self.array_lens[arr_id] {{
+                        let slot = self.array_bases[arr_id] + idx;
+                        if slot < 256 && rd < 20 {{
+                            self.regs[rd] = self.array_slots[slot];
+                        }}
+                    }}
+                }}
+                0x2C /* ARR_STORE */ => {{
+                    let arr_id = rd;
+                    let idx = if rs1 < 20 {{ self.regs[rs1] as usize }} else {{ 0 }};
+                    if arr_id < 8 && idx < self.array_lens[arr_id] && rs2 < 20 {{
+                        let slot = self.array_bases[arr_id] + idx;
+                        if slot < 256 {{
+                            self.array_slots[slot] = self.regs[rs2];
+                        }}
+                    }}
+                }}
+                0x2D /* DROP */ => {{}}
+                _ => {{}}
+            }}
+        }}
+    }}
+}}
+
+fn main() {{
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let str_args: Vec<&str> = raw_args.iter().map(|s| s.as_str()).collect();
+    let mut vm = StandaloneVM::new(BYTECODE, &str_args);
+    vm.run();
+}}
+"#,
+        bytecode = bytecode_bytes_str,
+        native_dispatch_arms = native_dispatch_arms,
+    );
+
+    let stub_file = std::env::temp_dir().join(format!("pulc_standalone_{}.rs", std::process::id()));
+    fs::write(&stub_file, stub_src).map_err(|e| (2, format!("Failed to create temporary stub file: {}", e)))?;
+
+    let mut cmd = Command::new("rustc");
+    cmd.arg(&stub_file)
+        .arg("--edition")
+        .arg("2021")
+        .arg("-C")
+        .arg("opt-level=3")
+        .arg("-o")
+        .arg(out_path);
+
+    let status = cmd.status().map_err(|e| {
+        let _ = fs::remove_file(&stub_file);
+        (2, format!("Failed to invoke rustc: {}. Ensure rustc is installed in PATH", e))
+    })?;
+
+    let _ = fs::remove_file(&stub_file);
+
+    if !status.success() {
+        return Err((1, format!("rustc compilation failed with status: {:?}", status.code())));
+    }
+
+    Ok(())
 }
 
 fn read_and_preprocess(input_path: &Path, json: bool) -> Result<String, (i32, String)> {
@@ -297,7 +825,7 @@ fn run_compile(
     json: bool,
     verbose: bool,
 ) -> Result<(), (i32, String)> {
-    let out_path = derive_output_path(input_path, explicit_out);
+    let (out_path, is_bin) = derive_output_path(input_path, explicit_out);
     let src = read_and_preprocess(input_path, json)?;
     let mut tokens = [Token::empty(); MAX_TOKENS];
     let mut lexer = Lexer::new(src.as_bytes());
@@ -319,17 +847,20 @@ fn run_compile(
         (1, err_msg)
     })?;
 
-    fs::write(&out_path, &out_bin[..written]).map_err(|e| {
-        (
-            2,
-            format!(
-                "Cannot write output binary '{}': {}",
-                out_path.display(),
-                e
-            ),
-        )
-    })?;
-
+    if is_bin {
+        fs::write(&out_path, &out_bin[..written]).map_err(|e| {
+            (
+                2,
+                format!(
+                    "Cannot write output binary '{}': {}",
+                    out_path.display(),
+                    e
+                ),
+            )
+        })?;
+    } else {
+        generate_standalone_executable(&out_bin[..written], stats.imported_runtimes, &out_path)?;
+    }
     if json {
         println!(
             r#"{{"success":true,"command":"compile","file":"{}","output":"{}","bytes":{},"instructions":{},"stats":{{"code_size":{},"instruction_count":{},"str_pool_len":{},"const_pool_len":{},"var_count":{},"function_count":{},"array_count":{},"struct_def_count":{},"struct_inst_count":{},"const_table_count":{},"total_binary_size":{}}}}}"#,
@@ -865,11 +1396,14 @@ mod tests {
     #[test]
     fn test_derive_output_path() {
         let input = Path::new("path/to/my_script.pul");
-        let derived = derive_output_path(input, None);
-        assert_eq!(derived, PathBuf::from("path/to/my_script.bin"));
+        let (derived, is_bin) = derive_output_path(input, None);
+        assert!(!is_bin);
+        #[cfg(windows)]
+        assert_eq!(derived, PathBuf::from("path/to/my_script.exe"));
 
-        let custom = derive_output_path(input, Some(PathBuf::from("custom.bin")));
-        assert_eq!(custom, PathBuf::from("custom.bin"));
+        let (custom_bin, is_custom_bin) = derive_output_path(input, Some(PathBuf::from("custom.bin")));
+        assert!(is_custom_bin);
+        assert_eq!(custom_bin, PathBuf::from("custom.bin"));
     }
 
     #[test]

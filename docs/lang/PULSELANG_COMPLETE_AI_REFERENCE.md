@@ -70,6 +70,7 @@
    - 8.15 [`wcet_analysis.pul`: Function WCET Typing & Static Synthesis](#815-wcet_analysispul-function-wcet-typing--static-synthesis)
    - 8.16 [`loop_invariant.pul`: Loop Invariant Verification (`@invariant`)](#816-loop_invariantpul-loop-invariant-verification-invariant)
    - 8.17 [`unsigned_types.pul`: First-Class Unsigned Integer Types (`u8`/`u16`/`u32`/`u64`)](#817-unsigned_typespul-first-class-unsigned-integer-types-u8u16u32u64)
+   - 8.18 [`standalone_demo.pul`: Self-Contained Standalone Executable with Selective Imports](#818-standalone_demopul-self-contained-standalone-executable-with-selective-imports)
 ---
 
 ## 1. AI System Prompt, Core Tenets & Five Invariants
@@ -119,13 +120,16 @@ When generating, compiling, verifying, or refactoring PulseLang v3.2 code, an AI
 ```ebnf
 Script          ::= TopLevelDecl* <EOF>
 
-TopLevelDecl    ::= ContractDecl
+TopLevelDecl    ::= ImportDecl
+                  | ContractDecl
                   | PipelineDecl
                   | OnVblankDecl
                   | StructDefStmt
                   | ConstTableStmt
                   | FnDeclStmt
                   | Statement
+
+ImportDecl      ::= "@import" ( StringLiteral | Identifier ) ";"
 
 ContractDecl    ::= "@contract:" ("@wcet(" TimeLiteral ")")? ("@budget(" TimeLiteral ")")? ( RelationalExpr )? ";"
 PipelineDecl    ::= "@pipeline:" Identifier ("@budget(" TimeLiteral ")")? (";" | Block)
@@ -1305,6 +1309,9 @@ Demonstrates formal function contracts and `@test` block validation.
 | `ERR_UNBOUNDED_LOOP` | Compile | While loop lacks monotonic termination progress | Add monotonic increment/decrement (e.g. `$i += 1;`) |
 | `ERR_TYPESTATE_MISMATCH` | Compile | Branches or loops diverge in handle typestate | Ensure handle is balanced (consumed/sent on all branches/iterations) |
 | `ERR_LINEAR_UNCONSUMED_HANDLE` | Compile | Descriptor `#f` captured but not consumed via `@send()` | Add `@send(#f);` before scope exit |
+| `ERR_RUNTIME_NOT_IMPORTED` | Compile | Intrinsic called without required `@import` | Add `@import "<runtime>";` (e.g. core, math, sys, net, vram, gpu) |
+| `ERR_IMPORT_SYNTAX` | Compile | Malformed `@import` statement | Specify import as `@import "core";` |
+| `ERR_UNKNOWN_RUNTIME` | Compile | Unknown runtime module in `@import` | Import one of "core", "math", "fix", "sys", "net", "vram", "gpu" |
 | `ERR_INVARIANT_SYNTAX` | Compile | Malformed loop invariant syntax | Specify invariant as `@invariant(condition)` |
 | `ERR_LINEAR_DOUBLE_SEND` | Compile | Descriptor `#f` transmitted multiple times | Consume `#handle` strictly once |
 | `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit prior `#handle` before reassigning |
@@ -1855,5 +1862,25 @@ let $masked = mask_byte(15, 2);
     let $m = mask_byte($b, 1);
     @assert($m == 0); // 128 << 1 = 256; 256 & 255 = 0
 }
+```
+### 8.18 `standalone_demo.pul`: Self-Contained Standalone Executable with Selective Imports
+
+```pulse
+// standalone_demo.pul - Self-Contained Standalone Executable Demo with Selective Runtime Imports
+@import "core";
+@import "math";
+
+@contract: @wcet(50us) @budget(100us);
+
+fn compute_stats($val1, $val2, $val3) -> i64 {
+    let $m = @max($val1, $val2);
+    let $c = @clamp($val3, $val1, $val2);
+    return $m + $c;
+}
+
+let $res = compute_stats(10, 50, 75);
+@print("STANDALONE_RESULT=");
+@println($res);
+@assert($res == 100);
 ```
 

@@ -24,6 +24,7 @@ pub mod include;
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, EnumDefMeta, FnMeta, HandleState,
     StructDefMeta, StructFieldMeta, StructInstMeta,
+    RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_ALL,
 };
 pub use disasm::{disassemble_px64, disassemble_px64_with_filename};
 #[cfg(any(feature = "alloc", test))]
@@ -1503,5 +1504,35 @@ mod tests {
         "#;
         let bin = compile(src).expect("Function with u16 parameters should compile successfully");
         assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+    #[test]
+    fn test_import_runtime_valid() {
+        let src = r#"
+            @import "core";
+            @import "math";
+            let $m = @max(10, 20);
+            @assert($m == 20);
+        "#;
+        let bin = compile(src).expect("Compile with imported runtimes should succeed");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_import_runtime_missing_rejected() {
+        let src = r#"
+            @import "core";
+            let $m = @max(10, 20);
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_RUNTIME_NOT_IMPORTED");
+    }
+
+    #[test]
+    fn test_import_unknown_runtime_rejected() {
+        let src = r#"
+            @import "non_existent_module";
+        "#;
+        let err = compile(src).unwrap_err();
+        assert_eq!(err.code, "ERR_UNKNOWN_RUNTIME");
     }
 }
