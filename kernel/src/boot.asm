@@ -52,11 +52,11 @@ pd_table_2: ; 2..3GB
 pd_table_3: ; 3..4GB
     resb 4096
 
-; Per-core pre-allocated stacks (64KB * 4 cores = 256KB)
+; Per-core pre-allocated stacks (256KB * 4 cores = 1MB)
 align 16
 global core_stacks
 core_stacks:
-    resb 65536 * 4
+    resb 262144 * 4
 core_stacks_end:
 
 section .rodata
@@ -184,8 +184,8 @@ long_mode_entry:
     mov gs, ax
     mov ss, ax
 
-    ; Set up Core 0 stack pointer (top of first 64KB stack slice)
-    lea rsp, [core_stacks + 65536]
+    ; Set up Core 0 stack pointer (top of first 256KB stack slice)
+    lea rsp, [core_stacks + 262144]
 
     ; Call Rust kernel main (RDI contains Multiboot info pointer)
     call rust_main
@@ -300,10 +300,10 @@ ap_trampoline_64:
     shr eax, 24             ; EAX = APIC ID (1, 2, 3...)
     movzx rdi, al           ; RDI = 1st argument (core_id) for ap_main
 
-    ; Set up per-core stack: core_stacks + (core_id + 1) * 65536
+    ; Set up per-core stack: core_stacks + (core_id + 1) * 262144
     mov rax, rdi
     inc rax
-    shl rax, 16             ; RAX = (core_id + 1) * 64KB
+    shl rax, 18             ; RAX = (core_id + 1) * 256KB
     lea rsp, [core_stacks + rax]
 
     ; Call Rust AP entry point

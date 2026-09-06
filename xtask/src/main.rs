@@ -678,8 +678,8 @@ fn test_compile_error(kernel_elf: &Path) {
         .arg("-drive")
         .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .env("PATH", get_augmented_path());
 
     let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
@@ -781,8 +781,8 @@ fn test_editor_delete(kernel_elf: &Path) {
         .arg("-drive")
         .arg(format!("file={},format=raw,if=ide,index=1,media=disk", export_disk.display()))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .env("PATH", get_augmented_path());
 
     let mut child = cmd.spawn().expect("Failed to spawn QEMU process");
