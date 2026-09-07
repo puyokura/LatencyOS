@@ -1079,20 +1079,23 @@ USAGE:
     pulc compile <file.pul> [-o <out.bin>]
     pulc run <file.bin|file.pul> [args...]
     pulc check <file.pul>
-    pulc test <file.pul> [--filter <pattern>] [--json] [-v|--verbose]
+    pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>] [--json] [-v|--verbose]
+    pulc fmt [files...] [--check]
     pulc disasm <file.bin>
     pulc -d <file.bin>
-
 SUBCOMMANDS:
     compile <file.pul>    PulseLang ソースを px64 バイナリバイトコードへコンパイル
     run <file...>         px64 バイトコードバイナリまたはソーススクリプトを直接実行
                           (trailing 引数は @argc() / @arg(i) へ渡されます)
     check <file.pul>      構文・型・不変性・線形所有権・静的 WCET を完全検証 (コード生成なし)
-    test <file.pul>       注釈付き @test ブロックを抽出・実行しアサーションおよび時間予算を検証
+    test <file.pul>       注釈付き @test ブロックを抽出・実行しアサーションおよび時間予算を検証 (--replay で決定論的仮想時間)
+    fmt [files...]        PulseLang ソースコードを標準書式へ自動整形 (インプレースまたは --check)
     disasm <file.bin>     px64 バイナリファイルを可読なアセンブリ命令一覧へ逆アセンブル
-FLAGS:
     +o, ++output <file>   出力バイナリファイルパスを指定 (デフォルト: <input>.bin)
     +d, ++disasm          バイナリファイルの逆アセンブルを実行
+    ++check               ファイルを変更せず整形要否のみ検証 (CI 向け、要整形時 exit code 1)
+    ++replay              @tsc / @uptime_ns をモック化し完全再現可能な決定的トレースリプレイを実行
+    ++seed <val>          決定的リプレイ用の固定シード値を指定 (デフォルト: 0x1337C0DE)
     ++json                AI エージェント / CI 用に構造化 JSON フォーマットで結果を出力
     +v, ++verbose         詳細な診断ログを出力
     +h, ++help            ヘルプメッセージを出力
@@ -1104,7 +1107,10 @@ EXAMPLES:
     pulc run stream.pul "arg1" "arg2"
     pulc test docs/examples/contracts_and_tests.pul
     pulc test docs/examples/contracts_and_tests.pul --json
-EXIT CODES:
+    pulc test docs/examples/chaos_meter.pul --replay
+    pulc test docs/examples/chaos_meter.pul --replay --seed 0x1337C0DE
+    pulc fmt script.pul
+    pulc fmt docs/examples/ --check
     0   Success (正常終了)
     1   Compilation, syntax, linear ownership, mutability, or WCET violation error
     2   IO, file access, or command-line argument error

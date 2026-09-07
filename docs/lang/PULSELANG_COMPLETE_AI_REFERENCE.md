@@ -889,9 +889,9 @@ pulc <file.pul> [-o <out.bin>]
 pulc run <file.bin|file.pul> [args...]
 pulc compile <file.pul> [-o <out.bin>]
 pulc check <file.pul>
-pulc test <file.pul> [--filter <pattern>] [--json] [-v|--verbose]
+pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>] [--json] [-v|--verbose]
+pulc fmt [files...] [--check]
 pulc disasm <file.bin>
-```
 
 #### `pulc test <file.pul>`
 Executes all `@test` blocks within the source file.
@@ -901,6 +901,8 @@ Executes all `@test` blocks within the source file.
   {"file":"...","total":N,"passed":P,"failed":F,"tests":[{"name":"...","status":"pass"|"fail"}]}
   ```
 - `-v`: Enables verbose trace output for test execution steps.
+- `--replay`: Enables deterministic trace replay with step-based virtual timestamp counter (`@tsc`) and uptime (`@uptime_ns`), guaranteeing 100% reproducible `@test` verification across machines and CI runners.
+- `--seed <num>`: Specifies fixed seed for deterministic replay (default: `0x1337C0DE`).
 
 ```pulse
 let $res = @err(503);
@@ -1180,12 +1182,17 @@ pulc -d script.bin
 # Run native unit tests declared with @test
 pulc test script.pul
 pulc test script.pul --filter "safe_div"
+pulc test script.pul --replay
+pulc test script.pul --seed 0x1337C0DE
 pulc test script.pul --json
+# Format source code in-place or validate with --check for CI
+pulc fmt script.pul
+pulc fmt docs/examples/
+pulc fmt script.pul --check
 
 # Emit machine-readable JSON output for AI coding agents
 pulc compile script.pul --json
 pulc check script.pul --json
-```
 
 #### Subcommands:
 | Subcommand | Description |
@@ -1194,6 +1201,7 @@ pulc check script.pul --json
 | `run` | Execute bytecode binary or source script directly in the host virtual machine. |
 | `check` | Validate syntax, types, linear ownership, and WCET bounds. |
 | `test` | Run annotated `@test` blocks with assertions and execution budgets. |
+| `fmt` | Format PulseLang source code in-place (or `--check` for CI validation). |
 | `disasm` | Disassemble `px64` bytecode into readable assembly instructions. |
 
 #### Running Tests (`pulc test`):
@@ -1209,6 +1217,18 @@ $ pulc test docs/examples/contracts_and_tests.pul
 --------------------------------------------------------------------------------
 Test result: 5 passed, 0 failed, 0 budget violations in 5600 ns
 ```
+#### Deterministic Trace Replay (`pulc test --replay`):
+Scripts utilizing timing sources (`@tsc`, `@uptime_ns`) or derived pseudorandom entropy can be tested with 100% determinism using `--replay`:
+```bash
+$ pulc test docs/examples/chaos_meter.pul --replay --seed 0x1337C0DE
+[pulc test] Replay mode: ENABLED (seed: 0x1337C0DE)
+[pulc test] Running 2 tests from 'docs/examples/chaos_meter.pul'...
+  test "deterministic replay seed verification" ... PASS (elapsed: 1800 ns, steps: 120, budget: 50000 ns)
+  test "lcg sequence reproducibility" ... PASS (elapsed: 2640 ns, steps: 176, budget: 50000 ns)
+--------------------------------------------------------------------------------
+Test result: 2 passed, 0 failed, 0 budget violations in 4440 ns
+```
+
 
 With `--json`, `pulc test` emits structured JSON for automated AI test/repair loops:
 ```json
@@ -1230,6 +1250,28 @@ With `--json`, `pulc test` emits structured JSON for automated AI test/repair lo
     }
   ]
 }
+#### Code Formatting (`pulc fmt`):
+The `fmt` subcommand provides deterministic, standard-conformant AST/token-aware source code formatting:
+- **Indentation**: 4 spaces per block level; top-level declarations start at column 0.
+- **Contract Clauses**: Function and loop contract clauses (`@wcet`, `@requires`, `@ensures`, `@invariant`) are aligned with 4 spaces between signature headers and opening braces.
+- **Operator Spacing**: Normalized 1-space padding around binary operators (`:=`, `+=`, `-=`, `=`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `&&`, `||`, `=>`, `->`, `|>`), colons (`$x: i64`), and commas (`, `).
+- **Comments & Strings**: Preserves string literals and comment contents; normalizes multiple empty lines to at most one; ensures a clean terminating `\n`.
+- **CI Validation Mode (`--check`)**: Non-destructive check returning exit code `1` if any target file requires formatting, and exit code `0` if all targets are cleanly formatted.
+
+```bash
+# Check formatting in CI workflow (returns exit code 1 if unformatted)
+$ pulc fmt docs/examples/unformatted_sample.pul --check
+[pulc fmt] Needs formatting: docs/examples/unformatted_sample.pul
+[pulc fmt] 1 file(s) require formatting. Run 'pulc fmt' to format in-place.
+
+# Format in-place
+$ pulc fmt docs/examples/unformatted_sample.pul
+[pulc fmt] Formatted 'docs/examples/unformatted_sample.pul'
+
+# Verify formatting passes
+$ pulc fmt docs/examples/unformatted_sample.pul --check
+```
+
 ```
 - `0`: Success.
 - `1`: Compilation, syntax, linear ownership, or WCET constraint error.

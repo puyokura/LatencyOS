@@ -74,6 +74,36 @@ impl core::fmt::Write for StdoutWriter {
 /// - Static struct slots, constant lookup tables, and array slots.
 /// - Full set of 43 `PX64_OP_*` instruction opcodes.
 /// - Comprehensive native intrinsics (`@print`, `@println`, `@argc`, `@arg`, `@tsc`, `@tsc_freq`, `@min`, `@max`, etc.).
+/// Deterministic trace replay configuration for PX64 VM execution.
+///
+/// When active, real hardware timing sources (`_rdtsc()`) are replaced by predictable,
+/// instruction step-based virtual time calculations derived from a fixed seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeterministicReplayConfig {
+    pub enabled: bool,
+    pub tsc_seed: i64,
+    pub tsc_step: i64,
+    pub uptime_base_ns: i64,
+    pub uptime_step_ns: i64,
+}
+
+impl Default for DeterministicReplayConfig {
+    fn default() -> Self {
+        Self::with_seed(0x1337_C0DE)
+    }
+}
+
+impl DeterministicReplayConfig {
+    pub const fn with_seed(seed: i64) -> Self {
+        Self {
+            enabled: true,
+            tsc_seed: seed,
+            tsc_step: 10,
+            uptime_base_ns: 1_000_000,
+            uptime_step_ns: 15,
+        }
+    }
+}
 pub struct PX64VM<'a> {
     pub code: &'a [u8],
     pub str_pool: &'a [u8],
@@ -98,6 +128,7 @@ pub struct PX64VM<'a> {
     pub spill_slots: [i64; 32],
     pub steps: usize,
     pub max_steps: usize,
+    pub replay_config: Option<DeterministicReplayConfig>,
 }
 
 impl<'a> PX64VM<'a> {
@@ -137,6 +168,7 @@ impl<'a> PX64VM<'a> {
             spill_slots: [0; 32],
             steps: 0,
             max_steps: MAX_VM_STEPS,
+            replay_config: None,
         }
     }
 
@@ -151,6 +183,16 @@ impl<'a> PX64VM<'a> {
 
     /// Retrieve the byte slice corresponding to a tagged string or CLI argument pointer.
     #[inline(always)]
+    /// Attach deterministic trace replay configuration.
+    pub fn with_replay_config(mut self, config: DeterministicReplayConfig) -> Self {
+        self.replay_config = Some(config);
+        self
+    }
+
+    /// Set deterministic trace replay configuration.
+    pub fn set_replay_config(&mut self, config: Option<DeterministicReplayConfig>) {
+        self.replay_config = config;
+    }
     pub fn get_str_bytes<'b>(&self, val: i64) -> Option<&'b [u8]>
     where
         'a: 'b,
@@ -179,6 +221,11 @@ impl<'a> PX64VM<'a> {
     /// Read host serialized timestamp counter.
     #[inline(always)]
     fn get_tsc(&self) -> i64 {
+        if let Some(cfg) = &self.replay_config {
+            if cfg.enabled {
+                return cfg.tsc_seed.wrapping_add((self.steps as i64).wrapping_mul(cfg.tsc_step));
+            }
+        }
         #[cfg(target_arch = "x86_64")]
         {
             unsafe { core::arch::x86_64::_rdtsc() as i64 }
@@ -192,6 +239,11 @@ impl<'a> PX64VM<'a> {
     /// Read host uptime in nanoseconds.
     #[inline(always)]
     fn get_uptime_ns(&self) -> i64 {
+        if let Some(cfg) = &self.replay_config {
+            if cfg.enabled {
+                return cfg.uptime_base_ns.wrapping_add((self.steps as i64).wrapping_mul(cfg.uptime_step_ns));
+            }
+        }
         #[cfg(target_arch = "x86_64")]
         {
             let tsc = unsafe { core::arch::x86_64::_rdtsc() as u64 };

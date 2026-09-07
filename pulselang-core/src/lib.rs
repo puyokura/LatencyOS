@@ -21,6 +21,8 @@ pub mod token;
 pub mod vm;
 #[cfg(any(feature = "alloc", test))]
 pub mod include;
+#[cfg(any(feature = "alloc", test))]
+pub mod fmt;
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, EnumDefMeta, FnMeta, HandleState,
     StructDefMeta, StructFieldMeta, StructInstMeta,
@@ -32,14 +34,16 @@ pub use disasm::{disasm, disasm_with_filename};
 pub use error::CompileError;
 pub use isa::*;
 pub use lexer::Lexer;
+pub use vm::{compute_crc32, run_binary, run_binary_with_output, DeterministicReplayConfig, NullWriter, PX64VM};
 pub use token::{get_line_and_col, Token, TokenKind};
-pub use vm::{compute_crc32, run_binary, run_binary_with_output, NullWriter, PX64VM};
 #[cfg(any(feature = "std", test))]
 pub use vm::StdoutWriter;
 #[cfg(any(feature = "alloc", test))]
 pub use vm::{run_source, run_source_with_output};
 #[cfg(any(feature = "alloc", test))]
 pub use include::preprocess_includes;
+#[cfg(any(feature = "alloc", test))]
+pub use fmt::format_source;
 /// Compile PulseLang source code into a binary px64 bytecode buffer (zero-heap `no_std` API).
 ///
 /// Returns the number of bytes written to `out_buf`.
@@ -307,6 +311,14 @@ pub fn compile_pulse_tests(src: &[u8]) -> Result<alloc::vec::Vec<TestCaseCompile
 
 #[cfg(any(feature = "alloc", test))]
 pub fn run_test_case(test: &TestCaseCompiled) -> TestExecutionResult {
+    run_test_case_with_replay(test, None)
+}
+
+#[cfg(any(feature = "alloc", test))]
+pub fn run_test_case_with_replay(
+    test: &TestCaseCompiled,
+    replay: Option<DeterministicReplayConfig>,
+) -> TestExecutionResult {
     let bin = &test.bytecode;
     if bin.len() < PX64_HEADER_SIZE || bin[0..4] != PX64_BIN_MAGIC {
         return TestExecutionResult {
@@ -346,6 +358,9 @@ pub fn run_test_case(test: &TestCaseCompiled) -> TestExecutionResult {
     }
 
     let mut vm = PX64VM::new(code, str_pool, &const_pool[..count], &[]);
+    if let Some(r) = replay {
+        vm.set_replay_config(Some(r));
+    }
     let mut null_writer = NullWriter;
 
     #[cfg(feature = "std")]
@@ -354,7 +369,11 @@ pub fn run_test_case(test: &TestCaseCompiled) -> TestExecutionResult {
     let exec_res = vm.run_with_output(&mut null_writer);
 
     #[cfg(feature = "std")]
-    let elapsed_ns = start_time.elapsed().as_nanos() as u64;
+    let elapsed_ns = if replay.is_some() {
+        (vm.steps as u64).saturating_mul(15)
+    } else {
+        start_time.elapsed().as_nanos() as u64
+    };
     #[cfg(not(feature = "std"))]
     let elapsed_ns = (vm.steps as u64).saturating_mul(15);
 
@@ -1555,5 +1574,58 @@ mod tests {
         "#;
         let err = compile(src).unwrap_err();
         assert_eq!(err.code, "ERR_RUNTIME_NOT_IMPORTED");
+    }
+    #[test]
+    fn test_vm_deterministic_tsc_replay() {
+        let src = r#"
+            @import "sys";
+            let $t1 = @tsc();
+            let $u1 = @uptime_ns();
+            let $t2 = @tsc();
+            let $u2 = @uptime_ns();
+            @assert($t2 > $t1);
+            @assert($u2 > $u1);
+        "#;
+        let bin = compile(src).expect("Compilation should succeed");
+
+        let cfg = DeterministicReplayConfig::with_seed(100_000);
+
+        let code_len = u16::from_be_bytes([bin[6], bin[7]]) as usize;
+        let str_pool_len = u16::from_be_bytes([bin[8], bin[9]]) as usize;
+        let code = &bin[PX64_HEADER_SIZE..PX64_HEADER_SIZE + code_len];
+        let str_pool = &bin[PX64_HEADER_SIZE + code_len..PX64_HEADER_SIZE + code_len + str_pool_len];
+
+        let mut vm1 = PX64VM::new(code, str_pool, &[], &[]).with_replay_config(cfg);
+        let mut null_writer = NullWriter;
+        vm1.run_with_output(&mut null_writer).expect("Run 1 failed");
+
+        let mut vm2 = PX64VM::new(code, str_pool, &[], &[]).with_replay_config(cfg);
+        vm2.run_with_output(&mut null_writer).expect("Run 2 failed");
+
+        // Registers and steps must be 100% identical
+        assert_eq!(vm1.steps, vm2.steps);
+        assert_eq!(vm1.regs, vm2.regs);
+    }
+
+    #[test]
+    fn test_seed_dependent_test_case_replay() {
+        let src = r#"
+            @import "sys";
+            @test "deterministic seed replay" @budget(50us) {
+                let $seed = @tsc() ^ @uptime_ns();
+                @assert($seed != 0);
+            }
+        "#;
+        let tests = compile_pulse_tests(src.as_bytes()).expect("Compile tests should succeed");
+        assert_eq!(tests.len(), 1);
+
+        let cfg = DeterministicReplayConfig::with_seed(500_000);
+        let res1 = run_test_case_with_replay(&tests[0], Some(cfg));
+        let res2 = run_test_case_with_replay(&tests[0], Some(cfg));
+
+        assert!(res1.passed);
+        assert!(res2.passed);
+        assert_eq!(res1.steps, res2.steps);
+        assert_eq!(res1.elapsed_ns, res2.elapsed_ns);
     }
 }

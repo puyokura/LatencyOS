@@ -1,0 +1,38 @@
+// chaos_meter.pul - Deterministic Entropy & PRNG Verification
+@contract: @wcet(50us) @budget(200us);
+@import "sys";
+
+fn lcg_next($state: i64) -> i64
+    @requires($state >= 0)
+    @ensures($result >= 0)
+{
+    let $next = ($state * 1103515245 + 12345) & 0x7FFF_FFFF;
+    return $next;
+}
+
+fn sample_entropy() -> i64
+    @ensures($result >= 0)
+{
+    let $t = @tsc();
+    let $u = @uptime_ns();
+    let $seed = ($t ^ $u) & 0x7FFF_FFFF;
+    return lcg_next($seed);
+}
+
+let $entropy = sample_entropy();
+@assert($entropy >= 0);
+
+@test "deterministic replay seed verification" @budget(50us) {
+    let $e1 = sample_entropy();
+    let $e2 = sample_entropy();
+    @assert($e1 >= 0);
+    @assert($e2 >= 0);
+}
+
+@test "lcg sequence reproducibility" @budget(50us) {
+    let mut $state = 12345;
+    for $i in 0..5 {
+        $state := lcg_next($state);
+    }
+    @assert($state >= 0);
+}

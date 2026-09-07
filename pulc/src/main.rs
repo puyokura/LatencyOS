@@ -29,9 +29,15 @@ enum Subcommand {
     Test {
         input: PathBuf,
         filter: Option<String>,
+        replay: bool,
+        seed: Option<i64>,
     },
     Disasm {
         input: PathBuf,
+    },
+    Fmt {
+        targets: Vec<PathBuf>,
+        check: bool,
     },
     Help,
     Version,
@@ -53,20 +59,23 @@ fn print_help() {
     pulc run <file.bin|file.pul> [args...]
     pulc compile <file.pul> [-o <out.bin>]
     pulc check <file.pul>
-    pulc test <file.pul> [--filter <pattern>]
+    pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>]
+    pulc fmt [files...] [--check]
     pulc disasm <file.bin>
     pulc -d <file.bin>
-
 \x1b[1mSUBCOMMANDS:\x1b[0m
     run <file> [args...]  Execute px64 binary (.bin) or source script (.pul) directly
     compile <file.pul>    Compile PulseLang source into px64 binary bytecode
     check <file.pul>      Validate syntax, types, linear ownership & WCET constraints
-    test <file.pul>       Run annotated @test blocks from source script
+    test <file.pul>       Run annotated @test blocks from source script (--replay for deterministic virtual time)
+    fmt [files...]        Format PulseLang source code in-place (or --check for CI validation)
     disasm <file.bin>     Disassemble px64 binary bytecode into assembly instructions
-
 \x1b[1mFLAGS:\x1b[0m
     -o, --output <file>   Specify output binary file path (default: <input>.bin)
     -d, --disasm          Disassemble binary bytecode file
+    --check               Check formatting without modifying files (exit code 1 if unformatted)
+    --replay              Enable deterministic trace replay with mocked @tsc and @uptime_ns
+    --seed <val>          Specify fixed seed for deterministic replay (default: 0x1337C0DE)
     --json                Emit JSON diagnostic and output format
     -v, --verbose         Enable verbose diagnostic logging
     -h, --help            Print help information
@@ -102,6 +111,7 @@ where
     let mut verbose = false;
     let mut output_opt: Option<PathBuf> = None;
     let mut disasm_flag = false;
+    let mut check_flag = false;
     let mut positional: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -131,6 +141,9 @@ where
             "-d" | "--disasm" => {
                 disasm_flag = true;
             }
+            "--check" => {
+                check_flag = true;
+            }
             "-o" | "--output" => {
                 if i + 1 >= args_vec.len() {
                     return Err("Option '-o / --output' requires an argument".to_string());
@@ -156,6 +169,8 @@ where
             "test" => {
                 let mut input = None;
                 let mut filter = None;
+                let mut replay = false;
+                let mut seed = None;
                 let mut j = i + 1;
                 while j < args_vec.len() {
                     if args_vec[j] == "--json" {
@@ -163,6 +178,31 @@ where
                         j += 1;
                     } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
                         verbose = true;
+                        j += 1;
+                    } else if args_vec[j] == "--replay" {
+                        replay = true;
+                        j += 1;
+                    } else if args_vec[j] == "--seed" {
+                        if j + 1 >= args_vec.len() {
+                            return Err("Option '--seed' requires an argument".to_string());
+                        }
+                        let raw = &args_vec[j + 1];
+                        let val = if raw.starts_with("0x") || raw.starts_with("0X") {
+                            i64::from_str_radix(&raw[2..], 16)
+                        } else {
+                            raw.parse::<i64>()
+                        }.map_err(|_| format!("Invalid integer for '--seed': '{}'", raw))?;
+                        seed = Some(val);
+                        replay = true;
+                        j += 2;
+                    } else if let Some(stripped) = args_vec[j].strip_prefix("--seed=") {
+                        let val = if stripped.starts_with("0x") || stripped.starts_with("0X") {
+                            i64::from_str_radix(&stripped[2..], 16)
+                        } else {
+                            stripped.parse::<i64>()
+                        }.map_err(|_| format!("Invalid integer for '--seed': '{}'", stripped))?;
+                        seed = Some(val);
+                        replay = true;
                         j += 1;
                     } else if args_vec[j] == "--filter" {
                         if j + 1 >= args_vec.len() {
@@ -182,7 +222,34 @@ where
                 }
                 let input_path = input.ok_or_else(|| "Missing input source file for 'test' subcommand".to_string())?;
                 return Ok(CliOptions {
-                    subcommand: Subcommand::Test { input: input_path, filter },
+                    subcommand: Subcommand::Test { input: input_path, filter, replay, seed },
+                    json,
+                    verbose,
+                });
+            }
+            "fmt" | "format" => {
+                let mut targets = Vec::new();
+                let mut check = check_flag;
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if args_vec[j] == "--check" {
+                        check = true;
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') {
+                        targets.push(PathBuf::from(&args_vec[j]));
+                        j += 1;
+                    } else {
+                        return Err(format!("Unrecognized argument for 'fmt' subcommand: '{}'", args_vec[j]));
+                    }
+                }
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Fmt { targets, check },
                     json,
                     verbose,
                 });
@@ -238,6 +305,16 @@ where
             }
             Subcommand::Disasm {
                 input: PathBuf::from(&positional[1]),
+            }
+        }
+        "fmt" | "format" => {
+            let mut targets = Vec::new();
+            for arg in &positional[1..] {
+                targets.push(PathBuf::from(arg));
+            }
+            Subcommand::Fmt {
+                targets,
+                check: check_flag,
             }
         }
         _ => {
@@ -1130,7 +1207,14 @@ fn format_compile_error(
     }
     out
 }
-fn run_test(input_path: &Path, filter: Option<&str>, json: bool, _verbose: bool) -> Result<(), (i32, String)> {
+fn run_test(
+    input_path: &Path,
+    filter: Option<&str>,
+    replay: bool,
+    seed: Option<i64>,
+    json: bool,
+    _verbose: bool,
+) -> Result<(), (i32, String)> {
     let preprocessed = read_and_preprocess(input_path, json)?;
     let tests = pulselang_core::compile_pulse_tests(preprocessed.as_bytes())
         .map_err(|e| (1, format_compile_error(&e, preprocessed.as_bytes(), &input_path.to_string_lossy(), json)))?;
@@ -1145,10 +1229,16 @@ fn run_test(input_path: &Path, filter: Option<&str>, json: bool, _verbose: bool)
     let mut budget_violations = 0;
     let mut total_elapsed_ns: u64 = 0;
 
+    let replay_cfg = if replay || seed.is_some() {
+        let s = seed.unwrap_or(0x1337_C0DE);
+        Some(pulselang_core::DeterministicReplayConfig::with_seed(s))
+    } else {
+        None
+    };
     if json {
         let mut results = Vec::new();
         for t in &filtered_tests {
-            let res = pulselang_core::run_test_case(t);
+            let res = pulselang_core::run_test_case_with_replay(t, replay_cfg);
             total_elapsed_ns = total_elapsed_ns.saturating_add(res.elapsed_ns);
 
             let status = if res.passed {
@@ -1189,20 +1279,29 @@ fn run_test(input_path: &Path, filter: Option<&str>, json: bool, _verbose: bool)
                 err_field
             ));
         }
+        let replay_field = if let Some(cfg) = replay_cfg {
+            format!(r#","replay":true,"seed":{}"#, cfg.tsc_seed)
+        } else {
+            r#","replay":false,"seed":null"#.to_string()
+        };
         println!(
-            r#"{{"file":"{}","total":{},"passed":{},"failed":{},"budget_violations":{},"elapsed_ns":{},"tests":[{}]}}"#,
+            r#"{{"file":"{}","total":{},"passed":{},"failed":{},"budget_violations":{},"elapsed_ns":{}{},"tests":[{}]}}"#,
             escape_json(&input_path.to_string_lossy()),
             filtered_tests.len(),
             passed,
             failed,
             budget_violations,
             total_elapsed_ns,
+            replay_field,
             results.join(",")
         );
     } else {
+        if let Some(cfg) = replay_cfg {
+            println!("[pulc test] Replay mode: ENABLED (seed: 0x{:X})", cfg.tsc_seed);
+        }
         println!("[pulc test] Running {} tests from '{}'...", filtered_tests.len(), input_path.display());
         for t in &filtered_tests {
-            let res = pulselang_core::run_test_case(t);
+            let res = pulselang_core::run_test_case_with_replay(t, replay_cfg);
             total_elapsed_ns = total_elapsed_ns.saturating_add(res.elapsed_ns);
 
             let budget_str = match res.budget_ns {
@@ -1255,6 +1354,162 @@ fn run_test(input_path: &Path, filter: Option<&str>, json: bool, _verbose: bool)
     }
 }
 
+fn collect_pul_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if dir.is_dir() {
+        let mut entries: Vec<_> = fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_pul_files_recursive(&path, out)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("pul") {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_pul_files(targets: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if targets.is_empty() {
+        collect_pul_files_recursive(Path::new("."), &mut files)
+            .map_err(|e| format!("Failed to read current directory: {}", e))?;
+    } else {
+        for target in targets {
+            if !target.exists() {
+                return Err(format!("Target path '{}' does not exist", target.display()));
+            }
+            if target.is_dir() {
+                collect_pul_files_recursive(target, &mut files)
+                    .map_err(|e| format!("Failed to read directory '{}': {}", target.display(), e))?;
+            } else {
+                files.push(target.clone());
+            }
+        }
+    }
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn run_fmt(
+    targets: &[PathBuf],
+    check: bool,
+    json: bool,
+    verbose: bool,
+) -> Result<(), (i32, String)> {
+    let files = collect_pul_files(targets).map_err(|e| (2, e))?;
+    if files.is_empty() {
+        if verbose && !json {
+            eprintln!("[pulc fmt] No .pul files found");
+        }
+        if json {
+            println!(r#"{{"success":true,"files_checked":0,"formatted_count":0,"files":[]}}"#);
+        }
+        return Ok(());
+    }
+
+    let mut unformatted_files = Vec::new();
+    let mut formatted_files = Vec::new();
+
+    for file_path in &files {
+        let content = fs::read_to_string(file_path).map_err(|e| {
+            (
+                2,
+                format!(
+                    "Cannot read input file '{}': {}",
+                    file_path.display(),
+                    e
+                ),
+            )
+        })?;
+
+        let formatted = pulselang_core::format_source(&content).map_err(|err| {
+            let diag = format_compile_error(&err, content.as_bytes(), &file_path.to_string_lossy(), json);
+            (1, diag)
+        })?;
+
+        if content != formatted {
+            if check {
+                unformatted_files.push(file_path.clone());
+                if !json {
+                    println!("[pulc fmt] Needs formatting: {}", file_path.display());
+                }
+            } else {
+                fs::write(file_path, &formatted).map_err(|e| {
+                    (
+                        2,
+                        format!(
+                            "Failed to write formatted file '{}': {}",
+                            file_path.display(),
+                            e
+                        ),
+                    )
+                })?;
+                formatted_files.push(file_path.clone());
+                if !json {
+                    println!("[pulc fmt] Formatted '{}'", file_path.display());
+                }
+            }
+        } else if verbose && !json {
+            println!("[pulc fmt] Already formatted '{}'", file_path.display());
+        }
+    }
+
+    if check {
+        if !unformatted_files.is_empty() {
+            if json {
+                let file_entries: Vec<String> = unformatted_files
+                    .iter()
+                    .map(|p| format!(r#""{}""#, escape_json(&p.to_string_lossy())))
+                    .collect();
+                return Err((
+                    1,
+                    format!(
+                        r#"{{"success":false,"check":false,"unformatted_count":{},"files":[{}]}}"#,
+                        unformatted_files.len(),
+                        file_entries.join(",")
+                    ),
+                ));
+            } else {
+                return Err((
+                    1,
+                    format!(
+                        "[pulc fmt] {} file(s) require formatting. Run 'pulc fmt' to format in-place.",
+                        unformatted_files.len()
+                    ),
+                ));
+            }
+        } else {
+            if json {
+                println!(
+                    r#"{{"success":true,"check":true,"files_checked":{}}}"#,
+                    files.len()
+                );
+            } else if verbose {
+                println!("[pulc fmt] All {} file(s) are properly formatted.", files.len());
+            }
+            Ok(())
+        }
+    } else {
+        if json {
+            let file_entries: Vec<String> = formatted_files
+                .iter()
+                .map(|p| format!(r#""{}""#, escape_json(&p.to_string_lossy())))
+                .collect();
+            println!(
+                r#"{{"success":true,"formatted_count":{},"files":[{}]}}"#,
+                formatted_files.len(),
+                file_entries.join(",")
+            );
+        } else if formatted_files.is_empty() && verbose {
+            println!("[pulc fmt] All {} file(s) are already formatted.", files.len());
+        }
+        Ok(())
+    }
+}
+
 fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -1296,13 +1551,15 @@ fn main() -> ExitCode {
         Subcommand::Compile { input, output } => {
             run_compile(input, output.clone(), options.json, options.verbose)
         }
-        Subcommand::Test { input, filter } => {
-            run_test(input, filter.as_deref(), options.json, options.verbose)
+        Subcommand::Test { input, filter, replay, seed } => {
+            run_test(input, filter.as_deref(), *replay, *seed, options.json, options.verbose)
         }
         Subcommand::Check { input } => run_check(input, options.json, options.verbose),
         Subcommand::Disasm { input } => run_disasm(input, options.json),
+        Subcommand::Fmt { targets, check } => {
+            run_fmt(targets, *check, options.json, options.verbose)
+        }
     };
-
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err((code, err_msg)) => {
@@ -1530,5 +1787,65 @@ mod tests {
         assert!(res.is_err());
         let (code, _err_msg) = res.unwrap_err();
         assert_eq!(code, 2);
+    }
+    #[test]
+    fn test_cli_parse_fmt_subcommand() {
+        let args = vec!["fmt".to_string(), "sample.pul".to_string(), "--check".to_string()];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Fmt {
+                targets: vec![PathBuf::from("sample.pul")],
+                check: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_fmt_default_in_place() {
+        let args = vec!["fmt".to_string(), "foo.pul".to_string(), "bar.pul".to_string()];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Fmt {
+                targets: vec![PathBuf::from("foo.pul"), PathBuf::from("bar.pul")],
+                check: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_test_subcommand_with_replay() {
+        let args = vec!["test".to_string(), "script.pul".to_string(), "--replay".to_string()];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Test {
+                input: PathBuf::from("script.pul"),
+                filter: None,
+                replay: true,
+                seed: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_test_subcommand_with_seed() {
+        let args = vec![
+            "test".to_string(),
+            "script.pul".to_string(),
+            "--seed".to_string(),
+            "0x123456".to_string(),
+        ];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(
+            opts.subcommand,
+            Subcommand::Test {
+                input: PathBuf::from("script.pul"),
+                filter: None,
+                replay: true,
+                seed: Some(0x123456),
+            }
+        );
     }
 }

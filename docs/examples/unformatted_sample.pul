@@ -1,0 +1,23 @@
+// unformatted_sample.pul - Sample script with irregular indentation and spacing
+@contract: @wcet(50us) @budget(200us);
+
+fn calc_step($val: i64, $delta: i64) -> i64
+    @wcet(100ns)
+    @requires($val >= 0 && $delta >= 0)
+    @ensures($result >= $val)
+{
+    let mut $acc = $val + $delta * 2;
+    if ($acc > 100) {
+        $acc := 100;
+    }
+    return $acc;
+}
+
+let mut $base: i64 = 10;
+let $res = calc_step($base, 5);
+@assert($res == 20);
+
+@test "calc_step verification" @budget(20us) {
+    let $out = calc_step(40, 10);
+    @assert($out == 60);
+}
