@@ -79,3 +79,21 @@ OFFSET  HEX          INSTRUCTION  OPERANDS
 [c0|08ns] % exit
 ```
 
+---
+
+## 4. 配布パッケージと ISO の生成
+
+```powershell
+# スタンドアロン Windows 実行バイナリ (dist/LatencyOS.exe)、ホストコンパイラ (dist/pulc.exe)、
+# およびハイブリッド UEFI/BIOS ブータブル ISO (dist/LatencyOS.iso) を一括生成:
+cargo run --package xtask -- dist
+
+# ISO のみをビルド:
+cargo run --package xtask -- iso --release
+
+# QEMU での ISO ブートテスト:
+cargo run --package xtask -- test-iso
+```
+
+VMware、VirtualBox、および実機 USB メディアでの起動詳細については、[VMware / VirtualBox 実行ガイド](vmware_and_iso_guide.md) を参照してください。
+
