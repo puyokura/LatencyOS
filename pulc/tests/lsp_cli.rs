@@ -89,10 +89,18 @@ fn test_lsp_server_lifecycle_and_diagnostics() {
     assert!(comp_resp.contains("@contract"));
     assert!(comp_resp.contains("@tsc"));
 
+    // 5. Semantic Tokens query (Editor Syntax Highlighting via LSP)
+    send_rpc(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.pul"}}}"#,
+    );
+    let sem_resp = read_rpc(&mut reader).expect("Expected semantic tokens response");
+    assert!(sem_resp.contains(r#""id":4"#));
+    assert!(sem_resp.contains(r#""data":["#));
     // 5. Shutdown and Exit
-    send_rpc(&mut stdin, r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#);
+    send_rpc(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#);
     let shut_resp = read_rpc(&mut reader).expect("Expected shutdown response");
-    assert!(shut_resp.contains(r#""id":4"#));
+    assert!(shut_resp.contains(r#""id":5"#));
     assert!(shut_resp.contains(r#""result":null"#));
 
     send_rpc(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit"}"#);

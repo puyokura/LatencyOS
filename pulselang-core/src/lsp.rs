@@ -85,7 +85,7 @@ impl LspServer {
             "initialize" => {
                 let id = id_str?;
                 Some(format!(
-                    "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"completionProvider\":{{\"resolveProvider\":false,\"triggerCharacters\":[\"@\",\"$\",\"#\",\":\"]}},\"codeActionProvider\":true,\"documentFormattingProvider\":true}}}}}}",
+                    "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"completionProvider\":{{\"resolveProvider\":false,\"triggerCharacters\":[\"@\",\"$\",\"#\",\":\"]}},\"codeActionProvider\":true,\"documentFormattingProvider\":true,\"semanticTokensProvider\":{{\"legend\":{{\"tokenTypes\":[\"keyword\",\"variable\",\"parameter\",\"type\",\"function\",\"macro\",\"number\",\"string\",\"operator\",\"comment\"],\"tokenModifiers\":[\"declaration\",\"readonly\"]}},\"full\":true}}}}}}}}",
                     id
                 ))
             }
@@ -162,6 +162,14 @@ impl LspServer {
                 let uri = doc.get("uri")?.as_str()?;
                 let edits = self.compute_formatting(uri);
                 Some(format!(r#"{{"jsonrpc":"2.0","id":{},"result":{}}}"#, id, edits))
+            }
+            "textDocument/semanticTokens/full" => {
+                let id = id_str?;
+                let params = req.get("params")?;
+                let doc = params.get("textDocument")?;
+                let uri = doc.get("uri")?.as_str()?;
+                let data = self.compute_semantic_tokens(uri);
+                Some(format!(r#"{{"jsonrpc":"2.0","id":{},"result":{{"data":[{}]}}}}"#, id, data))
             }
             _ => {
                 if let Some(id) = id_str {
@@ -318,13 +326,138 @@ impl LspServer {
             escape_json(&formatted)
         )
     }
+#[cfg(feature = "std")]
+    fn compute_semantic_tokens(&self, uri: &str) -> String {
+        let text = match self.documents.get(uri) {
+            Some(t) => t,
+            None => return String::new(),
+        };
+
+        // Token types legend:
+        // 0: keyword
+        // 1: variable
+        // 2: parameter
+        // 3: type
+        // 4: function
+        // 5: macro
+        // 6: number
+        // 7: string
+        // 8: operator
+        // 9: comment
+
+        let mut tokens = vec![crate::token::Token::empty(); 4096];
+        let mut lexer = crate::lexer::Lexer::new(text.as_bytes());
+        let count = match lexer.tokenize(&mut tokens) {
+            Ok(c) => c,
+            Err(_) => return String::new(),
+        };
+
+        let mut data: Vec<u32> = Vec::new();
+        let mut prev_line: u32 = 0;
+        let mut prev_col: u32 = 0;
+
+        for tok in &tokens[..count] {
+            if tok.kind == crate::token::TokenKind::Eof || tok.len == 0 {
+                continue;
+            }
+
+            let tok_type: Option<u32> = match tok.kind {
+                crate::token::TokenKind::Let
+                | crate::token::TokenKind::Mut
+                | crate::token::TokenKind::Match
+                | crate::token::TokenKind::If
+                | crate::token::TokenKind::Else
+                | crate::token::TokenKind::While
+                | crate::token::TokenKind::Within
+                | crate::token::TokenKind::For
+                | crate::token::TokenKind::In
+                | crate::token::TokenKind::Fn
+                | crate::token::TokenKind::Struct
+                | crate::token::TokenKind::Const
+                | crate::token::TokenKind::Enum
+                | crate::token::TokenKind::Return
+                | crate::token::TokenKind::Drop => Some(0), // keyword
+
+                crate::token::TokenKind::VarIdent => Some(1), // variable
+                crate::token::TokenKind::HardwareIdent => Some(2), // parameter/hardware slot
+
+                crate::token::TokenKind::Fixed
+                | crate::token::TokenKind::I64
+                | crate::token::TokenKind::U8
+                | crate::token::TokenKind::U16
+                | crate::token::TokenKind::U32
+                | crate::token::TokenKind::U64 => Some(3), // type
+
+                crate::token::TokenKind::Ident => Some(4), // function / identifier
+
+                crate::token::TokenKind::AtContract
+                | crate::token::TokenKind::AtPipeline
+                | crate::token::TokenKind::AtBudget
+                | crate::token::TokenKind::AtWcet
+                | crate::token::TokenKind::AtWithin
+                | crate::token::TokenKind::AtWhile
+                | crate::token::TokenKind::AtFor
+                | crate::token::TokenKind::AtLoop
+                | crate::token::TokenKind::AtOnVblank
+                | crate::token::TokenKind::AtAssert
+                | crate::token::TokenKind::AtRequires
+                | crate::token::TokenKind::AtEnsures
+                | crate::token::TokenKind::AtInvariant
+                | crate::token::TokenKind::AtPoolSize
+                | crate::token::TokenKind::AtTest
+                | crate::token::TokenKind::AtImport
+                | crate::token::TokenKind::IntrinsicIdent => Some(5), // macro / intrinsic
+
+                crate::token::TokenKind::Number(_)
+                | crate::token::TokenKind::FloatLit(_, _)
+                | crate::token::TokenKind::TimeLiteral(_) => Some(6), // number
+
+                crate::token::TokenKind::StringLit => Some(7), // string
+
+                crate::token::TokenKind::ColonEq
+                | crate::token::TokenKind::PlusEq
+                | crate::token::TokenKind::MinusEq
+                | crate::token::TokenKind::Pipe
+                | crate::token::TokenKind::EqEq
+                | crate::token::TokenKind::NotEq
+                | crate::token::TokenKind::LtEq
+                | crate::token::TokenKind::GtEq
+                | crate::token::TokenKind::And
+                | crate::token::TokenKind::Or => Some(8), // operator
+
+                _ => None,
+            };
+
+            if let Some(t_type) = tok_type {
+                let cur_line = tok.line.saturating_sub(1) as u32;
+                let cur_col = tok.col.saturating_sub(1) as u32;
+                let delta_line = cur_line.saturating_sub(prev_line);
+                let delta_col = if delta_line == 0 {
+                    cur_col.saturating_sub(prev_col)
+                } else {
+                    cur_col
+                };
+
+                data.push(delta_line);
+                data.push(delta_col);
+                data.push(tok.len as u32);
+                data.push(t_type);
+                data.push(0); // tokenModifiers
+
+                prev_line = cur_line;
+                prev_col = cur_col;
+            }
+        }
+
+        let strs: Vec<String> = data.iter().map(|n| format!("{}", n)).collect();
+        strs.join(",")
+    }
 }
 
 // -----------------------------------------------------------------------------
 // Helper parsing & formatting routines
 // -----------------------------------------------------------------------------
 
-#[cfg(feature = "std")]
 fn extract_word_at(line: &str, character: usize) -> String {
     let bytes = line.as_bytes();
     if character >= bytes.len() {
