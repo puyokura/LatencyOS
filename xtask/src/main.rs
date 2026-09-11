@@ -1582,8 +1582,7 @@ fn bundle_standalone_exe() {
     println!("================================================================================");
 }
 fn generate_bootable_iso(kernel_path: &Path, dist_dir: &Path) -> PathBuf {
-    use isobemak::{IsoBuilder, BootInfo, BiosBootInfo, UefiBootInfo, IsoLayoutProfile};
-    use std::fs::OpenOptions;
+    use isobemak::{build_iso, IsoImage, IsoImageFile, BootInfo, BiosBootInfo, UefiBootInfo, IsoLayoutProfile};
 
     let root = get_workspace_root();
     let limine_dir = root.join("boot").join("limine");
@@ -1595,44 +1594,57 @@ fn generate_bootable_iso(kernel_path: &Path, dist_dir: &Path) -> PathBuf {
 
     println!("[xtask] Generating bootable hybrid ISO (BIOS + UEFI) into {}...", out_iso.display());
 
-    let mut builder = IsoBuilder::new();
-    builder.set_volume_id(Some("LATENCYOS".to_string()));
-    builder.set_isohybrid(true);
-
-    builder.add_file("kernel", kernel_path).expect("Failed to add kernel to ISO");
-    builder.add_file("boot/limine/limine.conf", &conf).expect("Failed to add limine.conf to ISO");
-    builder.add_file("limine.conf", &conf).expect("Failed to add root limine.conf to ISO");
-    builder.add_file("boot/limine/limine-bios.sys", &bios_sys).expect("Failed to add limine-bios.sys to ISO");
-    builder.add_file("limine-bios.sys", &bios_sys).expect("Failed to add root limine-bios.sys to ISO");
-    builder.add_file("boot/limine/limine-bios-cd.bin", &bios_cd).expect("Failed to add limine-bios-cd.bin to ISO");
-    builder.add_file("EFI/BOOT/BOOTX64.EFI", &efi_boot).expect("Failed to add BOOTX64.EFI to ISO");
-
-    let boot_info = BootInfo {
-        bios_boot: Some(BiosBootInfo {
-            boot_image: bios_cd.clone(),
-            destination_in_iso: "boot/limine/limine-bios-cd.bin".to_string(),
-        }),
-        uefi_boot: Some(UefiBootInfo {
-            boot_image: efi_boot.clone(),
-            kernel_image: kernel_path.to_path_buf(),
-            destination_in_iso: "EFI/BOOT/BOOTX64.EFI".to_string(),
-            additional_efi_boot_files: vec![],
-            grub_cfg_content: None,
-        }),
+    let image = IsoImage {
+        volume_id: Some("LATENCYOS".to_string()),
+        files: vec![
+            IsoImageFile {
+                source: kernel_path.to_path_buf(),
+                destination: "kernel".to_string(),
+            },
+            IsoImageFile {
+                source: conf.clone(),
+                destination: "boot/limine/limine.conf".to_string(),
+            },
+            IsoImageFile {
+                source: conf.clone(),
+                destination: "limine.conf".to_string(),
+            },
+            IsoImageFile {
+                source: bios_sys.clone(),
+                destination: "boot/limine/limine-bios.sys".to_string(),
+            },
+            IsoImageFile {
+                source: bios_sys.clone(),
+                destination: "limine-bios.sys".to_string(),
+            },
+            IsoImageFile {
+                source: bios_cd.clone(),
+                destination: "boot/limine/limine-bios-cd.bin".to_string(),
+            },
+            IsoImageFile {
+                source: efi_boot.clone(),
+                destination: "EFI/BOOT/BOOTX64.EFI".to_string(),
+            },
+        ],
+        boot_info: BootInfo {
+            bios_boot: Some(BiosBootInfo {
+                boot_image: bios_cd.clone(),
+                destination_in_iso: "boot/limine/limine-bios-cd.bin".to_string(),
+            }),
+            uefi_boot: Some(UefiBootInfo {
+                boot_image: efi_boot.clone(),
+                kernel_image: kernel_path.to_path_buf(),
+                destination_in_iso: "EFI/BOOT/BOOTX64.EFI".to_string(),
+                additional_efi_boot_files: vec![
+                    ("limine.conf".to_string(), conf.clone()),
+                ],
+                grub_cfg_content: None,
+            }),
+        },
+        layout_profile: IsoLayoutProfile::hardware(),
     };
 
-    builder.set_boot_info(boot_info);
-    builder.set_profile(IsoLayoutProfile::hardware());
-
-    let mut iso_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&out_iso)
-        .expect("Failed to open output ISO file for writing");
-
-    builder.build(&mut iso_file, &out_iso, None, None).expect("Failed to build ISO with isobemak");
+    let (_path, _fat_tmp, _file, _fat_size) = build_iso(&out_iso, &image, true).expect("Failed to build ISO with isobemak");
 
     let iso_size_mb = std::fs::metadata(&out_iso).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
     println!("[xtask] Bootable ISO generated: {} ({:.2} MB)", out_iso.display(), iso_size_mb);

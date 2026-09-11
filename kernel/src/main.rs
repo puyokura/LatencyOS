@@ -12,6 +12,7 @@ mod crypto;
 mod e1000;
 mod editor;
 mod fs;
+pub mod console;
 mod gpu;
 mod lang;
 mod latency;
@@ -57,6 +58,9 @@ fn panic(info: &PanicInfo) -> ! {
 pub extern "C" fn rust_main(_multiboot_info_addr: usize) -> ! {
     // 1. Initialize UART 16550 serial port (COM1, 115200 baud)
     serial::init_serial();
+    unsafe {
+        console::VGA_WRITER.init();
+    }
 
     // 2. Read initial boot TSC and calibrate frequency (~10ms)
     let boot_tsc = tsc::read_tsc_serialized();

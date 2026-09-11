@@ -191,7 +191,7 @@ pub fn poll_shell(tsc_freq_hz: u64) {
 
         let mut needs_redraw = false;
 
-        while let Some(b) = SERIAL.read_byte_nonblocking() {
+        while let Some(b) = SERIAL.read_byte_nonblocking().or_else(crate::console::read_ps2_keyboard_nonblocking) {
             match ESC_STATE {
                 EscapeState::Normal => {
                     match b {
