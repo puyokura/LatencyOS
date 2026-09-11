@@ -106,19 +106,12 @@ cargo run --package xtask -- check
 cargo run --package xtask -- interactive --release
 ```
 
-### 4.5 Package Standalone Executable & Bootable ISO
+### 4.5 Package Standalone Executable
 ```powershell
-# Build standalone Windows executable (dist/LatencyOS.exe), host compiler (dist/pulc.exe),
-# and hybrid UEFI/BIOS bootable ISO (dist/LatencyOS.iso):
 cargo run --package xtask -- dist
-
-# Or build ISO only:
-cargo run --package xtask -- iso --release
-
-# Test ISO boot in QEMU:
-cargo run --package xtask -- test-iso
+# Produces self-contained executable: dist/LatencyOS.exe
 ```
-For VMware, VirtualBox, and bare-metal USB boot instructions, see [docs/vmware_and_iso_guide.md](docs/vmware_and_iso_guide.md) ([日本語](docs/ja/vmware_and_iso_guide.md)).
+
 ---
 
 ## 5. Directory Structure

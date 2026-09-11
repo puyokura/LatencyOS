@@ -1570,8 +1570,6 @@ fn bundle_standalone_exe() {
         let pulc_size_mb = std::fs::metadata(&dist_pulc).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
         println!("[xtask] Host compiler generated: {} ({:.2} MB)", dist_pulc.display(), pulc_size_mb);
     }
-    // 7. Generate bootable ISO for VMware / VirtualBox / Physical Hardware
-    generate_bootable_iso(&kernel_path, &dist_dir);
 
     let exe_size_mb = std::fs::metadata(&out_exe).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
     println!("================================================================================");
@@ -1581,119 +1579,7 @@ fn bundle_standalone_exe() {
     println!("[xtask] Portable: 100% self-contained (zero host dependencies, no install required)");
     println!("================================================================================");
 }
-fn generate_bootable_iso(kernel_path: &Path, dist_dir: &Path) -> PathBuf {
-    use isobemak::{IsoBuilder, BootInfo, BiosBootInfo, UefiBootInfo, IsoLayoutProfile};
-    use std::fs::OpenOptions;
 
-    let root = get_workspace_root();
-    let limine_dir = root.join("boot").join("limine");
-    let bios_cd = limine_dir.join("limine-bios-cd.bin");
-    let bios_sys = limine_dir.join("limine-bios.sys");
-    let conf = limine_dir.join("limine.conf");
-    let efi_boot = limine_dir.join("BOOTX64.EFI");
-    let out_iso = dist_dir.join("LatencyOS.iso");
-
-    println!("[xtask] Generating bootable hybrid ISO (BIOS + UEFI) into {}...", out_iso.display());
-
-    let mut builder = IsoBuilder::new();
-    builder.set_volume_id(Some("LATENCYOS".to_string()));
-    builder.set_isohybrid(true);
-
-    builder.add_file("kernel", kernel_path).expect("Failed to add kernel to ISO");
-    builder.add_file("boot/limine/limine.conf", &conf).expect("Failed to add limine.conf to ISO");
-    builder.add_file("limine.conf", &conf).expect("Failed to add root limine.conf to ISO");
-    builder.add_file("boot/limine/limine-bios.sys", &bios_sys).expect("Failed to add limine-bios.sys to ISO");
-    builder.add_file("limine-bios.sys", &bios_sys).expect("Failed to add root limine-bios.sys to ISO");
-    builder.add_file("boot/limine/limine-bios-cd.bin", &bios_cd).expect("Failed to add limine-bios-cd.bin to ISO");
-    builder.add_file("EFI/BOOT/BOOTX64.EFI", &efi_boot).expect("Failed to add BOOTX64.EFI to ISO");
-
-    let boot_info = BootInfo {
-        bios_boot: Some(BiosBootInfo {
-            boot_image: bios_cd.clone(),
-            destination_in_iso: "boot/limine/limine-bios-cd.bin".to_string(),
-        }),
-        uefi_boot: Some(UefiBootInfo {
-            boot_image: efi_boot.clone(),
-            kernel_image: kernel_path.to_path_buf(),
-            destination_in_iso: "EFI/BOOT/BOOTX64.EFI".to_string(),
-            additional_efi_boot_files: vec![],
-            grub_cfg_content: None,
-        }),
-    };
-
-    builder.set_boot_info(boot_info);
-    builder.set_profile(IsoLayoutProfile::hardware());
-
-    let mut iso_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&out_iso)
-        .expect("Failed to open output ISO file for writing");
-
-    builder.build(&mut iso_file, &out_iso, None, None).expect("Failed to build ISO with isobemak");
-
-    let iso_size_mb = std::fs::metadata(&out_iso).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-    println!("[xtask] Bootable ISO generated: {} ({:.2} MB)", out_iso.display(), iso_size_mb);
-    out_iso
-}
-
-fn test_bootable_iso(iso_path: &Path) {
-    let qemu = find_tool("qemu-system-x86_64");
-    println!("[xtask] Testing bootable ISO in QEMU: {}", iso_path.display());
-
-    let temp_log = get_workspace_root().join("target").join(format!("iso_test_{}.log", std::process::id()));
-    let _ = std::fs::remove_file(&temp_log);
-
-    let mut cmd = Command::new(&qemu);
-    cmd.arg("-cdrom")
-        .arg(iso_path)
-        .arg("-cpu")
-        .arg("max")
-        .arg("-serial")
-        .arg(format!("file:{}", temp_log.display()))
-        .arg("-display")
-        .arg("none")
-        .arg("-no-reboot")
-        .arg("-m")
-        .arg("128M")
-        .arg("-smp")
-        .arg("4")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("PATH", get_augmented_path());
-
-    let mut child = cmd.spawn().expect("Failed to spawn QEMU process for ISO boot test");
-
-    let start = std::time::Instant::now();
-    let mut success = false;
-
-    while start.elapsed() < std::time::Duration::from_secs(15) {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        if let Ok(content) = std::fs::read_to_string(&temp_log) {
-            if content.contains("LatencyOS Core0 booted") {
-                success = true;
-                print!("{}", content);
-                break;
-            }
-        }
-    }
-    let _ = child.kill();
-    let output = child.wait_with_output().unwrap();
-    if !success {
-        eprintln!("[xtask] QEMU stdout: {}", String::from_utf8_lossy(&output.stdout));
-        eprintln!("[xtask] QEMU stderr: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    let _ = std::fs::remove_file(&temp_log);
-    if success {
-        println!("\n[xtask] SUCCESS: LatencyOS ISO booted successfully from CD-ROM via Limine bootloader!");
-    } else {
-        eprintln!("\n[xtask] ERROR: LatencyOS ISO failed to boot within 15 seconds.");
-        std::process::exit(1);
-    }
-}
 fn test_standalone_exe() {
     use std::io::{Read, Write};
     let root = get_workspace_root();
@@ -2467,19 +2353,6 @@ fn main() {
         }
         "bundle" | "dist" => {
             bundle_standalone_exe();
-        }
-        "iso" => {
-            let kernel_path = run_cargo_build(release);
-            let dist_dir = get_workspace_root().join("dist");
-            std::fs::create_dir_all(&dist_dir).expect("Failed to create dist directory");
-            generate_bootable_iso(&kernel_path, &dist_dir);
-        }
-        "test-iso" => {
-            let kernel_path = run_cargo_build(release);
-            let dist_dir = get_workspace_root().join("dist");
-            std::fs::create_dir_all(&dist_dir).expect("Failed to create dist directory");
-            let iso_path = generate_bootable_iso(&kernel_path, &dist_dir);
-            test_bootable_iso(&iso_path);
         }
         "test-standalone" => {
             test_standalone_exe();

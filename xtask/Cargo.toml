@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-isobemak = "0.4.3"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
