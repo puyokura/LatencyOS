@@ -1111,6 +1111,7 @@ EXAMPLES:
     pulc test docs/examples/contracts_and_tests.pul --json
     pulc test docs/examples/chaos_meter.pul --replay
     pulc test docs/examples/chaos_meter.pul --replay --seed 0x1337C0DE
+    pulc lsp
     pulc fmt script.pul
     pulc fmt docs/examples/ --check
     0   Success (正常終了)

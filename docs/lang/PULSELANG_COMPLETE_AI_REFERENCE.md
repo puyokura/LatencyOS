@@ -913,6 +913,39 @@ Provides real-time editor integration for VSCode, Zed, Neovim, and Sublime Text:
 - **Auto-Completion**: Intrinsic triggers (`@`, `$`, `#`, `:`) with contract snippet expansion.
 - **Code Actions / Quick Fixes**: Automated insertions of missing `@contract` bounds or `@import "sys";` dependencies.
 - **Formatting**: Integrated document formatting via `pulc fmt`.
+
+##### VSCode Configuration (`.vscode/settings.json` via Generic LSP Client or Command Runner):
+If using an extension such as **Generic LSP Client**:
+```json
+{
+  "generic-lsp.servers": {
+    "pulselang": {
+      "command": "pulc",
+      "args": ["lsp"],
+      "selector": ["*.pul"]
+    }
+  }
+}
+```
+
+##### Zed Editor Configuration (`~/.config/zed/settings.json`):
+```json
+{
+  "lsp": {
+    "pulc-lsp": {
+      "binary": {
+        "path": "pulc",
+        "arguments": ["lsp"]
+      }
+    }
+  },
+  "languages": {
+    "PulseLang": {
+      "language_servers": ["pulc-lsp"]
+    }
+  }
+}
+```
 ```pulse
 let $res = @err(503);
 if (@is_err($res)) {
