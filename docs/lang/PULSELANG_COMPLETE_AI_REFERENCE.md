@@ -892,6 +892,7 @@ pulc check <file.pul>
 pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>] [--json] [-v|--verbose]
 pulc fmt [files...] [--check]
 pulc disasm <file.bin>
+pulc lsp
 
 #### `pulc test <file.pul>`
 Executes all `@test` blocks within the source file.
@@ -904,6 +905,14 @@ Executes all `@test` blocks within the source file.
 - `--replay`: Enables deterministic trace replay with step-based virtual timestamp counter (`@tsc`) and uptime (`@uptime_ns`), guaranteeing 100% reproducible `@test` verification across machines and CI runners.
 - `--seed <num>`: Specifies fixed seed for deterministic replay (default: `0x1337C0DE`).
 
+#### `pulc lsp`
+Starts the Language Server Protocol (LSP) daemon communicating over standard I/O (JSON-RPC 2.0).
+Provides real-time editor integration for VSCode, Zed, Neovim, and Sublime Text:
+- **Instant Diagnostics**: Inline syntax, typestate, linear ownership, and WCET bounds validation with AI repair hints.
+- **Hover Intrinsic & WCET Details**: Displays hardware execution costs (e.g. `@tsc() -> 25ns`, `@core_id() -> 15ns`), argument constraints, and requirements.
+- **Auto-Completion**: Intrinsic triggers (`@`, `$`, `#`, `:`) with contract snippet expansion.
+- **Code Actions / Quick Fixes**: Automated insertions of missing `@contract` bounds or `@import "sys";` dependencies.
+- **Formatting**: Integrated document formatting via `pulc fmt`.
 ```pulse
 let $res = @err(503);
 if (@is_err($res)) {

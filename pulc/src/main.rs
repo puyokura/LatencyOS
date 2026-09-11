@@ -39,6 +39,7 @@ enum Subcommand {
         targets: Vec<PathBuf>,
         check: bool,
     },
+    Lsp,
     Help,
     Version,
 }
@@ -62,6 +63,7 @@ fn print_help() {
     pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>]
     pulc fmt [files...] [--check]
     pulc disasm <file.bin>
+    pulc lsp
     pulc -d <file.bin>
 \x1b[1mSUBCOMMANDS:\x1b[0m
     run <file> [args...]  Execute px64 binary (.bin) or source script (.pul) directly
@@ -70,6 +72,7 @@ fn print_help() {
     test <file.pul>       Run annotated @test blocks from source script (--replay for deterministic virtual time)
     fmt [files...]        Format PulseLang source code in-place (or --check for CI validation)
     disasm <file.bin>     Disassemble px64 binary bytecode into assembly instructions
+    lsp                   Start PulseLang Language Server Protocol (LSP) daemon over stdio
 \x1b[1mFLAGS:\x1b[0m
     -o, --output <file>   Specify output binary file path (default: <input>.bin)
     -d, --disasm          Disassemble binary bytecode file
@@ -250,6 +253,13 @@ where
                 }
                 return Ok(CliOptions {
                     subcommand: Subcommand::Fmt { targets, check },
+                    json,
+                    verbose,
+                });
+            }
+            "lsp" => {
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Lsp,
                     json,
                     verbose,
                 });
@@ -1525,6 +1535,24 @@ fn escape_json(s: &str) -> String {
     out
 }
 
+fn run_lsp() -> Result<(), (i32, String)> {
+    use pulselang_core::lsp::LspServer;
+    use std::io::{stdin, stdout, BufReader};
+
+    let mut server = LspServer::new();
+    let stdin = stdin();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut writer = stdout().lock();
+
+    while let Ok(Some(msg)) = LspServer::read_message(&mut reader) {
+        if let Some(resp) = server.handle_request(&msg) {
+            if let Err(e) = LspServer::write_message(&mut writer, &resp) {
+                return Err((2, format!("LSP write error: {}", e)));
+            }
+        }
+    }
+    Ok(())
+}
 fn main() -> ExitCode {
     let raw_args = env::args().skip(1);
     let options = match parse_cli_args(raw_args) {
@@ -1559,6 +1587,7 @@ fn main() -> ExitCode {
         Subcommand::Fmt { targets, check } => {
             run_fmt(targets, *check, options.json, options.verbose)
         }
+        Subcommand::Lsp => run_lsp(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -1847,5 +1876,11 @@ mod tests {
                 seed: Some(0x123456),
             }
         );
+    }
+    #[test]
+    fn test_cli_parse_lsp_subcommand() {
+        let args = vec!["lsp".to_string()];
+        let opts = parse_cli_args(args.into_iter()).unwrap();
+        assert_eq!(opts.subcommand, Subcommand::Lsp);
     }
 }

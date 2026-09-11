@@ -1082,6 +1082,7 @@ USAGE:
     pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>] [--json] [-v|--verbose]
     pulc fmt [files...] [--check]
     pulc disasm <file.bin>
+    pulc lsp
     pulc -d <file.bin>
 SUBCOMMANDS:
     compile <file.pul>    PulseLang ソースを px64 バイナリバイトコードへコンパイル
@@ -1091,6 +1092,7 @@ SUBCOMMANDS:
     test <file.pul>       注釈付き @test ブロックを抽出・実行しアサーションおよび時間予算を検証 (--replay で決定論的仮想時間)
     fmt [files...]        PulseLang ソースコードを標準書式へ自動整形 (インプレースまたは --check)
     disasm <file.bin>     px64 バイナリファイルを可読なアセンブリ命令一覧へ逆アセンブル
+    lsp                   Language Server Protocol (LSP) デーモンを stdio 上で起動
     +o, ++output <file>   出力バイナリファイルパスを指定 (デフォルト: <input>.bin)
     +d, ++disasm          バイナリファイルの逆アセンブルを実行
     ++check               ファイルを変更せず整形要否のみ検証 (CI 向け、要整形時 exit code 1)
