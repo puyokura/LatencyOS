@@ -201,11 +201,6 @@ impl Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let port = SerialPort::new(COM1_BASE);
         port.send_str(s);
-        unsafe {
-            for b in s.bytes() {
-                crate::console::VGA_WRITER.write_byte(b);
-            }
-        }
         Ok(())
     }
 }
