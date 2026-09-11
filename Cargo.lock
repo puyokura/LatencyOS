@@ -144,6 +144,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulc-lsp"
+version = "0.1.0"
+dependencies = [
+ "pulselang-core",
+]
+
+[[package]]
 name = "pulselang-core"
 version = "0.1.0"
 

@@ -920,8 +920,8 @@ If using an extension such as **Generic LSP Client**:
 {
   "generic-lsp.servers": {
     "pulselang": {
-      "command": "pulc",
-      "args": ["lsp"],
+      "command": "pulc-lsp",
+      "args": [],
       "selector": ["*.pul"]
     }
   }
@@ -934,8 +934,7 @@ If using an extension such as **Generic LSP Client**:
   "lsp": {
     "pulc-lsp": {
       "binary": {
-        "path": "pulc",
-        "arguments": ["lsp"]
+        "path": "pulc-lsp"
       }
     }
   },
@@ -946,6 +945,7 @@ If using an extension such as **Generic LSP Client**:
   }
 }
 ```
+*Note: You can also use `pulc lsp` with `path: "pulc"` and `arguments: ["lsp"]`.*
 ```pulse
 let $res = @err(503);
 if (@is_err($res)) {

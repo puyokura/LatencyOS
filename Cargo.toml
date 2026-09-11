@@ -5,6 +5,7 @@ members = [
     "runner",
     "pulselang-core",
     "pulc",
+    "pulc-lsp",
 ]
 resolver = "2"
 

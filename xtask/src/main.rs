@@ -1570,6 +1570,23 @@ fn bundle_standalone_exe() {
         let pulc_size_mb = std::fs::metadata(&dist_pulc).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
         println!("[xtask] Host compiler generated: {} ({:.2} MB)", dist_pulc.display(), pulc_size_mb);
     }
+    // 7. Also build dedicated pulc-lsp daemon binary into dist/pulc-lsp.exe
+    println!("[xtask] Compiling dedicated LSP server into dist/pulc-lsp.exe...");
+    let mut lsp_cmd = Command::new(&cargo);
+    lsp_cmd.current_dir(&root)
+        .env("PATH", get_augmented_path())
+        .arg("build")
+        .arg("--package")
+        .arg("pulc-lsp")
+        .arg("--release");
+    let lsp_status = lsp_cmd.status().expect("Failed to build pulc-lsp package");
+    if lsp_status.success() {
+        let lsp_exe = root.join("target").join("release").join("pulc-lsp.exe");
+        let dist_lsp = dist_dir.join("pulc-lsp.exe");
+        let _ = std::fs::copy(&lsp_exe, &dist_lsp);
+        let lsp_size_mb = std::fs::metadata(&dist_lsp).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+        println!("[xtask] Dedicated LSP server generated: {} ({:.2} MB)", dist_lsp.display(), lsp_size_mb);
+    }
 
     let exe_size_mb = std::fs::metadata(&out_exe).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
     println!("================================================================================");
