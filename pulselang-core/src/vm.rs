@@ -829,6 +829,8 @@ impl<'a> PX64VM<'a> {
                         NATIVE_DROP => 0,
                         NATIVE_TERM_RAW => 0,
                         NATIVE_TERM_READ_KEY => {
+                            // Reset instruction watchdog during interactive user event loops
+                            self.steps = 0;
                             #[cfg(feature = "std")]
                             {
                                 read_host_key_nonblocking()
@@ -915,9 +917,7 @@ impl<'a> PX64VM<'a> {
                         NATIVE_CORE_ID => 0,
 
                         NATIVE_TSC_FREQ => 3_000_000_000,
-
                         NATIVE_UPTIME_NS => self.get_uptime_ns(),
-
                         NATIVE_BUSY_WAIT => {
                             if arg_val > 0 {
                                 let spins = (arg_val as usize).min(100_000);
@@ -927,7 +927,6 @@ impl<'a> PX64VM<'a> {
                             }
                             0
                         }
-
                         NATIVE_RING_DEPTH => 0,
 
                         NATIVE_MATH_MIN => {
