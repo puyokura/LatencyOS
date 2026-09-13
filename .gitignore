@@ -5,3 +5,5 @@ dist/
 *.pcap
 *.img
 playground/
+llog.txt
+transcript_full.jsonl

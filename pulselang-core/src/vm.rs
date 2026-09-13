@@ -828,8 +828,26 @@ impl<'a> PX64VM<'a> {
                         NATIVE_NET_SEND => 1,
                         NATIVE_DROP => 0,
                         NATIVE_TERM_RAW => 0,
-                        NATIVE_TERM_READ_KEY => -1,
-                        NATIVE_TERM_SIZE => (25i64 << 16) | 80i64,
+                        NATIVE_TERM_READ_KEY => {
+                            #[cfg(feature = "std")]
+                            {
+                                read_host_key_nonblocking()
+                            }
+                            #[cfg(not(feature = "std"))]
+                            {
+                                -1
+                            }
+                        }
+                        NATIVE_TERM_SIZE => {
+                            #[cfg(feature = "std")]
+                            {
+                                get_host_term_size()
+                            }
+                            #[cfg(not(feature = "std"))]
+                            {
+                                (25i64 << 16) | 80i64
+                            }
+                        }
 
                         NATIVE_SCRIPT_ARGC => self.args.len() as i64,
 
@@ -1132,6 +1150,62 @@ impl<'a> PX64VM<'a> {
             self.run_with_output(&mut writer)
         }
     }
+}
+
+#[cfg(feature = "std")]
+fn read_host_key_nonblocking() -> i64 {
+    #[cfg(windows)]
+    {
+        extern "C" {
+            fn _kbhit() -> i32;
+            fn _getch() -> i32;
+        }
+        unsafe {
+            if _kbhit() != 0 {
+                _getch() as i64
+            } else {
+                -1
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        -1
+    }
+}
+
+#[cfg(feature = "std")]
+fn get_host_term_size() -> i64 {
+    #[cfg(windows)]
+    {
+        use std::mem::zeroed;
+        #[repr(C)]
+        struct Coord { x: i16, y: i16 }
+        #[repr(C)]
+        struct SmallRect { left: i16, top: i16, right: i16, bottom: i16 }
+        #[repr(C)]
+        struct ConsoleScreenBufferInfo {
+            size: Coord,
+            cursor_pos: Coord,
+            attrib: u16,
+            window: SmallRect,
+            max_size: Coord,
+        }
+        extern "system" {
+            fn GetStdHandle(nStdHandle: u32) -> *mut core::ffi::c_void;
+            fn GetConsoleScreenBufferInfo(hConsole: *mut core::ffi::c_void, lpInfo: *mut ConsoleScreenBufferInfo) -> i32;
+        }
+        unsafe {
+            let handle = GetStdHandle(0xFFFF_FFF5); // STD_OUTPUT_HANDLE = -11
+            let mut info: ConsoleScreenBufferInfo = zeroed();
+            if GetConsoleScreenBufferInfo(handle, &mut info) != 0 {
+                let cols = (info.window.right - info.window.left + 1).max(20) as i64;
+                let rows = (info.window.bottom - info.window.top + 1).max(5) as i64;
+                return (rows << 16) | cols;
+            }
+        }
+    }
+    (25i64 << 16) | 80i64
 }
 
 /// Execute a pre-compiled `px64` bytecode binary buffer with command-line arguments and custom output writer.

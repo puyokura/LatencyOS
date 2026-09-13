@@ -2230,7 +2230,7 @@ impl<'a> Compiler<'a> {
                         self.imported_runtimes |= RUNTIME_GPU | RUNTIME_VRAM | RUNTIME_SYS | RUNTIME_CORE;
                     }
                     b"term" | b"tui" => {
-                        self.imported_runtimes |= RUNTIME_TERM | RUNTIME_CORE | RUNTIME_TINY;
+                        self.imported_runtimes |= RUNTIME_TERM | RUNTIME_SYS | RUNTIME_CORE | RUNTIME_TINY;
                     }
                     _ => {
                         return Err(self.error(

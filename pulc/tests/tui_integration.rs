@@ -27,8 +27,13 @@ fn test_tui_library_and_monitor_app() {
     let output_run = Command::new(exe)
         .arg("run")
         .arg(app_path)
+        .arg("ci")
         .output()
         .expect("Failed to run pulc run monitor_tui.pul");
+    if !output_run.status.success() {
+        eprintln!("STDOUT: {}", String::from_utf8_lossy(&output_run.stdout));
+        eprintln!("STDERR: {}", String::from_utf8_lossy(&output_run.stderr));
+    }
     assert!(output_run.status.success());
     let stdout = String::from_utf8_lossy(&output_run.stdout);
     assert!(stdout.contains("LatencyOS Pipeline Monitor"));

@@ -7,7 +7,7 @@
 @import "term";
 @include "std/tui.pul";
 
-fn main() -> i64 {
+fn render_ui() -> i64 {
     tui_clear();
     tui_cursor_hide();
 
@@ -28,6 +28,28 @@ fn main() -> i64 {
     tui_print_label_val("Rows", $rows);
 
     tui_draw_statusbar("[Q] Quit  [R] Refresh");
+    return 0;
+}
+
+fn main() -> i64 {
+    let $init = render_ui();
+    let $argc = @argc();
+    if ($argc > 0) {
+        tui_cursor_show();
+        return 0;
+    }
+
+    // Event Loop: wait for user keyboard input (Q/q/ESC to quit, R/r to refresh)
+    let mut $running = 1;
+    while $running == 1 {
+        let $key = @term_read_key();
+        if ($key == 113 || $key == 81 || $key == 27) {
+            $running := 0;
+        } else if ($key == 114 || $key == 82) {
+            let $r = render_ui();
+        }
+        @busy_wait(100);
+    }
 
     tui_cursor_show();
     return 0;
