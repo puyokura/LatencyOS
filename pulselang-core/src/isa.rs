@@ -143,6 +143,11 @@ pub const NATIVE_DROP: u8 = 34;
 pub const NATIVE_TERM_RAW: u8 = 35;
 pub const NATIVE_TERM_READ_KEY: u8 = 36;
 pub const NATIVE_TERM_SIZE: u8 = 37;
+pub const NATIVE_FILE_READ: u8 = 38;
+pub const NATIVE_FILE_WRITE: u8 = 39;
+pub const NATIVE_FILE_EXISTS: u8 = 40;
+pub const NATIVE_STR_LEN: u8 = 41;
+pub const NATIVE_CHAR_AT: u8 = 42;
 
 /// Map register index to canonical x64-compatible register name ($rax..$r15, #f0..#f3).
 pub fn px64_reg_name(reg_id: u8) -> &'static str {
@@ -211,6 +216,11 @@ pub fn px64_native_name(func_id: u8) -> &'static str {
         NATIVE_TERM_RAW => "@term_raw",
         NATIVE_TERM_READ_KEY => "@term_read_key",
         NATIVE_TERM_SIZE => "@term_size",
+        NATIVE_FILE_READ => "@file_read",
+        NATIVE_FILE_WRITE => "@file_write",
+        NATIVE_FILE_EXISTS => "@file_exists",
+        NATIVE_STR_LEN => "@str_len",
+        NATIVE_CHAR_AT => "@char_at",
         _ => "@native",
     }
 }

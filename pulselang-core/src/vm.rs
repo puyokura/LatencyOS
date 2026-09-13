@@ -850,6 +850,55 @@ impl<'a> PX64VM<'a> {
                                 (25i64 << 16) | 80i64
                             }
                         }
+                        NATIVE_STR_LEN => {
+                            self.get_str_bytes(arg_val).map(|s| s.len() as i64).unwrap_or(0)
+                        }
+
+                        NATIVE_CHAR_AT => {
+                            let idx = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            self.get_str_bytes(arg_val).and_then(|s| {
+                                if idx >= 0 && (idx as usize) < s.len() {
+                                    Some(s[idx as usize] as i64)
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or(-1)
+                        }
+
+                        NATIVE_FILE_EXISTS => {
+                            let _path_opt = self.get_str_bytes(arg_val).and_then(|b| core::str::from_utf8(b).ok());
+                            #[cfg(feature = "std")]
+                            {
+                                _path_opt.map(|p| if std::path::Path::new(p).exists() { 1 } else { 0 }).unwrap_or(0)
+                            }
+                            #[cfg(not(feature = "std"))]
+                            {
+                                0
+                            }
+                        }
+
+                        NATIVE_FILE_WRITE => {
+                            let _path_opt = self.get_str_bytes(arg_val).and_then(|b| core::str::from_utf8(b).ok());
+                            let content_val = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                            let _content_bytes = self.get_str_bytes(content_val);
+                            #[cfg(feature = "std")]
+                            {
+                                match (_path_opt, _content_bytes) {
+                                    (Some(path), Some(data)) => {
+                                        if std::fs::write(path, data).is_ok() { data.len() as i64 } else { -1 }
+                                    }
+                                    _ => -1,
+                                }
+                            }
+                            #[cfg(not(feature = "std"))]
+                            {
+                                -1
+                            }
+                        }
+
+                        NATIVE_FILE_READ => {
+                            0
+                        }
 
                         NATIVE_SCRIPT_ARGC => self.args.len() as i64,
 

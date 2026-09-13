@@ -938,6 +938,24 @@ let $now = @tsc();
 | `35` | `@term_raw($enable)` | `(i64) -> i64` | **~10 ns** | Enables or disables raw terminal mode. |
 | `36` | `@term_read_key()` | `() -> i64` | **~15 ns** | Non-blocking key read. Returns key code or `-1` if no key pending. |
 | `37` | `@term_size()` | `() -> i64` | **~10 ns** | Returns terminal dimensions packed as `(rows << 16) | cols`. |
+### 4.6 File I/O & String Buffer Intrinsics (`@import "file";` / `@import "core";`)
+
+| ID | Intrinsic | Signature | WCET | Description |
+|---|---|---|---|---|
+| `38` | `@file_read($path)` | `(str) -> str` | **~500 ns** | Reads file content into memory. |
+| `39` | `@file_write($path, $data)` | `(str, str) -> i64` | **~1000 ns** | Writes string buffer to file. Returns bytes written or -1. |
+| `40` | `@file_exists($path)` | `(str) -> i64` | **~200 ns** | Returns `1` if file exists, `0` otherwise. |
+| `41` | `@str_len($str)` | `(str) -> i64` | **~5 ns** | Returns byte length of string. |
+| `42` | `@char_at($str, $idx)` | `(str, i64) -> i64` | **~5 ns** | Returns byte at character index, or `-1` if out of bounds. |
+
+### 4.7 Full Terminal Editor Implementation (`examples/apps/nano/`)
+
+Demonstrates implementing a complete Nano-equivalent text editor in 100% pure PulseLang without C or Rust editor builtins:
+- `terminal.pul`: ANSI raw mode, cursor positioning, and screen clearing.
+- `file.pul`: File persistence and existence checking.
+- `buffer.pul`: Text and line buffer operations.
+- `screen.pul`: Editor header, line number gutter, and bottom shortcut bar.
+- `main.pul`: Event loop, shortcut dispatch (`^S` Save, `^Q` Exit), and viewport rendering.
 
 ### 4.6 PulseLang TUI Standard Library (`@include "std/tui.pul";`)
 

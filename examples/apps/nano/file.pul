@@ -1,0 +1,11 @@
+// examples/apps/nano/file.pul - File I/O operations
+@contract: @wcet(100us) @budget(500us);
+@import "term";
+
+fn file_save($path: i64, $data: i64) -> i64 {
+    return @file_write($path, $data);
+}
+
+fn file_is_present($path: i64) -> i64 {
+    return @file_exists($path);
+}

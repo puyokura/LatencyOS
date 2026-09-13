@@ -1,0 +1,55 @@
+// examples/apps/counter_tui.pul - Interactive TUI Counter
+//
+// Demonstrates keyboard event handling (Up/Down/+/-) and UI updates.
+
+@contract: @wcet(200us) @budget(1ms);
+@import "term";
+@include "std/tui.pul";
+
+fn render_counter($val: i64) -> i64 {
+    tui_clear();
+    tui_cursor_hide();
+
+    tui_draw_header("PulseLang TUI Counter");
+    tui_draw_box_border(36);
+
+    tui_print_label_val("Counter Value", $val);
+
+    tui_draw_box_border(36);
+    tui_draw_statusbar("[+] Inc  [-] Dec  [R] Reset  [Q] Quit");
+    return 0;
+}
+
+fn main() -> i64 {
+    let mut $val = 0;
+    let $init = render_counter($val);
+
+    let $argc = @argc();
+    if ($argc > 0) {
+        tui_cursor_show();
+        return 0;
+    }
+
+    let mut $running = 1;
+    while $running == 1 {
+        let $key = @term_read_key();
+        if ($key == 113 || $key == 81 || $key == 27) { // 'q', 'Q', ESC
+            $running := 0;
+        } else if ($key == 43 || $key == 61) { // '+', '='
+            $val += 1;
+            let $r = render_counter($val);
+        } else if ($key == 45) { // '-'
+            $val -= 1;
+            let $r = render_counter($val);
+        } else if ($key == 114 || $key == 82) { // 'r', 'R'
+            $val := 0;
+            let $r = render_counter($val);
+        }
+        @busy_wait(100);
+    }
+
+    tui_cursor_show();
+    return 0;
+}
+
+let $code = main();

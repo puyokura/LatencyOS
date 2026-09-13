@@ -269,7 +269,8 @@ pub const RUNTIME_NET:  u16 = 1 << 5;
 pub const RUNTIME_VRAM: u16 = 1 << 6;
 pub const RUNTIME_GPU:  u16 = 1 << 7;
 pub const RUNTIME_TERM: u16 = 1 << 8;
-pub const RUNTIME_ALL:  u16 = 0x1FF;
+pub const RUNTIME_FILE: u16 = 1 << 9;
+pub const RUNTIME_ALL:  u16 = 0x3FF;
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
     pub src: &'a [u8],
@@ -2152,6 +2153,8 @@ impl<'a> Compiler<'a> {
 
             NATIVE_GPU_CAPTURE => (RUNTIME_GPU, "gpu"),
             NATIVE_TERM_RAW | NATIVE_TERM_READ_KEY | NATIVE_TERM_SIZE => (RUNTIME_TERM, "term"),
+            NATIVE_FILE_READ | NATIVE_FILE_WRITE | NATIVE_FILE_EXISTS => (RUNTIME_FILE, "file"),
+            NATIVE_STR_LEN | NATIVE_CHAR_AT => (RUNTIME_CORE, "core"),
 
             _ => (RUNTIME_CORE, "core"),
         };
@@ -2230,15 +2233,18 @@ impl<'a> Compiler<'a> {
                         self.imported_runtimes |= RUNTIME_GPU | RUNTIME_VRAM | RUNTIME_SYS | RUNTIME_CORE;
                     }
                     b"term" | b"tui" => {
-                        self.imported_runtimes |= RUNTIME_TERM | RUNTIME_SYS | RUNTIME_CORE | RUNTIME_TINY;
+                        self.imported_runtimes |= RUNTIME_TERM | RUNTIME_FILE | RUNTIME_SYS | RUNTIME_CORE | RUNTIME_TINY;
+                    }
+                    b"file" => {
+                        self.imported_runtimes |= RUNTIME_FILE | RUNTIME_CORE | RUNTIME_TINY;
                     }
                     _ => {
                         return Err(self.error(
                             "ERR_UNKNOWN_RUNTIME",
                             "Unknown runtime module in @import",
-                            "Supported runtimes: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\"",
+                            "Supported runtimes: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\", \"file\"",
                             "Module Import -> Validation",
-                            "Import one of: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\"",
+                            "Import one of: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\", \"file\"",
                         ));
                     }
                 }
@@ -4668,12 +4674,22 @@ impl<'a> Compiler<'a> {
                 let len = out_idx - offset;
                 if let Some(prev_offset) = self.find_string_in_pool(&self.str_pool[offset..out_idx]) {
                     // String already present in pool: reuse offset and discard duplicate bytes
-                    self.emit_inst(PX64_OP_MOV_STR, dst, prev_offset as u8, len as u8)?;
+                    if prev_offset < 256 {
+                        self.emit_inst(PX64_OP_MOV_STR, dst, prev_offset as u8, len as u8)?;
+                    } else {
+                        let str_tagged = STR_TAG | ((prev_offset as i64) << 32) | (len as i64);
+                        self.emit_const(dst, str_tagged)?;
+                    }
                     return Ok(None);
                 }
                 self.str_pool_len = out_idx;
 
-                self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, len as u8)?;
+                if offset < 256 {
+                    self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, len as u8)?;
+                } else {
+                    let str_tagged = STR_TAG | ((offset as i64) << 32) | (len as i64);
+                    self.emit_const(dst, str_tagged)?;
+                }
                 Ok(None)
             }
 
@@ -4818,6 +4834,7 @@ impl<'a> Compiler<'a> {
                     if let Some(fn_meta) = fn_match {
                         self.advance(); // consume '('
                         let param_regs: [u8; 4] = [7, 6, 2, 1]; // $rdi, $rsi, $rdx, $rcx
+                        let mut temp_regs = [0u8; 4];
                         let mut arg_idx = 0;
                         while self.peek().kind != TokenKind::RParen && self.peek().kind != TokenKind::Eof {
                             if arg_idx >= fn_meta.param_count as usize {
@@ -4829,12 +4846,17 @@ impl<'a> Compiler<'a> {
                                     "Check function parameter signature",
                                 ));
                             }
-                            let target_reg = param_regs[arg_idx];
-                            self.expression(target_reg)?;
+                            let tmp = self.alloc_temp()?;
+                            self.expression(tmp)?;
+                            temp_regs[arg_idx] = tmp;
                             arg_idx += 1;
                             if !self.match_token(TokenKind::Comma) {
                                 break;
                             }
+                        }
+                        for a in 0..arg_idx {
+                            self.emit_inst(PX64_OP_MOV_REG, param_regs[a], temp_regs[a], 0)?;
+                            self.free_temp(temp_regs[a]);
                         }
                         if arg_idx < fn_meta.param_count as usize {
                             return Err(self.error(
@@ -5042,6 +5064,11 @@ impl<'a> Compiler<'a> {
                         b"@term_raw" | b"term.raw" => (NATIVE_TERM_RAW, 1),
                         b"@term_read_key" | b"term.read_key" => (NATIVE_TERM_READ_KEY, 0),
                         b"@term_size" | b"term.size" => (NATIVE_TERM_SIZE, 0),
+                        b"@file_read" | b"file.read" => (NATIVE_FILE_READ, 1),
+                        b"@file_write" | b"file.write" => (NATIVE_FILE_WRITE, 2),
+                        b"@file_exists" | b"file.exists" => (NATIVE_FILE_EXISTS, 1),
+                        b"@str_len" | b"str.len" => (NATIVE_STR_LEN, 1),
+                        b"@char_at" | b"str.char_at" => (NATIVE_CHAR_AT, 2),
                         _ => {
                             return Err(self.error(
                                 "ERR_UNKNOWN_INTRINSIC",

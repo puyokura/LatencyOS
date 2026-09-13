@@ -1,0 +1,68 @@
+// examples/apps/menu_tui.pul - Interactive TUI Menu Selector
+//
+// Demonstrates navigable cursor menus using [1..3] number keys and [Enter].
+
+@contract: @wcet(200us) @budget(1ms);
+@import "term";
+@include "std/tui.pul";
+
+fn print_item($id: i64, $text: i64, $selected: i64) -> i64 {
+    if ($id == $selected) {
+        @print("\x1b[7m * ");
+    } else {
+        @print("   ");
+    }
+    @print($text);
+    @println("\x1b[0m");
+    return 0;
+}
+
+fn render_menu($selected: i64) -> i64 {
+    tui_clear();
+    tui_cursor_hide();
+
+    tui_draw_header("LatencyOS Control Menu");
+    tui_draw_box_border(36);
+
+    let $i1 = print_item(1, "[1] Stream Status", $selected);
+    let $i2 = print_item(2, "[2] PMD Statistics", $selected);
+    let $i3 = print_item(3, "[3] Hardware Test", $selected);
+
+    tui_draw_box_border(36);
+    tui_draw_statusbar("[1..3] Select  [Q] Quit");
+    return 0;
+}
+
+fn main() -> i64 {
+    let mut $sel = 1;
+    let $init = render_menu($sel);
+
+    let $argc = @argc();
+    if ($argc > 0) {
+        tui_cursor_show();
+        return 0;
+    }
+
+    let mut $running = 1;
+    while $running == 1 {
+        let $key = @term_read_key();
+        if ($key == 113 || $key == 81 || $key == 27) { // 'q', 'Q', ESC
+            $running := 0;
+        } else if ($key == 49) { // '1'
+            $sel := 1;
+            let $r = render_menu($sel);
+        } else if ($key == 50) { // '2'
+            $sel := 2;
+            let $r = render_menu($sel);
+        } else if ($key == 51) { // '3'
+            $sel := 3;
+            let $r = render_menu($sel);
+        }
+        @busy_wait(100);
+    }
+
+    tui_cursor_show();
+    return 0;
+}
+
+let $code = main();

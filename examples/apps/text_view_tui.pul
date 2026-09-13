@@ -1,0 +1,69 @@
+// examples/apps/text_view_tui.pul - Minimal TUI Text Viewer
+//
+// Demonstrates rendering line-numbered text rows and viewport status.
+
+@contract: @wcet(200us) @budget(1ms);
+@import "term";
+@include "std/tui.pul";
+
+fn print_row($num: i64, $text: i64) -> i64 {
+    @print("\x1b[90m ");
+    @print($num);
+    @print(" |\x1b[0m ");
+    @println($text);
+    return 0;
+}
+
+fn render_view($mode: i64) -> i64 {
+    tui_clear();
+    tui_cursor_hide();
+
+    tui_draw_header("PulseText View - README.md");
+    tui_draw_box_border(36);
+
+    let $r1 = print_row(1, "# LatencyOS Hard Real-Time");
+    let $r2 = print_row(2, "Zero dynamic allocations.");
+    let $r3 = print_row(3, "Language: PulseLang v3.2");
+    let $r4 = print_row(4, "VM: px64 real-time core");
+
+    tui_draw_box_border(36);
+
+    if ($mode == 1) {
+        tui_draw_statusbar("VIEW MODE  |  [I] Edit  [Q] Exit");
+    } else {
+        tui_draw_statusbar("EDIT MODE  |  [Esc] Back [Q] Exit");
+    }
+
+    return 0;
+}
+
+fn main() -> i64 {
+    let mut $mode = 1; // 1: View, 2: Edit
+    let $init = render_view($mode);
+
+    let $argc = @argc();
+    if ($argc > 0) {
+        tui_cursor_show();
+        return 0;
+    }
+
+    let mut $running = 1;
+    while $running == 1 {
+        let $key = @term_read_key();
+        if ($key == 113 || $key == 81) { // 'q', 'Q'
+            $running := 0;
+        } else if ($key == 105 || $key == 73) { // 'i', 'I'
+            $mode := 2;
+            let $r = render_view($mode);
+        } else if ($key == 27) { // ESC
+            $mode := 1;
+            let $r = render_view($mode);
+        }
+        @busy_wait(100);
+    }
+
+    tui_cursor_show();
+    return 0;
+}
+
+let $code = main();

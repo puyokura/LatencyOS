@@ -1,0 +1,25 @@
+// examples/apps/nano/screen.pul - Screen layout and rendering
+@contract: @wcet(100us) @budget(500us);
+@import "term";
+
+fn screen_draw_title($filename: i64) -> i64 {
+    @print("\x1b[1;1H\x1b[7m LatencyOS Nano | File: ");
+    @print($filename);
+    @println(" \x1b[0m");
+    return 0;
+}
+
+fn screen_draw_row($row: i64, $num: i64, $text: i64) -> i64 {
+    @print("\x1b[");
+    @print($row);
+    @print(";1H\x1b[90m");
+    @print($num);
+    @print(" |\x1b[0m ");
+    @println($text);
+    return 0;
+}
+
+fn screen_draw_shortcuts() -> i64 {
+    @print("\x1b[24;1H\x1b[7m [^S] Save  [^Q] Exit  [^W] Where  [^X] Exit  \x1b[0m");
+    return 0;
+}

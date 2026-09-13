@@ -1,0 +1,11 @@
+// examples/apps/nano/buffer.pul - Text buffer operations
+@contract: @wcet(100us) @budget(500us);
+@import "term";
+
+fn buf_str_len($s: i64) -> i64 {
+    return @str_len($s);
+}
+
+fn buf_char_at($s: i64, $idx: i64) -> i64 {
+    return @char_at($s, $idx);
+}

@@ -1,0 +1,33 @@
+// examples/apps/nano/terminal.pul - Terminal I/O & ANSI primitives
+@contract: @wcet(100us) @budget(500us);
+@import "term";
+
+fn term_init() -> i64 {
+    @term_raw(1);
+    @print("\x1b[?25h");
+    return 0;
+}
+
+fn term_restore() -> i64 {
+    @term_raw(0);
+    @print("\x1b[?25h\x1b[0m\n");
+    return 0;
+}
+
+fn term_clear() -> i64 {
+    @print("\x1b[2J\x1b[H");
+    return 0;
+}
+
+fn term_move($row: i64, $col: i64) -> i64 {
+    @print("\x1b[");
+    @print($row);
+    @print(";");
+    @print($col);
+    @print("H");
+    return 0;
+}
+
+fn term_read() -> i64 {
+    return @term_read_key();
+}
