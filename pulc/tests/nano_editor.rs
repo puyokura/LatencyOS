@@ -23,7 +23,7 @@ fn test_pure_pulselang_nano_editor() {
     let output_run = Command::new(exe)
         .arg("run")
         .arg(main_path)
-        .arg("ci")
+        .arg("--test-render-only")
         .output()
         .expect("Failed to run pulc run nano main.pul ci");
     assert!(output_run.status.success());

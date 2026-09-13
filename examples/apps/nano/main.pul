@@ -25,12 +25,23 @@ fn render_editor($filename: i64) -> i64 {
 }
 
 fn main() -> i64 {
-    let $filename = "README.md";
+    let $argc = @argc();
+    let mut $filename = "README.md";
+    let mut $test_only = 0;
+
+    if ($argc > 0) {
+        let $arg0 = @arg(0);
+        if (@streq($arg0, "--test-render-only")) {
+            $test_only := 1;
+        } else {
+            $filename := $arg0;
+        }
+    }
+
     let $init = term_init();
     let $r = render_editor($filename);
 
-    let $argc = @argc();
-    if ($argc > 0) {
+    if ($test_only == 1) {
         let $res = term_restore();
         return 0;
     }
@@ -39,7 +50,7 @@ fn main() -> i64 {
     let mut $running = 1;
     while $running == 1 {
         let $key = term_read();
-        if ($key == 113 || $key == 81 || $key == 17) { // 'q', 'Q', Ctrl+Q (17)
+        if ($key == 113 || $key == 81 || $key == 17 || $key == 24 || $key == 3) { // 'q', 'Q', ^Q (17), ^X (24), ^C (3)
             $running := 0;
         } else if ($key == 19) { // Ctrl+S (19) -> Save
             let $saved = file_save("nano_output.txt", "Saved from PulseLang Nano!\n");
