@@ -37,6 +37,32 @@ impl CompileError {
             || self.code.starts_with("ERR_VM_")
     }
 
+    /// Determine semantic category for machine-readable diagnostics
+    pub fn category(&self) -> &'static str {
+        if self.code.contains("SYNTAX") || self.code.contains("TOKEN") || self.code.contains("UNEXPECTED") {
+            "syntax"
+        } else if self.code.contains("TYPE") || self.code.contains("MUTABILITY") {
+            "type"
+        } else if self.code.contains("LINEAR") {
+            "linear_ownership"
+        } else if self.code.contains("WCET") || self.code.contains("BUDGET") || self.code.contains("TIMEOUT") {
+            "wcet"
+        } else if self.is_runtime() {
+            "runtime"
+        } else {
+            "semantic"
+        }
+    }
+
+    /// Determine repairability category for AI agent actionability
+    pub fn repairability(&self) -> &'static str {
+        match self.code {
+            "ERR_RUNTIME_NOT_IMPORTED" | "ERR_MISSING_CONTRACT" => "safe_patch",
+            "ERR_LINEAR_UNCONSUMED_HANDLE" | "ERR_LINEAR_DOUBLE_SEND" | "ERR_UNBOUNDED_LOOP" => "requires_decision",
+            _ if self.is_runtime() => "suggestion",
+            _ => "suggestion",
+        }
+    }
     /// Format standard structured AI-actionable diagnostic output into a formatter/writer.
     pub fn format_diagnostic<W: core::fmt::Write>(
         &self,
@@ -117,20 +143,31 @@ impl CompileError {
     }
 
     /// Format JSON diagnostic output for tooling and IDEs.
+    /// Format JSON diagnostic output conforming to the versioned AI diagnostic schema (v1).
     pub fn format_json<W: core::fmt::Write>(&self, filename: &str, mut w: W) -> core::fmt::Result {
+        let len = self.token_len.max(1);
+        let category = self.category();
+        let repairability = self.repairability();
+
         write!(
             w,
-            r#"{{"success":false,"error":{{"code":"{}","message":"{}","file":"{}","line":{},"col":{},"byte_offset":{},"token_kind":"{:?}","expected":"{}","stage":"{}","suggestion":"{}"}}}}"#,
+            r#"{{"$schema":"https://latencyos.org/schema/pulselang-diagnostic-v1.json","version":"1.0","success":false,"diagnostics":[{{"code":"{}","category":"{}","severity":"error","message":"{}","location":{{"file":"{}","line":{},"column":{},"byte_offset":{},"length":{}}},"stage":"{}","expected":"{}","cause":"{}","repairability":"{}","ai_repair_hint":"{}","repairs":[{{"id":"{}","description":"{}","confidence":{},"edits":[]}}]}}]}}"#,
             escape_json_str(self.code),
+            category,
             escape_json_str(self.message),
             escape_json_str(filename),
             self.line,
             self.col,
             self.byte_offset,
-            self.token_kind,
-            escape_json_str(self.expected),
+            len,
             escape_json_str(self.stage),
+            escape_json_str(self.expected),
+            escape_json_str(self.message),
+            repairability,
             escape_json_str(self.suggestion),
+            escape_json_str(self.code),
+            escape_json_str(self.suggestion),
+            if repairability == "safe_patch" { "0.95" } else { "0.80" },
         )
     }
 

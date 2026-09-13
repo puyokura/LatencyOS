@@ -908,11 +908,12 @@ Executes all `@test` blocks within the source file.
 #### `pulc lsp`
 Starts the Language Server Protocol (LSP) daemon communicating over standard I/O (JSON-RPC 2.0).
 Provides real-time editor integration for VSCode, Zed, Neovim, and Sublime Text:
-- **Instant Diagnostics**: Inline syntax, typestate, linear ownership, and WCET bounds validation with AI repair hints.
+- **Instant Diagnostics**: Machine-readable schema v1 validation (syntax, typestate, linear ownership, and WCET bounds) with AI repair hints.
 - **Hover Intrinsic & WCET Details**: Displays hardware execution costs (e.g. `@tsc() -> 25ns`, `@core_id() -> 15ns`), argument constraints, and requirements.
 - **Auto-Completion**: Intrinsic triggers (`@`, `$`, `#`, `:`) with contract snippet expansion.
 - **Code Actions / Quick Fixes**: Automated insertions of missing `@contract` bounds or `@import "sys";` dependencies.
 - **Formatting**: Integrated document formatting via `pulc fmt`.
+- **Diagnostic Schema**: Conforms to the [AI Diagnostics Schema v1](ai_diagnostics_schema.md).
 
 ##### VSCode Configuration (`.vscode/settings.json` via Generic LSP Client or Command Runner):
 If using an extension such as **Generic LSP Client**:

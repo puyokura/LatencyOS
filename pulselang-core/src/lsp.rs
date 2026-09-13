@@ -208,13 +208,13 @@ impl LspServer {
         let end_col = col + err.token_len.max(1);
 
         let msg = format!(
-            "[{}] {}\nStage: {}\nAI Hint: {}",
-            err.code, err.message, err.stage, err.suggestion
+            "[{}] ({}) {}\nStage: {}\nAI Repair Hint: {}",
+            err.code, err.category(), err.message, err.stage, err.suggestion
         );
 
         format!(
-            r#"{{"range":{{"start":{{"line":{},"character":{}}},"end":{{"line":{},"character":{}}}}},"severity":1,"code":"{}","source":"pulc","message":"{}"}}"#,
-            line, col, line, end_col, err.code, escape_json(&msg)
+            r#"{{"range":{{"start":{{"line":{},"character":{}}},"end":{{"line":{},"character":{}}}}},"severity":1,"code":"{}","source":"pulc","message":"{}","data":{{"category":"{}","repairability":"{}","ai_repair_hint":"{}"}}}}"#,
+            line, col, line, end_col, err.code, escape_json(&msg), err.category(), err.repairability(), escape_json(err.suggestion)
         )
     }
 
