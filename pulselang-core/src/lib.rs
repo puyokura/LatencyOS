@@ -29,7 +29,7 @@ pub mod fmt;
 pub use compiler::{
     ArrayMeta, CompileStats, Compiler, ConstTableMeta, EnumDefMeta, FnMeta, HandleState,
     StructDefMeta, StructFieldMeta, StructInstMeta,
-    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_TERM, RUNTIME_ALL,
+    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_TERM, RUNTIME_FILE, RUNTIME_ALL,
 };
 pub use disasm::{disassemble_px64, disassemble_px64_with_filename};
 #[cfg(any(feature = "alloc", test))]

@@ -3,7 +3,7 @@
 use pulselang_core::{
     check, compile_pulse_to_binary, disassemble_px64_with_filename, preprocess_includes,
     CompileError, Compiler, Lexer, Token, MAX_TOKENS,
-    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU,
+    RUNTIME_TINY, RUNTIME_CORE, RUNTIME_MATH, RUNTIME_FIX, RUNTIME_SYS, RUNTIME_NET, RUNTIME_VRAM, RUNTIME_GPU, RUNTIME_TERM, RUNTIME_FILE,
 };
 use std::process::Command;
 use std::env;
@@ -685,6 +685,62 @@ fn generate_standalone_executable(
     if (imported_runtimes & RUNTIME_GPU) != 0 {
         native_dispatch_arms.push_str(r#"
             6 /* NATIVE_GPU_CAPTURE */ => 0,
+        "#);
+    }
+    if (imported_runtimes & RUNTIME_TERM) != 0 {
+        native_dispatch_arms.push_str(r#"
+            35 /* NATIVE_TERM_RAW */ => 0,
+            36 /* NATIVE_TERM_READ_KEY */ => {
+                extern "C" {
+                    fn _kbhit() -> i32;
+                    fn _getch() -> i32;
+                }
+                unsafe {
+                    if _kbhit() != 0 { _getch() as i64 } else { -1 }
+                }
+            }
+            37 /* NATIVE_TERM_SIZE */ => {
+                use std::mem::zeroed;
+                #[repr(C)] struct Coord { x: i16, y: i16 }
+                #[repr(C)] struct SmallRect { left: i16, top: i16, right: i16, bottom: i16 }
+                #[repr(C)] struct ConsoleScreenBufferInfo { size: Coord, cursor_pos: Coord, attrib: u16, window: SmallRect, max_size: Coord }
+                extern "system" {
+                    fn GetStdHandle(nStdHandle: u32) -> *mut core::ffi::c_void;
+                    fn GetConsoleScreenBufferInfo(hConsole: *mut core::ffi::c_void, lpInfo: *mut ConsoleScreenBufferInfo) -> i32;
+                }
+                unsafe {
+                    let handle = GetStdHandle(0xFFFF_FFF5);
+                    let mut info: ConsoleScreenBufferInfo = zeroed();
+                    if GetConsoleScreenBufferInfo(handle, &mut info) != 0 {
+                        let cols = (info.window.right - info.window.left + 1).max(20) as i64;
+                        let rows = (info.window.bottom - info.window.top + 1).max(5) as i64;
+                        (rows << 16) | cols
+                    } else { (25i64 << 16) | 80i64 }
+                }
+            }
+        "#);
+    }
+
+    if (imported_runtimes & RUNTIME_FILE) != 0 {
+        native_dispatch_arms.push_str(r#"
+            38 /* NATIVE_FILE_READ */ => 0,
+            39 /* NATIVE_FILE_WRITE */ => {
+                let path_bytes = self.get_str_bytes(arg_val);
+                let content_val = if arg_reg > 0 { self.regs[(arg_reg - 1) as usize] } else { 0 };
+                let content_bytes = self.get_str_bytes(content_val);
+                match (path_bytes, content_bytes) {
+                    (Some(p_b), Some(data)) => {
+                        if let Ok(path) = std::str::from_utf8(p_b) {
+                            if std::fs::write(path, data).is_ok() { data.len() as i64 } else { -1 }
+                        } else { -1 }
+                    }
+                    _ => -1,
+                }
+            }
+            40 /* NATIVE_FILE_EXISTS */ => {
+                let path_bytes = self.get_str_bytes(arg_val);
+                path_bytes.and_then(|b| std::str::from_utf8(b).ok()).map(|p| if std::path::Path::new(p).exists() { 1 } else { 0 }).unwrap_or(0)
+            }
         "#);
     }
 
