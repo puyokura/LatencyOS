@@ -827,6 +827,9 @@ impl<'a> PX64VM<'a> {
 
                         NATIVE_NET_SEND => 1,
                         NATIVE_DROP => 0,
+                        NATIVE_TERM_RAW => 0,
+                        NATIVE_TERM_READ_KEY => -1,
+                        NATIVE_TERM_SIZE => (25i64 << 16) | 80i64,
 
                         NATIVE_SCRIPT_ARGC => self.args.len() as i64,
 

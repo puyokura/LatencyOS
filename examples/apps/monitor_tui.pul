@@ -1,0 +1,36 @@
+// examples/apps/monitor_tui.pul - Real-Time Pipeline TUI Monitor
+//
+// Demonstrates building interactive TUI dashboards in PulseLang
+// by importing terminal intrinsics and including the std/tui library.
+
+@contract: @wcet(200us) @budget(1ms);
+@import "term";
+@include "std/tui.pul";
+
+fn main() -> i64 {
+    tui_clear();
+    tui_cursor_hide();
+
+    tui_draw_header("LatencyOS Pipeline Monitor");
+    tui_draw_box_border(40);
+
+    tui_print_label_val("Core 0 (Control)", "0.15ms");
+    tui_print_label_val("Core 1 (Capture)", "2.00ms [Zero-Copy]");
+    tui_print_label_val("Core 2 (Encode) ", "4.50ms [NVENC]");
+    tui_print_label_val("Core 3 (Network)", "5.00ms [SRTP]");
+
+    tui_draw_box_border(40);
+
+    let $size = @term_size();
+    let $cols = $size & 0xFFFF;
+    let $rows = ($size >> 16) & 0xFFFF;
+    tui_print_label_val("Columns", $cols);
+    tui_print_label_val("Rows", $rows);
+
+    tui_draw_statusbar("[Q] Quit  [R] Refresh");
+
+    tui_cursor_show();
+    return 0;
+}
+
+let $code = main();

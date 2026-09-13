@@ -931,6 +931,23 @@ let $now = @tsc();
 | `12` | `@is_ok($res)` | `(Tagged) -> i64` | **~2 ns** | Returns `1` if result is Ok, `0` if Err. |
 | `13` | `@is_err($res)`| `(Tagged) -> i64` | **~2 ns** | Returns `1` if result is Err, `0` if Ok. |
 | `14` | `@unwrap($res)`| `(Tagged) -> i64` | **~3 ns** | Extracts payload from Ok result; triggers `ERR_PX64_UNWRAP_FAILED` if Err. |
+### 4.5 Terminal & TUI Intrinsics (`@import "term";`)
+
+| ID | Intrinsic | Signature | WCET | Description |
+|---|---|---|---|---|
+| `35` | `@term_raw($enable)` | `(i64) -> i64` | **~10 ns** | Enables or disables raw terminal mode. |
+| `36` | `@term_read_key()` | `() -> i64` | **~15 ns** | Non-blocking key read. Returns key code or `-1` if no key pending. |
+| `37` | `@term_size()` | `() -> i64` | **~10 ns** | Returns terminal dimensions packed as `(rows << 16) | cols`. |
+
+### 4.6 PulseLang TUI Standard Library (`@include "std/tui.pul";`)
+
+PulseLang includes `std/tui.pul` for building zero-allocation interactive terminal user interfaces:
+- `tui_clear()`: Clears screen and homes cursor (`\x1b[2J\x1b[H`).
+- `tui_cursor_hide()` / `tui_cursor_show()`: Hides or restores terminal cursor.
+- `tui_draw_header($title)`: Renders colored title banner.
+- `tui_draw_statusbar($status)`: Renders inverted bottom status bar.
+- `tui_print_label_val($label, $val)`: Renders highlighted label-value status pair.
+- `tui_draw_box_border($width)`: Renders horizontal ASCII box border (`+----+`).
 ### 7.1 `pulc` Host Compiler CLI Reference
 
 ```bash

@@ -1035,7 +1035,16 @@ fn read_and_preprocess(input_path: &Path, json: bool) -> Result<String, (i32, St
     let parent_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let mut loader = |inc_rel_path: &str| -> Option<String> {
         let full_path = parent_dir.join(inc_rel_path);
-        fs::read_to_string(&full_path).ok()
+        if let Ok(content) = fs::read_to_string(&full_path) {
+            return Some(content);
+        }
+        if let Ok(content) = fs::read_to_string(inc_rel_path) {
+            return Some(content);
+        }
+        if let Ok(content) = fs::read_to_string(format!("../{}", inc_rel_path)) {
+            return Some(content);
+        }
+        None
     };
 
     preprocess_includes(&raw_src, &mut loader).map_err(|err| {

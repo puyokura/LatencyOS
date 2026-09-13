@@ -1,0 +1,66 @@
+// std/tui.pul - PulseLang Terminal & TUI Utility Library
+//
+// Provides zero-allocation ANSI terminal manipulation, cursor positioning,
+// color styling, header/statusbar rendering, and box borders for TUI apps.
+
+@contract: @wcet(100us) @budget(500us);
+@import "term";
+
+fn tui_clear() -> i64 {
+    @print("\x1b[2J\x1b[H");
+    return 0;
+}
+
+fn tui_reset() -> i64 {
+    @print("\x1b[0m");
+    return 0;
+}
+
+fn tui_bold() -> i64 {
+    @print("\x1b[1m");
+    return 0;
+}
+
+fn tui_cursor_hide() -> i64 {
+    @print("\x1b[?25l");
+    return 0;
+}
+
+fn tui_cursor_show() -> i64 {
+    @print("\x1b[?25h");
+    return 0;
+}
+
+fn tui_draw_header($title: i64) -> i64 {
+    @print("\x1b[1;36m[ ");
+    @print($title);
+    @println(" ]\x1b[0m");
+    return 0;
+}
+
+fn tui_draw_statusbar($status: i64) -> i64 {
+    @print("\x1b[7m ");
+    @print($status);
+    @println(" \x1b[0m");
+    return 0;
+}
+
+fn tui_print_label_val($label: i64, $val: i64) -> i64 {
+    @print("\x1b[33m* ");
+    @print($label);
+    @print(": \x1b[32m");
+    @print($val);
+    @println("\x1b[0m");
+    return 0;
+}
+
+fn tui_draw_box_border($width: i64) -> i64 {
+    @print("+");
+    let mut $i = 0;
+    while $i < $width {
+        @print("-");
+        $i += 1;
+    }
+    @println("+");
+    return 0;
+}

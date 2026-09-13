@@ -24,7 +24,7 @@ pub enum Typestate {
 pub type HandleState = Typestate;
 #[derive(Clone, Copy, Debug)]
 pub struct FnMeta {
-    pub name: [u8; 16],
+    pub name: [u8; 32],
     pub name_len: usize,
     pub entry_pc: u16,
     pub param_names: [[u8; 16]; 4],
@@ -39,7 +39,7 @@ pub struct FnMeta {
 impl FnMeta {
     pub const fn empty() -> Self {
         Self {
-            name: [0; 16],
+            name: [0; 32],
             name_len: 0,
             entry_pc: 0,
             param_names: [[0; 16]; 4],
@@ -268,7 +268,8 @@ pub const RUNTIME_SYS:  u16 = 1 << 4;
 pub const RUNTIME_NET:  u16 = 1 << 5;
 pub const RUNTIME_VRAM: u16 = 1 << 6;
 pub const RUNTIME_GPU:  u16 = 1 << 7;
-pub const RUNTIME_ALL:  u16 = 0xFF;
+pub const RUNTIME_TERM: u16 = 1 << 8;
+pub const RUNTIME_ALL:  u16 = 0x1FF;
 /// Single-pass compiler for px64 architecture.
 pub struct Compiler<'a> {
     pub src: &'a [u8],
@@ -613,6 +614,21 @@ impl<'a> Compiler<'a> {
             "Combinator -> Function Lookup",
             "Define static function with 'fn name(...) { ... }' before using in combinators",
         ))
+    }
+    fn find_string_in_pool(&self, s: &[u8]) -> Option<usize> {
+        if s.is_empty() {
+            return Some(0);
+        }
+        let pool = &self.str_pool[..self.str_pool_len];
+        if s.len() > pool.len() {
+            return None;
+        }
+        for i in 0..=pool.len() - s.len() {
+            if &pool[i..i + s.len()] == s {
+                return Some(i);
+            }
+        }
+        None
     }
     pub fn parse_view_source_to_reg(&mut self, base_reg: u8) -> Result<ViewMeta, CompileError> {
         if self.peek().kind == TokenKind::IntrinsicIdent || self.peek().kind == TokenKind::Ident {
@@ -2135,6 +2151,7 @@ impl<'a> Compiler<'a> {
             NATIVE_VRAM_READ | NATIVE_VRAM_WRITE => (RUNTIME_VRAM, "vram"),
 
             NATIVE_GPU_CAPTURE => (RUNTIME_GPU, "gpu"),
+            NATIVE_TERM_RAW | NATIVE_TERM_READ_KEY | NATIVE_TERM_SIZE => (RUNTIME_TERM, "term"),
 
             _ => (RUNTIME_CORE, "core"),
         };
@@ -2212,13 +2229,16 @@ impl<'a> Compiler<'a> {
                     b"gpu" => {
                         self.imported_runtimes |= RUNTIME_GPU | RUNTIME_VRAM | RUNTIME_SYS | RUNTIME_CORE;
                     }
+                    b"term" | b"tui" => {
+                        self.imported_runtimes |= RUNTIME_TERM | RUNTIME_CORE | RUNTIME_TINY;
+                    }
                     _ => {
                         return Err(self.error(
                             "ERR_UNKNOWN_RUNTIME",
                             "Unknown runtime module in @import",
-                            "Supported runtimes: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                            "Supported runtimes: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\"",
                             "Module Import -> Validation",
-                            "Import one of: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\"",
+                            "Import one of: \"tiny\", \"core\", \"math\", \"fix\", \"sys\", \"net\", \"vram\", \"gpu\", \"term\"",
                         ));
                     }
                 }
@@ -3512,7 +3532,7 @@ impl<'a> Compiler<'a> {
                 }
 
                 let mut fn_meta = FnMeta::empty();
-                fn_meta.name_len = core::cmp::min(fn_name.len(), 16);
+                fn_meta.name_len = core::cmp::min(fn_name.len(), 32);
                 fn_meta.name[..fn_meta.name_len].copy_from_slice(&fn_name[..fn_meta.name_len]);
                 fn_meta.entry_pc = entry_pc;
 
@@ -4587,20 +4607,73 @@ impl<'a> Compiler<'a> {
                 } else {
                     &[]
                 };
-                if self.str_pool_len + s.len() > MAX_STRING_POOL {
-                    return Err(self.error(
-                        "ERR_STRING_POOL_FULL",
-                        "String literal pool exhausted (512 bytes limit reached)",
-                        "Shorter string constants",
-                        "String Pool Allocation",
-                        "Reduce the size of string constants",
-                    ));
-                }
                 let offset = self.str_pool_len;
-                self.str_pool[offset..offset + s.len()].copy_from_slice(s);
-                self.str_pool_len += s.len();
+                let mut out_idx = offset;
+                let mut si = 0;
+                while si < s.len() {
+                    if out_idx >= MAX_STRING_POOL {
+                        return Err(self.error(
+                            "ERR_STRING_POOL_FULL",
+                            "String literal pool exhausted (512 bytes limit reached)",
+                            "Shorter string constants",
+                            "String Pool Allocation",
+                            "Reduce the size of string constants",
+                        ));
+                    }
+                    if s[si] == b'\\' && si + 1 < s.len() {
+                        si += 1;
+                        match s[si] {
+                            b'n' => { self.str_pool[out_idx] = b'\n'; out_idx += 1; si += 1; }
+                            b'r' => { self.str_pool[out_idx] = b'\r'; out_idx += 1; si += 1; }
+                            b't' => { self.str_pool[out_idx] = b'\t'; out_idx += 1; si += 1; }
+                            b'e' => { self.str_pool[out_idx] = 0x1B; out_idx += 1; si += 1; }
+                            b'x' if si + 2 < s.len() => {
+                                let h1 = s[si + 1];
+                                let h2 = s[si + 2];
+                                let d1 = match h1 {
+                                    b'0'..=b'9' => Some(h1 - b'0'),
+                                    b'a'..=b'f' => Some(h1 - b'a' + 10),
+                                    b'A'..=b'F' => Some(h1 - b'A' + 10),
+                                    _ => None,
+                                };
+                                let d2 = match h2 {
+                                    b'0'..=b'9' => Some(h2 - b'0'),
+                                    b'a'..=b'f' => Some(h2 - b'a' + 10),
+                                    b'A'..=b'F' => Some(h2 - b'A' + 10),
+                                    _ => None,
+                                };
+                                if let (Some(v1), Some(v2)) = (d1, d2) {
+                                    self.str_pool[out_idx] = (v1 << 4) | v2;
+                                    out_idx += 1;
+                                    si += 3;
+                                } else {
+                                    self.str_pool[out_idx] = b'\\';
+                                    out_idx += 1;
+                                }
+                            }
+                            b'\\' => { self.str_pool[out_idx] = b'\\'; out_idx += 1; si += 1; }
+                            b'"' => { self.str_pool[out_idx] = b'"'; out_idx += 1; si += 1; }
+                            other => {
+                                self.str_pool[out_idx] = other;
+                                out_idx += 1;
+                                si += 1;
+                            }
+                        }
+                    } else {
+                        self.str_pool[out_idx] = s[si];
+                        out_idx += 1;
+                        si += 1;
+                    }
+                }
+                let len = out_idx - offset;
+                if let Some(prev_offset) = self.find_string_in_pool(&self.str_pool[offset..out_idx]) {
+                    // String already present in pool: reuse offset and discard duplicate bytes
+                    self.emit_inst(PX64_OP_MOV_STR, dst, prev_offset as u8, len as u8)?;
+                    return Ok(None);
+                }
+                self.str_pool_len = out_idx;
 
-                self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, s.len() as u8)?;
+                self.emit_inst(PX64_OP_MOV_STR, dst, offset as u8, len as u8)?;
                 Ok(None)
             }
 
@@ -4966,6 +5039,9 @@ impl<'a> Compiler<'a> {
                         b"@to_i64" | b"fix.to_i64" => (NATIVE_FIX_TO_I64, 2),
                         b"@fix_mul" | b"fix.mul" => (NATIVE_FIX_MUL, 3),
                         b"@fix_div" | b"fix.div" => (NATIVE_FIX_DIV, 3),
+                        b"@term_raw" | b"term.raw" => (NATIVE_TERM_RAW, 1),
+                        b"@term_read_key" | b"term.read_key" => (NATIVE_TERM_READ_KEY, 0),
+                        b"@term_size" | b"term.size" => (NATIVE_TERM_SIZE, 0),
                         _ => {
                             return Err(self.error(
                                 "ERR_UNKNOWN_INTRINSIC",
