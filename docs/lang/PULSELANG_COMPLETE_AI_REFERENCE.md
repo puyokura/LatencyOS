@@ -942,6 +942,10 @@ pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>] [--json] [-v
 pulc fmt [files...] [--check]
 pulc disasm <file.bin>
 pulc lsp
+pulc ir <file.pul> [--json]
+pulc diff <a.pul> <b.pul> [--json]
+pulc inspect <file.pul> <symbol> [--json]
+pulc why <file.pul> <symbol> [--json]
 
 #### `pulc test <file.pul>`
 Executes all `@test` blocks within the source file.
@@ -963,6 +967,47 @@ Provides real-time editor integration for VSCode, Zed, Neovim, and Sublime Text:
 - **Code Actions / Quick Fixes**: Automated insertions of missing `@contract` bounds or `@import "sys";` dependencies.
 - **Formatting**: Integrated document formatting via `pulc fmt`.
 - **Diagnostic Schema**: Conforms to the [AI Diagnostics Schema v1](ai_diagnostics_schema.md).
+#### `pulc ir <file.pul>`
+Constructs and dumps the versioned Semantic Intent IR (v1.0) separating agent-facing architecture, timing constraints, and memory domains from lower-level bytecode lowering.
+
+#### `pulc diff <a.pul> <b.pul>`
+Performs semantic diffing between two PulseLang programs or compiler states at the real-time constraint level:
+- Compares core affinities, stage timing budgets, and task allocations.
+- Reports zero-copy residency changes and verification status before and after edits.
+
+#### `pulc inspect <file.pul> <symbol>`
+Semantic introspection exposing symbol typestate, assigned core, execution budget, estimated WCET, and memory domain residency.
+
+#### `pulc why <file.pul> <symbol>`
+Traces semantic provenance, explaining why a constraint, residency, or resource state was established and suggesting valid alternatives if violated.
+
+### 7.2 First-Class Task & Pipeline Declarations
+
+PulseLang supports declarative pipeline topologies and asynchronous tasks with statically-verified core affinities and zero-copy DMA contracts:
+
+```pulse
+pipeline video_streaming {
+    stage capture {
+        core 1
+        budget 2ms
+        zero_copy
+        output #frame
+    }
+    stage encode {
+        core 2
+        budget 4500us
+        hardware h264
+        input #frame
+        output #packet
+    }
+}
+
+task telemetry_logger {
+    core 0
+    budget 500us
+    input $stats
+}
+```
 
 ##### VSCode Configuration (`.vscode/settings.json` via Generic LSP Client or Command Runner):
 If using an extension such as **Generic LSP Client**:

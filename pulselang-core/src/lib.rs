@@ -14,6 +14,7 @@ extern crate std;
 
 pub mod compiler;
 #[cfg(feature = "std")]
+pub mod ir;
 pub mod lsp;
 pub mod disasm;
 pub mod error;

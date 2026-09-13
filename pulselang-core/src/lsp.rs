@@ -457,7 +457,7 @@ impl LspServer {
 // -----------------------------------------------------------------------------
 // Helper parsing & formatting routines
 // -----------------------------------------------------------------------------
-
+#[cfg(feature = "std")]
 fn extract_word_at(line: &str, character: usize) -> String {
     let bytes = line.as_bytes();
     if character >= bytes.len() {

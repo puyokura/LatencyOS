@@ -40,6 +40,21 @@ enum Subcommand {
         check: bool,
     },
     Lsp,
+    Ir {
+        input: PathBuf,
+    },
+    Diff {
+        a: PathBuf,
+        b: PathBuf,
+    },
+    Inspect {
+        input: PathBuf,
+        symbol: String,
+    },
+    Why {
+        input: PathBuf,
+        symbol: String,
+    },
     Help,
     Version,
 }
@@ -62,6 +77,10 @@ fn print_help() {
     pulc check <file.pul>
     pulc test <file.pul> [--filter <pattern>] [--replay] [--seed <val>]
     pulc fmt [files...] [--check]
+    pulc ir <file.pul> [--json]
+    pulc diff <a.pul> <b.pul> [--json]
+    pulc inspect <file.pul> <symbol> [--json]
+    pulc why <file.pul> <symbol> [--json]
     pulc disasm <file.bin>
     pulc lsp
     pulc -d <file.bin>
@@ -73,6 +92,10 @@ fn print_help() {
     fmt [files...]        Format PulseLang source code in-place (or --check for CI validation)
     disasm <file.bin>     Disassemble px64 binary bytecode into assembly instructions
     lsp                   Start PulseLang Language Server Protocol (LSP) daemon over stdio
+    ir <file.pul>         Dump semantic Intent IR for AI agents and tooling
+    diff <a.pul> <b.pul>  Semantic diff comparing two PulseLang programs or IR states
+    inspect <file> <sym>  Inspect symbol type, constraints, residency, and WCET
+    why <file> <sym>      Explain constraint, residency, or resource provenance
 \x1b[1mFLAGS:\x1b[0m
     -o, --output <file>   Specify output binary file path (default: <input>.bin)
     -d, --disasm          Disassemble binary bytecode file
@@ -260,6 +283,116 @@ where
             "lsp" => {
                 return Ok(CliOptions {
                     subcommand: Subcommand::Lsp,
+                    json,
+                    verbose,
+                });
+            }
+            "ir" => {
+                let mut input = None;
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') && input.is_none() {
+                        input = Some(PathBuf::from(&args_vec[j]));
+                        j += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                let input_path = input.ok_or_else(|| "Missing input source file for 'ir' subcommand".to_string())?;
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Ir { input: input_path },
+                    json,
+                    verbose,
+                });
+            }
+            "diff" => {
+                let mut files = Vec::new();
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') {
+                        files.push(PathBuf::from(&args_vec[j]));
+                        j += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                if files.len() < 2 {
+                    return Err("Subcommand 'diff' requires two file arguments: pulc diff <a.pul> <b.pul>".to_string());
+                }
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Diff { a: files[0].clone(), b: files[1].clone() },
+                    json,
+                    verbose,
+                });
+            }
+            "inspect" => {
+                let mut input = None;
+                let mut sym = None;
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') {
+                        if input.is_none() {
+                            input = Some(PathBuf::from(&args_vec[j]));
+                        } else if sym.is_none() {
+                            sym = Some(args_vec[j].clone());
+                        }
+                        j += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                let input_path = input.ok_or_else(|| "Missing input file for 'inspect' subcommand".to_string())?;
+                let symbol = sym.ok_or_else(|| "Missing symbol argument for 'inspect' subcommand".to_string())?;
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Inspect { input: input_path, symbol },
+                    json,
+                    verbose,
+                });
+            }
+            "why" => {
+                let mut input = None;
+                let mut sym = None;
+                let mut j = i + 1;
+                while j < args_vec.len() {
+                    if args_vec[j] == "--json" {
+                        json = true;
+                        j += 1;
+                    } else if args_vec[j] == "-v" || args_vec[j] == "--verbose" {
+                        verbose = true;
+                        j += 1;
+                    } else if !args_vec[j].starts_with('-') {
+                        if input.is_none() {
+                            input = Some(PathBuf::from(&args_vec[j]));
+                        } else if sym.is_none() {
+                            sym = Some(args_vec[j].clone());
+                        }
+                        j += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+                let input_path = input.ok_or_else(|| "Missing input file for 'why' subcommand".to_string())?;
+                let symbol = sym.ok_or_else(|| "Missing symbol argument for 'why' subcommand".to_string())?;
+                return Ok(CliOptions {
+                    subcommand: Subcommand::Why { input: input_path, symbol },
                     json,
                     verbose,
                 });
@@ -1553,6 +1686,66 @@ fn run_lsp() -> Result<(), (i32, String)> {
     }
     Ok(())
 }
+fn run_ir(input_path: &Path, json: bool) -> Result<(), (i32, String)> {
+    let src = fs::read_to_string(input_path).map_err(|e| (2, format!("Cannot read file '{}': {}", input_path.display(), e)))?;
+    let ir = pulselang_core::ir::build_intent_ir(&src).map_err(|err| (1, format_compile_error(&err, src.as_bytes(), &input_path.to_string_lossy(), json)))?;
+    if json {
+        println!("{}", ir.to_json());
+    } else {
+        println!("=== PulseLang Intent IR (v{}): {} ===", ir.version, ir.module_name);
+        println!("Pipelines ({}):", ir.pipelines.len());
+        for p in &ir.pipelines {
+            println!("  pipeline {} (total budget: {}ns, wcet: {}ns, status: {})", p.name, p.total_budget_ns, p.total_wcet_ns, if p.valid { "VALID" } else { "EXCEEDED" });
+            for s in &p.stages {
+                println!("    stage {} [Core {}] budget: {}ns (wcet: {}ns) zero_copy: {} domain: {}", s.name, s.core, s.budget_ns, s.wcet_ns, s.zero_copy, s.memory_domain.as_str());
+            }
+        }
+        println!("Tasks ({}):", ir.tasks.len());
+        for t in &ir.tasks {
+            println!("  task {} [Core: {:?}] budget: {:?}ns zero_copy: {}", t.name, t.core, t.budget_ns, t.zero_copy);
+        }
+        println!("Verification Status: {}", ir.verification.status);
+    }
+    Ok(())
+}
+
+fn run_diff(a_path: &Path, b_path: &Path, json: bool) -> Result<(), (i32, String)> {
+    let src_a = fs::read_to_string(a_path).map_err(|e| (2, format!("Cannot read file '{}': {}", a_path.display(), e)))?;
+    let src_b = fs::read_to_string(b_path).map_err(|e| (2, format!("Cannot read file '{}': {}", b_path.display(), e)))?;
+    let ir_a = pulselang_core::ir::build_intent_ir(&src_a).map_err(|err| (1, format_compile_error(&err, src_a.as_bytes(), &a_path.to_string_lossy(), json)))?;
+    let ir_b = pulselang_core::ir::build_intent_ir(&src_b).map_err(|err| (1, format_compile_error(&err, src_b.as_bytes(), &b_path.to_string_lossy(), json)))?;
+    let diff = pulselang_core::ir::semantic_diff(&ir_a, &ir_b);
+    if json {
+        println!("{}", diff.to_json());
+    } else {
+        print!("{}", diff.to_text());
+    }
+    Ok(())
+}
+
+fn run_inspect(input_path: &Path, sym: &str, json: bool) -> Result<(), (i32, String)> {
+    let src = fs::read_to_string(input_path).map_err(|e| (2, format!("Cannot read file '{}': {}", input_path.display(), e)))?;
+    let ir = pulselang_core::ir::build_intent_ir(&src).map_err(|err| (1, format_compile_error(&err, src.as_bytes(), &input_path.to_string_lossy(), json)))?;
+    let rep = pulselang_core::ir::inspect_symbol(&ir, sym).ok_or_else(|| (1, format!("Symbol '{}' not found in Intent IR", sym)))?;
+    if json {
+        println!("{}", rep.to_json());
+    } else {
+        print!("{}", rep.to_text());
+    }
+    Ok(())
+}
+
+fn run_why(input_path: &Path, sym: &str, json: bool) -> Result<(), (i32, String)> {
+    let src = fs::read_to_string(input_path).map_err(|e| (2, format!("Cannot read file '{}': {}", input_path.display(), e)))?;
+    let ir = pulselang_core::ir::build_intent_ir(&src).map_err(|err| (1, format_compile_error(&err, src.as_bytes(), &input_path.to_string_lossy(), json)))?;
+    let rep = pulselang_core::ir::why_symbol(&ir, sym).ok_or_else(|| (1, format!("Symbol '{}' not found in Intent IR", sym)))?;
+    if json {
+        println!("{}", rep.to_json());
+    } else {
+        print!("{}", rep.to_text());
+    }
+    Ok(())
+}
 fn main() -> ExitCode {
     let raw_args = env::args().skip(1);
     let options = match parse_cli_args(raw_args) {
@@ -1588,6 +1781,10 @@ fn main() -> ExitCode {
             run_fmt(targets, *check, options.json, options.verbose)
         }
         Subcommand::Lsp => run_lsp(),
+        Subcommand::Ir { input } => run_ir(input, options.json),
+        Subcommand::Diff { a, b } => run_diff(a, b, options.json),
+        Subcommand::Inspect { input, symbol } => run_inspect(input, symbol, options.json),
+        Subcommand::Why { input, symbol } => run_why(input, symbol, options.json),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
