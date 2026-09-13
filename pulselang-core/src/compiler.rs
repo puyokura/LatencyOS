@@ -5,11 +5,20 @@ use crate::isa::*;
 use crate::token::{Token, TokenKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    HardwareFrame,  // GPU DMA frame buffer slot (#f0..#f3)
+    PacketBuffer,   // Intel e1000 PMD packet buffer
+    RingSlot,       // SPSC lock-free inter-core ring buffer slot
+    FileHandle,     // Static file I/O resource
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Typestate {
     Unallocated,
-    Captured { line: usize, col: usize },
+    Captured { line: usize, col: usize, kind: ResourceKind },
     Sent,
     Dropped,
+    Moved { line: usize, col: usize },
 }
 
 pub type HandleState = Typestate;
@@ -1885,6 +1894,86 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+    fn check_hw_assign_pre(&mut self, var_reg: u8, _ident: Token) -> Result<Option<(usize, ResourceKind)>, CompileError> {
+        if !(16..=19).contains(&var_reg) {
+            return Ok(None);
+        }
+        let slot = (var_reg - 16) as usize;
+        if let Typestate::Captured { .. } = self.handle_states[slot] {
+            return Err(self.error(
+                "ERR_LINEAR_OVERWRITE",
+                "Hardware handle overwritten before previous buffer was consumed/sent",
+                "Consume prior handle with @send(#h) before reassigning",
+                "Linear Ownership Verification",
+                "Ensure '@send(#h)' is invoked before overwriting '#h := @capture()'",
+            ));
+        }
+        if self.peek().kind == TokenKind::HardwareIdent {
+            let rhs_tok = self.peek();
+            if let Ok(src_reg) = self.resolve_var(rhs_tok) {
+                if (16..=19).contains(&src_reg) {
+                    let src_slot = (src_reg - 16) as usize;
+                    match self.handle_states[src_slot] {
+                        Typestate::Moved { .. } => {
+                            return Err(self.error(
+                                "ERR_RESOURCE_USE_AFTER_MOVE",
+                                "Resource handle used after ownership was moved",
+                                "Active resource handle",
+                                "Linear Ownership Verification",
+                                "Ensure handle has not been moved before using it",
+                            ));
+                        }
+                        Typestate::Unallocated => {
+                            return Err(self.error(
+                                "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                "Hardware handle used before being captured/allocated",
+                                "Capture handle with '#f := @capture()' before using",
+                                "Linear Ownership Verification",
+                                "Initialize hardware handle with '@capture()' before assignment",
+                            ));
+                        }
+                        Typestate::Sent | Typestate::Dropped => {
+                            return Err(self.error(
+                                "ERR_RESOURCE_USE_AFTER_MOVE",
+                                "Resource handle used after being consumed or released",
+                                "Active resource handle",
+                                "Linear Ownership Verification",
+                                "Ensure handle has not been consumed before using it",
+                            ));
+                        }
+                        Typestate::Captured { kind, .. } => {
+                            return Ok(Some((src_slot, kind)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn apply_hw_assign_post(&mut self, var_reg: u8, ident: Token, moved_from: Option<(usize, ResourceKind)>) {
+        if !(16..=19).contains(&var_reg) {
+            return;
+        }
+        let slot = (var_reg - 16) as usize;
+        if let Some((src_slot, kind)) = moved_from {
+            self.handle_states[src_slot] = Typestate::Moved {
+                line: ident.line,
+                col: ident.col,
+            };
+            self.handle_states[slot] = Typestate::Captured {
+                line: ident.line,
+                col: ident.col,
+                kind,
+            };
+        } else {
+            self.handle_states[slot] = Typestate::Captured {
+                line: ident.line,
+                col: ident.col,
+                kind: ResourceKind::HardwareFrame,
+            };
+        }
+    }
 
     fn resolve_var(&mut self, tok: Token) -> Result<u8, CompileError> {
         let name = &self.src[tok.start..tok.start + tok.len];
@@ -1958,7 +2047,7 @@ impl<'a> Compiler<'a> {
 
         // Verify all allocated hardware handles were sent/consumed (linear type ownership)
         for i in 0..4 {
-            if let Typestate::Captured { line, col } = self.handle_states[i] {
+            if let Typestate::Captured { line, col, .. } = self.handle_states[i] {
                 return Err(CompileError {
                     code: "ERR_LINEAR_UNCONSUMED_HANDLE",
                     message: "Hardware handle captured but never sent/consumed (linear ownership violation)",
@@ -2402,9 +2491,11 @@ impl<'a> Compiler<'a> {
                         (Typestate::Unallocated, Typestate::Unallocated) => true,
                         (Typestate::Unallocated, Typestate::Sent) => true,
                         (Typestate::Unallocated, Typestate::Dropped) => true,
+                        (Typestate::Unallocated, Typestate::Moved { .. }) => true,
                         (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
                         (Typestate::Sent, Typestate::Sent) => true,
                         (Typestate::Dropped, Typestate::Dropped) => true,
+                        (Typestate::Moved { .. }, Typestate::Moved { .. }) => true,
                         _ => false,
                     };
                     if !match_state {
@@ -2601,9 +2692,11 @@ impl<'a> Compiler<'a> {
                         (Typestate::Unallocated, Typestate::Unallocated) => true,
                         (Typestate::Unallocated, Typestate::Sent) => true,
                         (Typestate::Unallocated, Typestate::Dropped) => true,
+                        (Typestate::Unallocated, Typestate::Moved { .. }) => true,
                         (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
                         (Typestate::Sent, Typestate::Sent) => true,
                         (Typestate::Dropped, Typestate::Dropped) => true,
+                        (Typestate::Moved { .. }, Typestate::Moved { .. }) => true,
                         _ => false,
                     };
                     if !match_state {
@@ -2851,6 +2944,7 @@ impl<'a> Compiler<'a> {
                 }
                 let var_reg = self.declare_var(ident, is_mut)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
+                    let hw_move = self.check_hw_assign_pre(var_reg, ident)?;
                     self.current_expr_enum_type = None;
                     self.current_expr_fixed_scale = None;
                     self.target_fixed_scale = annotated_fixed_scale;
@@ -2862,6 +2956,7 @@ impl<'a> Compiler<'a> {
                     } else {
                         self.expression(var_reg)?;
                     }
+                    self.apply_hw_assign_post(var_reg, ident, hw_move);
                     let final_enum_type = annotated_enum_type.or(self.current_expr_enum_type);
                     let final_fixed_scale = annotated_fixed_scale.or(self.current_expr_fixed_scale);
                     if let Some(var_idx) = self.get_var_index(ident) {
@@ -2958,6 +3053,8 @@ impl<'a> Compiler<'a> {
                         (Typestate::Captured { .. }, Typestate::Captured { .. }) => true,
                         (Typestate::Sent, Typestate::Sent) => true,
                         (Typestate::Dropped, Typestate::Dropped) => true,
+                        (Typestate::Moved { .. }, Typestate::Moved { .. }) => true,
+                        (Typestate::Sent, Typestate::Dropped) | (Typestate::Dropped, Typestate::Sent) => true,
                         _ => false,
                     };
                     if !match_state {
@@ -3796,25 +3893,10 @@ impl<'a> Compiler<'a> {
                 let var_reg = self.resolve_var(ident)?;
                 if self.match_token(TokenKind::ColonEq) || self.match_token(TokenKind::Eq) {
                     self.check_var_mutation(ident)?;
-                    // Handle hardware handle allocation tracking
-                    if (16..=19).contains(&var_reg) {
-                        let slot = (var_reg - 16) as usize;
-                        if let Typestate::Captured { .. } = self.handle_states[slot] {
-                            return Err(self.error(
-                                "ERR_LINEAR_OVERWRITE",
-                                "Hardware handle overwritten before previous buffer was consumed/sent",
-                                "Consume prior handle with @send(#h) before reassigning",
-                                "Linear Ownership Verification",
-                                "Ensure '@send(#h)' is invoked before overwriting '#h := @capture()'",
-                            ));
-                        }
-                        self.handle_states[slot] = Typestate::Captured {
-                            line: ident.line,
-                            col: ident.col,
-                        };
-                    }
+                    let hw_move = self.check_hw_assign_pre(var_reg, ident)?;
                     self.current_expr_enum_type = None;
                     self.expression(var_reg)?;
+                    self.apply_hw_assign_post(var_reg, ident, hw_move);
                     if let Some(var_idx) = self.get_var_index(ident) {
                         if var_idx < MAX_VARS {
                             self.var_enum_types[var_idx] = self.current_expr_enum_type;
@@ -3945,6 +4027,15 @@ impl<'a> Compiler<'a> {
                                         "Initialize hardware handle with '@capture()' before '@send()'",
                                     ));
                                 }
+                                Typestate::Moved { .. } => {
+                                    return Err(self.error(
+                                        "ERR_RESOURCE_USE_AFTER_MOVE",
+                                        "Resource handle used after ownership was moved",
+                                        "Active resource handle",
+                                        "Linear Ownership Verification",
+                                        "Ensure handle has not been moved before using it",
+                                    ));
+                                }
                                 Typestate::Sent | Typestate::Dropped => {
                                     return Err(self.error(
                                         "ERR_LINEAR_DOUBLE_SEND",
@@ -3960,6 +4051,44 @@ impl<'a> Compiler<'a> {
                             }
                         }
                         NATIVE_NET_SEND
+                    }
+                    b"@release" | b"@drop" => {
+                        if (16..=19).contains(&dst) {
+                            let slot = (dst - 16) as usize;
+                            match self.handle_states[slot] {
+                                Typestate::Unallocated => {
+                                    return Err(self.error(
+                                        "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                        "Resource handle released before being allocated",
+                                        "Allocate resource before releasing",
+                                        "Linear Ownership Verification",
+                                        "Initialize resource handle before releasing",
+                                    ));
+                                }
+                                Typestate::Moved { .. } => {
+                                    return Err(self.error(
+                                        "ERR_RESOURCE_USE_AFTER_MOVE",
+                                        "Resource handle used after ownership was moved",
+                                        "Active resource handle",
+                                        "Linear Ownership Verification",
+                                        "Ensure handle has not been moved before using it",
+                                    ));
+                                }
+                                Typestate::Sent | Typestate::Dropped => {
+                                    return Err(self.error(
+                                        "ERR_RESOURCE_DOUBLE_RELEASE",
+                                        "Resource released or moved multiple times (double-release violation)",
+                                        "Single @release per allocated resource",
+                                        "Linear Ownership Verification",
+                                        "Remove duplicate '@release(#h);' calls on the same resource",
+                                    ));
+                                }
+                                Typestate::Captured { .. } => {
+                                    self.handle_states[slot] = Typestate::Dropped;
+                                }
+                            }
+                        }
+                        NATIVE_DROP
                     }
                     b"@print" | b"print" => NATIVE_PRINT,
                     b"@println" | b"println" => NATIVE_PRINTLN,
@@ -4511,6 +4640,18 @@ impl<'a> Compiler<'a> {
                     self.current_expr_enum_type = self.get_var_enum_type(tok);
                     self.current_expr_fixed_scale = self.get_var_fixed_scale(tok);
                     let var_reg = self.resolve_var(tok)?;
+                    if (16..=19).contains(&var_reg) {
+                        let slot = (var_reg - 16) as usize;
+                        if let Typestate::Moved { .. } = self.handle_states[slot] {
+                            return Err(self.error(
+                                "ERR_RESOURCE_USE_AFTER_MOVE",
+                                "Resource handle used after ownership was moved",
+                                "Active resource handle",
+                                "Linear Ownership Verification",
+                                "Ensure handle has not been moved before using it",
+                            ));
+                        }
+                    }
                     if var_reg != dst {
                         self.emit_inst(PX64_OP_MOV_REG, dst, var_reg, 0)?;
                     }
@@ -4799,6 +4940,7 @@ impl<'a> Compiler<'a> {
                         b"@rate" | b"net.set_rate" => (NATIVE_NET_SET_RATE, 1),
                         b"@capture" | b"gpu.capture" => (NATIVE_GPU_CAPTURE, 0),
                         b"@send" | b"net.send" => (NATIVE_NET_SEND, 1),
+                        b"@release" | b"@drop" => (NATIVE_DROP, 1),
                         b"@argc" | b"sys.argc" => (NATIVE_SCRIPT_ARGC, 0),
                         b"@arg" | b"sys.arg" => (NATIVE_SCRIPT_ARG, 1),
                         b"@ok" => (NATIVE_TAG_OK, 1),
@@ -4849,6 +4991,76 @@ impl<'a> Compiler<'a> {
                             if arg_tok.kind == TokenKind::HardwareIdent {
                                 if let Ok(reg) = self.resolve_var(arg_tok) {
                                     raw_h_reg = reg;
+                                }
+                            }
+                            if func_id == NATIVE_NET_SEND && (16..=19).contains(&raw_h_reg) {
+                                let slot = (raw_h_reg - 16) as usize;
+                                match self.handle_states[slot] {
+                                    Typestate::Unallocated => {
+                                        return Err(self.error(
+                                            "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                            "Hardware handle sent before being captured/allocated",
+                                            "Capture handle with '#f := @capture()' before sending",
+                                            "Linear Ownership Verification",
+                                            "Initialize hardware handle with '@capture()' before '@send()'",
+                                        ));
+                                    }
+                                    Typestate::Moved { .. } => {
+                                        return Err(self.error(
+                                            "ERR_RESOURCE_USE_AFTER_MOVE",
+                                            "Resource handle used after ownership was moved",
+                                            "Active resource handle",
+                                            "Linear Ownership Verification",
+                                            "Ensure handle has not been moved before using it",
+                                        ));
+                                    }
+                                    Typestate::Sent | Typestate::Dropped => {
+                                        return Err(self.error(
+                                            "ERR_LINEAR_DOUBLE_SEND",
+                                            "Hardware handle sent multiple times (double-send / double-free violation)",
+                                            "Single @send per allocated handle",
+                                            "Linear Ownership Verification",
+                                            "Remove duplicate '@send(#f);' calls on the same handle",
+                                        ));
+                                    }
+                                    Typestate::Captured { .. } => {
+                                        self.handle_states[slot] = Typestate::Sent;
+                                    }
+                                }
+                            }
+                            if func_id == NATIVE_DROP && (16..=19).contains(&raw_h_reg) {
+                                let slot = (raw_h_reg - 16) as usize;
+                                match self.handle_states[slot] {
+                                    Typestate::Unallocated => {
+                                        return Err(self.error(
+                                            "ERR_LINEAR_USE_BEFORE_ALLOC",
+                                            "Resource handle released before being allocated",
+                                            "Allocate resource before releasing",
+                                            "Linear Ownership Verification",
+                                            "Initialize resource handle before releasing",
+                                        ));
+                                    }
+                                    Typestate::Moved { .. } => {
+                                        return Err(self.error(
+                                            "ERR_RESOURCE_USE_AFTER_MOVE",
+                                            "Resource handle used after ownership was moved",
+                                            "Active resource handle",
+                                            "Linear Ownership Verification",
+                                            "Ensure handle has not been moved before using it",
+                                        ));
+                                    }
+                                    Typestate::Sent | Typestate::Dropped => {
+                                        return Err(self.error(
+                                            "ERR_RESOURCE_DOUBLE_RELEASE",
+                                            "Resource released or moved multiple times (double-release violation)",
+                                            "Single @release per allocated resource",
+                                            "Linear Ownership Verification",
+                                            "Remove duplicate '@release(#h);' calls on the same resource",
+                                        ));
+                                    }
+                                    Typestate::Captured { .. } => {
+                                        self.handle_states[slot] = Typestate::Dropped;
+                                    }
                                 }
                             }
                             arg0_reg = self.alloc_temp()?;
@@ -4905,39 +5117,6 @@ impl<'a> Compiler<'a> {
                         ));
                     }
 
-                    if func_id == NATIVE_NET_SEND {
-                        let target_reg = if (16..=19).contains(&raw_h_reg) {
-                            raw_h_reg
-                        } else {
-                            arg0_reg
-                        };
-                        if (16..=19).contains(&target_reg) {
-                            let slot = (target_reg - 16) as usize;
-                            match self.handle_states[slot] {
-                                Typestate::Unallocated => {
-                                    return Err(self.error(
-                                        "ERR_LINEAR_USE_BEFORE_ALLOC",
-                                        "Hardware handle sent before being captured/allocated",
-                                        "Capture handle with '#f := @capture()' before sending",
-                                        "Linear Ownership Verification",
-                                        "Initialize hardware handle with '@capture()' before '@send()'",
-                                    ));
-                                }
-                                Typestate::Sent | Typestate::Dropped => {
-                                    return Err(self.error(
-                                        "ERR_LINEAR_DOUBLE_SEND",
-                                        "Hardware handle sent multiple times (double-send / double-free violation)",
-                                        "Single @send per allocated handle",
-                                        "Linear Ownership Verification",
-                                        "Remove duplicate '@send(#f);' calls on the same handle",
-                                    ));
-                                }
-                                Typestate::Captured { .. } => {
-                                    self.handle_states[slot] = Typestate::Sent;
-                                }
-                            }
-                        }
-                    }
 
                     self.check_intrinsic_runtime(func_id)?;
                     if arity == 0 {

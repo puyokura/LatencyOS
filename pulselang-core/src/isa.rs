@@ -139,6 +139,7 @@ pub const NATIVE_FIX_TO_FIX: u8 = 30;
 pub const NATIVE_FIX_TO_I64: u8 = 31;
 pub const NATIVE_FIX_MUL: u8 = 32;
 pub const NATIVE_FIX_DIV: u8 = 33;
+pub const NATIVE_DROP: u8 = 34;
 
 /// Map register index to canonical x64-compatible register name ($rax..$r15, #f0..#f3).
 pub fn px64_reg_name(reg_id: u8) -> &'static str {
@@ -203,6 +204,7 @@ pub fn px64_native_name(func_id: u8) -> &'static str {
         NATIVE_FIX_TO_I64 => "@to_i64",
         NATIVE_FIX_MUL => "@fix_mul",
         NATIVE_FIX_DIV => "@fix_div",
+        NATIVE_DROP => "@release",
         _ => "@native",
     }
 }

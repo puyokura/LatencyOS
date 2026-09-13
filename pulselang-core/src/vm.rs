@@ -826,6 +826,7 @@ impl<'a> PX64VM<'a> {
                         NATIVE_GPU_CAPTURE => 0,
 
                         NATIVE_NET_SEND => 1,
+                        NATIVE_DROP => 0,
 
                         NATIVE_SCRIPT_ARGC => self.args.len() as i64,
 

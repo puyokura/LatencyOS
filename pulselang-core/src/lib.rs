@@ -510,6 +510,163 @@ mod tests {
         let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
         assert_eq!(err.code, "ERR_LINEAR_OVERWRITE");
     }
+    #[test]
+    fn test_resource_move_ownership_success() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+            @send(#f1);
+        "#;
+        let mut buf = [0u8; 1024];
+        let size = compile_pulse_to_binary(src.as_bytes(), &mut buf).expect("Move ownership valid flow");
+        assert!(size > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_resource_let_move_ownership_success() {
+        let src = r#"
+            #f0 := @capture();
+            let #f1 = #f0;
+            @send(#f1);
+        "#;
+        let mut buf = [0u8; 1024];
+        let size = compile_pulse_to_binary(src.as_bytes(), &mut buf).expect("Let move ownership valid flow");
+        assert!(size > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_resource_use_after_move_assignment_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+            #f2 := #f0;
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_USE_AFTER_MOVE");
+    }
+
+    #[test]
+    fn test_resource_use_after_move_in_expr_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+            let $x = #f0;
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_USE_AFTER_MOVE");
+    }
+
+    #[test]
+    fn test_resource_send_after_move_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+            @send(#f0);
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_USE_AFTER_MOVE");
+    }
+
+    #[test]
+    fn test_resource_double_release_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            @release(#f0);
+            @release(#f0);
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_DOUBLE_RELEASE");
+    }
+
+    #[test]
+    fn test_resource_drop_alias_double_release_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            @drop(#f0);
+            @drop(#f0);
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_DOUBLE_RELEASE");
+    }
+
+    #[test]
+    fn test_resource_release_after_move_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+            @release(#f0);
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_RESOURCE_USE_AFTER_MOVE");
+    }
+
+    #[test]
+    fn test_resource_unconsumed_leak_after_move_rejected() {
+        let src = r#"
+            #f0 := @capture();
+            #f1 := #f0;
+        "#;
+        let mut buf = [0u8; 1024];
+        let err = compile_pulse_to_binary(src.as_bytes(), &mut buf).unwrap_err();
+        assert_eq!(err.code, "ERR_LINEAR_UNCONSUMED_HANDLE");
+    }
+
+    #[test]
+    fn test_resource_branch_confinement_move_valid() {
+        let src = r#"
+            let $cond = 1;
+            #f0 := @capture();
+            if ($cond == 1) {
+                #f1 := #f0;
+                @send(#f1);
+            } else {
+                #f1 := #f0;
+                @send(#f1);
+            }
+        "#;
+        let bin = compile(src).expect("Both branches moving and consuming must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_resource_loop_confinement_move_valid() {
+        let src = r#"
+            for $i in 0..3 {
+                #f0 := @capture();
+                #f1 := #f0;
+                @send(#f1);
+            }
+        "#;
+        let bin = compile(src).expect("Loop with move and send must pass");
+        assert!(bin.len() > PX64_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_resource_kinds_and_typestates_enum() {
+        use crate::compiler::{ResourceKind, Typestate};
+        let kinds = [
+            ResourceKind::HardwareFrame,
+            ResourceKind::PacketBuffer,
+            ResourceKind::RingSlot,
+            ResourceKind::FileHandle,
+        ];
+        assert_eq!(kinds.len(), 4);
+
+        let states = [
+            Typestate::Unallocated,
+            Typestate::Captured { line: 1, col: 1, kind: ResourceKind::HardwareFrame },
+            Typestate::Sent,
+            Typestate::Dropped,
+            Typestate::Moved { line: 1, col: 1 },
+        ];
+        assert_eq!(states.len(), 5);
+    }
 
     #[test]
     fn test_struct_definition_and_access() {

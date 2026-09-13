@@ -704,20 +704,69 @@ fn process_sample($sample)
 - In testing mode (`pulc test`), `@test` blocks are extracted and executed in isolated `px64` VM sandboxes, verifying assertions and `@budget` constraints.
 ### 3.14 Linear Type Ownership & Typestate Safety Proofs
 
-Handles pointing to zero-copy GPU/NIC descriptors (`#f0`..`#f3`) enforce linear ownership and state transitions via **Typestate** analysis (`Unallocated` -> `Captured` -> `Sent` / `Dropped`). The compiler performs control-flow flow analysis across branches and loop boundaries to statically guarantee valid transitions and single consumption:
+PulseLang provides a generalized resource ownership and linear typestate system for hardware descriptors and OS resources (`#f0`..`#f3`).
+
+#### 1. Resource Kinds (`ResourceKind`)
+The compiler classifies tracked resource handles into four static categories:
+- **`HardwareFrame`**: GPU DMA framebuffer slots (`#f0`..`#f3`) synchronized to VBLANK.
+- **`PacketBuffer`**: Zero-copy Intel e1000 PMD network ring packet buffers.
+- **`RingSlot`**: SPSC lock-free inter-core ring buffer memory slots.
+- **`FileHandle`**: Static real-time file I/O resource descriptors.
+
+#### 2. Typestate Lattice (`Typestate`)
+Every hardware handle register slot resides in exactly one typestate at any point during compilation:
+- **`Unallocated`**: Slot has not acquired an active descriptor.
+- **`Captured { line, col, kind }`**: Slot owns an active linear resource descriptor. Must be consumed before compilation ends.
+- **`Sent`**: Descriptor was transmitted via `@send(#h)` or pipeline (`#h |> @send`).
+- **`Dropped`**: Descriptor was explicitly released via `@release(#h)`, `@drop(#h)`, pipe (`#h |> @release`), or deadline block (`!drop`).
+- **`Moved { line, col }`**: Ownership was transferred to another handle (`#f1 := #f0;` or `let #f1 = #f0;`). Subsequent accesses to `#f0` are rejected statically.
+
+#### 3. Ownership Move Semantics & Use-After-Move Protection
+When handle assignment occurs (e.g. `#f1 := #f0;` or `let #f1 = #f0;`):
+- Ownership moves from `#f0` to `#f1`.
+- `#f0` transitions to `Typestate::Moved { line, col }`.
+- `#f1` inherits the resource kind and transitions to `Typestate::Captured`.
+- Any subsequent read, assignment, or use of `#f0` is rejected with `ERR_RESOURCE_USE_AFTER_MOVE`.
+
+#### 4. Explicit Resource Release (`@release` / `@drop`)
+Alongside transmission via `@send(#h)`, resources can be explicitly released using `@release(#h)` or its alias `@drop(#h)` (intrinsic ID `34`, `NATIVE_DROP`). Attempting to release an already sent, dropped, or moved handle triggers `ERR_RESOURCE_DOUBLE_RELEASE` or `ERR_RESOURCE_USE_AFTER_MOVE`.
 
 ```pulse
-// VALID: Captured and consumed exactly once
+// VALID: Captured and consumed exactly once via @send
 #f := @capture();
 @send(#f);
 
-// VALID: Balanced consumption across both conditional branches
+// VALID: Captured and explicitly released via @release or @drop
+#f0 := @capture();
+@release(#f0);
+
+// VALID: Ownership move chain with final release
+#f0 := @capture();
+#f1 := #f0;
+@release(#f1);
+
+// VALID: Balanced consumption across conditional branches
 #f := @capture();
 if ($condition == 1) {
     @send(#f);
 } else {
-    @send(#f);
+    @release(#f);
 }
+
+// INVALID (ERR_RESOURCE_USE_AFTER_MOVE): Accessing handle after ownership was moved
+// #f0 := @capture();
+// #f1 := #f0;
+// @send(#f0);  // Error: #f0 was already moved to #f1!
+
+// INVALID (ERR_RESOURCE_USE_AFTER_MOVE): Re-moving an already moved handle
+// #f0 := @capture();
+// #f1 := #f0;
+// #f2 := #f0;  // Error: #f0 used after move!
+
+// INVALID (ERR_RESOURCE_DOUBLE_RELEASE): Releasing handle multiple times
+// #f0 := @capture();
+// @release(#f0);
+// @release(#f0); // Error: already released!
 
 // INVALID (ERR_TYPESTATE_MISMATCH): Branch divergence in handle state
 // #f := @capture();
@@ -727,7 +776,7 @@ if ($condition == 1) {
 //     // Leaked on else path!
 // }
 
-// INVALID (ERR_LINEAR_UNCONSUMED_HANDLE): Handle leaked without @send
+// INVALID (ERR_LINEAR_UNCONSUMED_HANDLE): Handle leaked without @send or @release
 // #f := @capture();
 
 // INVALID (ERR_LINEAR_DOUBLE_SEND): Handle transmitted multiple times
@@ -735,7 +784,7 @@ if ($condition == 1) {
 // @send(#f);
 // @send(#f);
 
-// INVALID (ERR_LINEAR_OVERWRITE): Overwriting handle before transmission
+// INVALID (ERR_LINEAR_OVERWRITE): Overwriting handle before transmission/release
 // #f := @capture();
 // #f := @capture();
 // @send(#f);
@@ -963,7 +1012,7 @@ if (@is_err($res)) {
 | `5` | `@rate($pct)` | `(i64) -> 0` | **~10 ns** | Sets UDP network streaming congestion throttle percentage (10%..100%). |
 | `6` | `@capture()` | `() -> #handle` | **~100 ns** | Claims zero-copy GPU frame descriptor index synchronized to VBLANK edge. |
 | `7` | `@send(#handle)` | `(#handle) -> 1` | **~200 ns** | Enqueues descriptor to Intel e1000 TX ring with kernel-bypass DMA `sfence`. |
-
+| `34` | `@release(#handle)` / `@drop(#handle)` | `(#handle) -> 0` | **~50 ns** | Explicitly releases and frees a linear descriptor without transmission. Returns 0. |
 ```pulse
 #f := @capture();
 let $rtt = @rtt();
@@ -1399,7 +1448,9 @@ Demonstrates formal function contracts and `@test` block validation.
 | `ERR_UNKNOWN_RUNTIME` | Compile | Unknown runtime module in `@import` | Import one of "tiny", "core", "math", "fix", "sys", "net", "vram", "gpu" |
 | `ERR_INVARIANT_SYNTAX` | Compile | Malformed loop invariant syntax | Specify invariant as `@invariant(condition)` |
 | `ERR_LINEAR_DOUBLE_SEND` | Compile | Descriptor `#f` transmitted multiple times | Consume `#handle` strictly once |
-| `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit prior `#handle` before reassigning |
+| `ERR_RESOURCE_DOUBLE_RELEASE` | Compile | Resource handle released multiple times | Call `@release(#h)` strictly once per allocated handle |
+| `ERR_RESOURCE_USE_AFTER_MOVE` | Compile | Handle referenced after ownership moved to another handle | Use the new owner handle or avoid moving |
+| `ERR_LINEAR_OVERWRITE` | Compile | Overwrote unconsumed `#handle` variable | Transmit or release prior `#handle` before reassigning |
 | `ERR_MAX_ARRAYS_EXCEEDED` | Compile | Exceeded maximum 8 distinct arrays | Use fewer array declarations |
 | `ERR_ARRAY_CAPACITY_EXCEEDED` | Compile | Exceeded 256 total array elements | Reduce array sizes |
 | `ERR_MAX_STRUCTS_EXCEEDED` | Compile | Exceeded 8 distinct struct definitions | Define fewer struct types |
